@@ -80,16 +80,32 @@ impl fmt::Display for PathGuardError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PathGuardError::RootNotDirectory(path) => {
-                write!(formatter, "managed root is not a directory: {}", path.display())
+                write!(
+                    formatter,
+                    "managed root is not a directory: {}",
+                    path.display()
+                )
             }
             PathGuardError::AbsoluteInput(path) => {
-                write!(formatter, "path must be relative to the managed root: {}", path.display())
+                write!(
+                    formatter,
+                    "path must be relative to the managed root: {}",
+                    path.display()
+                )
             }
             PathGuardError::ParentTraversal(path) => {
-                write!(formatter, "path cannot contain parent traversal: {}", path.display())
+                write!(
+                    formatter,
+                    "path cannot contain parent traversal: {}",
+                    path.display()
+                )
             }
             PathGuardError::MissingPath(path) => {
-                write!(formatter, "path does not exist under managed root: {}", path.display())
+                write!(
+                    formatter,
+                    "path does not exist under managed root: {}",
+                    path.display()
+                )
             }
             PathGuardError::EscapesRoot { root, resolved } => {
                 write!(
@@ -129,7 +145,10 @@ mod tests {
             .expect("resolve");
 
         assert!(resolved.starts_with(guard.root()));
-        assert_eq!(resolved.file_name().and_then(|name| name.to_str()), Some("readme.md"));
+        assert_eq!(
+            resolved.file_name().and_then(|name| name.to_str()),
+            Some("readme.md")
+        );
     }
 
     #[test]
