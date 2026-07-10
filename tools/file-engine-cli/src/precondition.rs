@@ -7,7 +7,7 @@ use std::time::UNIX_EPOCH;
 use serde::Serialize;
 
 use crate::path_guard::{PathGuard, PathGuardError};
-use crate::proposal::{propose_for_root, Proposal, ProposalError, ProposalStatus};
+use crate::proposal::{propose_for_root, Proposal, ProposalError, ProposalReport, ProposalStatus};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PrecheckReport {
@@ -37,12 +37,37 @@ pub enum PrecheckStatus {
 pub enum PrecheckError {
     Proposal(ProposalError),
     Guard(PathGuardError),
+    RootMismatch { expected: String, actual: String },
     Serialize(String),
 }
 
 pub fn precheck_root(root: impl AsRef<Path>) -> Result<PrecheckReport, PrecheckError> {
     let guard = PathGuard::new(root).map_err(PrecheckError::Guard)?;
     let report = propose_for_root(guard.root()).map_err(PrecheckError::Proposal)?;
+
+    precheck_proposals_with_guard(guard, report)
+}
+
+pub fn precheck_proposals(
+    root: impl AsRef<Path>,
+    report: ProposalReport,
+) -> Result<PrecheckReport, PrecheckError> {
+    let guard = PathGuard::new(root).map_err(PrecheckError::Guard)?;
+
+    precheck_proposals_with_guard(guard, report)
+}
+
+fn precheck_proposals_with_guard(
+    guard: PathGuard,
+    report: ProposalReport,
+) -> Result<PrecheckReport, PrecheckError> {
+    let expected_root = guard.root().display().to_string();
+    if report.root != expected_root {
+        return Err(PrecheckError::RootMismatch {
+            expected: expected_root,
+            actual: report.root,
+        });
+    }
 
     let checks = report
         .proposals
@@ -133,6 +158,12 @@ impl fmt::Display for PrecheckError {
         match self {
             PrecheckError::Proposal(error) => write!(formatter, "{error}"),
             PrecheckError::Guard(error) => write!(formatter, "{error}"),
+            PrecheckError::RootMismatch { expected, actual } => {
+                write!(
+                    formatter,
+                    "proposal root mismatch: expected {expected}, got {actual}"
+                )
+            }
             PrecheckError::Serialize(message) => {
                 write!(formatter, "cannot serialize precheck report: {message}")
             }
@@ -148,7 +179,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{precheck_root, PrecheckStatus};
+    use crate::proposal::propose_for_root;
+
+    use super::{precheck_proposals, precheck_root, PrecheckStatus};
 
     #[test]
     fn reports_ready_for_unchanged_source() {
@@ -176,5 +209,22 @@ mod tests {
 
         assert_eq!(report.checks.len(), 1);
         assert_eq!(report.checks[0].status, PrecheckStatus::DestinationExists);
+    }
+
+    #[test]
+    fn detects_source_change_from_saved_proposal() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        let note = root.join("inbox").join("note.md");
+        fs::write(&note, "# note").expect("write note");
+        let proposal = propose_for_root(&root).expect("propose");
+
+        fs::write(&note, "# changed note").expect("modify note");
+
+        let report = precheck_proposals(&root, proposal).expect("precheck saved proposal");
+
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(report.checks[0].status, PrecheckStatus::SourceChanged);
     }
 }

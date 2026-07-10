@@ -11,11 +11,11 @@ use std::env;
 use std::process;
 
 use analyzer::analyze_root;
-use execute::execute_root;
+use execute::{execute_proposals, execute_root};
 use journal::write_planned_journal;
 use path_guard::PathGuard;
-use precondition::precheck_root;
-use proposal::propose_for_root;
+use precondition::{precheck_proposals, precheck_root};
+use proposal::{propose_for_root, read_proposal_file};
 use undo::undo_root;
 
 fn main() {
@@ -74,8 +74,16 @@ fn main() {
             let Some(root) = args.next() else {
                 print_usage_and_exit();
             };
+            let proposal_path = parse_proposal_option(args);
 
-            match precheck_root(root).and_then(|report| {
+            let result = match proposal_path {
+                Some(path) => read_proposal_file(path)
+                    .map_err(precondition::PrecheckError::Proposal)
+                    .and_then(|proposal| precheck_proposals(root, proposal)),
+                None => precheck_root(root),
+            };
+
+            match result.and_then(|report| {
                 serde_json::to_string_pretty(&report)
                     .map_err(|error| precondition::PrecheckError::Serialize(error.to_string()))
             }) {
@@ -106,8 +114,16 @@ fn main() {
             let Some(root) = args.next() else {
                 print_usage_and_exit();
             };
+            let proposal_path = parse_proposal_option(args);
 
-            match execute_root(root).and_then(|report| {
+            let result = match proposal_path {
+                Some(path) => read_proposal_file(path)
+                    .map_err(execute::ExecuteError::PrecheckProposal)
+                    .and_then(|proposal| execute_proposals(root, proposal)),
+                None => execute_root(root),
+            };
+
+            match result.and_then(|report| {
                 serde_json::to_string_pretty(&report)
                     .map_err(|error| execute::ExecuteError::Serialize(error.to_string()))
             }) {
@@ -138,14 +154,23 @@ fn main() {
     }
 }
 
+fn parse_proposal_option(args: impl Iterator<Item = String>) -> Option<String> {
+    let mut args = args;
+    match args.next().as_deref() {
+        Some("--proposal") => args.next(),
+        Some(_) => print_usage_and_exit(),
+        None => None,
+    }
+}
+
 fn print_usage_and_exit() -> ! {
     eprintln!("usage:");
     eprintln!("  file-engine-cli guard <managed-root> <relative-path>");
     eprintln!("  file-engine-cli analyze <managed-root>");
     eprintln!("  file-engine-cli propose <managed-root>");
-    eprintln!("  file-engine-cli precheck <managed-root>");
+    eprintln!("  file-engine-cli precheck <managed-root> [--proposal <proposal.json>]");
     eprintln!("  file-engine-cli journal <managed-root>");
-    eprintln!("  file-engine-cli execute <managed-root>");
+    eprintln!("  file-engine-cli execute <managed-root> [--proposal <proposal.json>]");
     eprintln!("  file-engine-cli undo <managed-root>");
     process::exit(2);
 }

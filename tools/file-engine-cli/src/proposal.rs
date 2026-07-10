@@ -1,19 +1,20 @@
 use std::error::Error;
 use std::fmt;
+use std::fs;
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::analyzer::{analyze_root, AnalyzeError};
 use crate::rules::{default_rules, normalize_relative_path, RuleContext};
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProposalReport {
     pub root: String,
     pub proposals: Vec<Proposal>,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Proposal {
     pub action: ProposalAction,
     pub from: String,
@@ -24,13 +25,13 @@ pub struct Proposal {
     pub status: ProposalStatus,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalAction {
     Move,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalStatus {
     Ready,
@@ -40,6 +41,8 @@ pub enum ProposalStatus {
 #[derive(Debug)]
 pub enum ProposalError {
     Analyze(AnalyzeError),
+    ReadProposal { path: String, message: String },
+    ParseProposal { path: String, message: String },
     Serialize(String),
 }
 
@@ -65,10 +68,31 @@ pub fn propose_for_root(root: impl AsRef<Path>) -> Result<ProposalReport, Propos
     })
 }
 
+pub fn read_proposal_file(path: impl AsRef<Path>) -> Result<ProposalReport, ProposalError> {
+    let path = path.as_ref();
+    let content = fs::read_to_string(path).map_err(|error| ProposalError::ReadProposal {
+        path: path.display().to_string(),
+        message: error.to_string(),
+    })?;
+
+    let content = content.trim_start_matches('\u{feff}');
+
+    serde_json::from_str(content).map_err(|error| ProposalError::ParseProposal {
+        path: path.display().to_string(),
+        message: error.to_string(),
+    })
+}
+
 impl fmt::Display for ProposalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProposalError::Analyze(error) => write!(formatter, "{error}"),
+            ProposalError::ReadProposal { path, message } => {
+                write!(formatter, "cannot read proposal file {path}: {message}")
+            }
+            ProposalError::ParseProposal { path, message } => {
+                write!(formatter, "cannot parse proposal file {path}: {message}")
+            }
             ProposalError::Serialize(message) => {
                 write!(formatter, "cannot serialize proposal report: {message}")
             }
@@ -84,7 +108,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{propose_for_root, ProposalStatus};
+    use super::{propose_for_root, read_proposal_file, ProposalStatus};
 
     #[test]
     fn proposes_moves_by_extension_without_touching_files() {
@@ -140,5 +164,62 @@ mod tests {
             report.proposals[0].status,
             ProposalStatus::DestinationExists
         );
+    }
+
+    #[test]
+    fn proposal_report_round_trips_through_json() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+
+        let report = propose_for_root(&root).expect("propose");
+        let json = serde_json::to_string(&report).expect("serialize");
+        let decoded = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(report, decoded);
+    }
+
+    #[test]
+    fn reads_proposal_report_from_json_file() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+        let proposal_path = temp.path().join("proposal.json");
+
+        let report = propose_for_root(&root).expect("propose");
+        fs::write(
+            &proposal_path,
+            serde_json::to_string_pretty(&report).expect("serialize"),
+        )
+        .expect("write proposal");
+
+        let decoded = read_proposal_file(&proposal_path).expect("read proposal");
+
+        assert_eq!(report, decoded);
+    }
+
+    #[test]
+    fn reads_proposal_report_with_utf8_bom() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+        let proposal_path = temp.path().join("proposal.json");
+
+        let report = propose_for_root(&root).expect("propose");
+        fs::write(
+            &proposal_path,
+            format!(
+                "\u{feff}{}",
+                serde_json::to_string_pretty(&report).expect("serialize")
+            ),
+        )
+        .expect("write proposal");
+
+        let decoded = read_proposal_file(&proposal_path).expect("read proposal");
+
+        assert_eq!(report, decoded);
     }
 }

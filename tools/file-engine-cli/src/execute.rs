@@ -9,7 +9,11 @@ use serde::Serialize;
 
 use crate::journal::{JournalAction, JournalEntry, JournalStatus, JOURNAL_FILE, STATE_DIR};
 use crate::path_guard::{PathGuard, PathGuardError};
-use crate::precondition::{precheck_root, PrecheckError, PrecheckResult, PrecheckStatus};
+use crate::precondition::{
+    precheck_proposals, precheck_root, PrecheckError, PrecheckReport, PrecheckResult,
+    PrecheckStatus,
+};
+use crate::proposal::{ProposalError, ProposalReport};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct ExecuteReport {
@@ -39,6 +43,7 @@ pub enum ExecuteStatus {
 pub enum ExecuteError {
     Guard(PathGuardError),
     Precheck(PrecheckError),
+    PrecheckProposal(ProposalError),
     CreateStateDir {
         path: PathBuf,
         message: String,
@@ -66,6 +71,24 @@ pub enum ExecuteError {
 pub fn execute_root(root: impl AsRef<Path>) -> Result<ExecuteReport, ExecuteError> {
     let guard = PathGuard::new(root).map_err(ExecuteError::Guard)?;
     let precheck = precheck_root(guard.root()).map_err(ExecuteError::Precheck)?;
+
+    execute_prechecked(guard, precheck)
+}
+
+pub fn execute_proposals(
+    root: impl AsRef<Path>,
+    report: ProposalReport,
+) -> Result<ExecuteReport, ExecuteError> {
+    let guard = PathGuard::new(root).map_err(ExecuteError::Guard)?;
+    let precheck = precheck_proposals(guard.root(), report).map_err(ExecuteError::Precheck)?;
+
+    execute_prechecked(guard, precheck)
+}
+
+fn execute_prechecked(
+    guard: PathGuard,
+    precheck: PrecheckReport,
+) -> Result<ExecuteReport, ExecuteError> {
     let journal_path = ensure_journal_path(guard.root())?;
     let mut journal = open_journal(&journal_path)?;
 
@@ -223,6 +246,7 @@ impl fmt::Display for ExecuteError {
         match self {
             ExecuteError::Guard(error) => write!(formatter, "{error}"),
             ExecuteError::Precheck(error) => write!(formatter, "{error}"),
+            ExecuteError::PrecheckProposal(error) => write!(formatter, "{error}"),
             ExecuteError::CreateStateDir { path, message } => {
                 write!(
                     formatter,
@@ -274,7 +298,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::execute_root;
+    use crate::proposal::propose_for_root;
+
+    use super::{execute_proposals, execute_root};
 
     #[test]
     fn moves_ready_file_after_journaling() {
@@ -312,5 +338,38 @@ mod tests {
         assert_eq!(report.skipped_count, 1);
         assert!(root.join("inbox").join("note.md").exists());
         assert_eq!(destination, "# existing");
+    }
+
+    #[test]
+    fn executes_saved_proposal_snapshot() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+        let proposal = propose_for_root(&root).expect("propose");
+
+        let report = execute_proposals(&root, proposal).expect("execute saved proposal");
+
+        assert_eq!(report.executed_count, 1);
+        assert!(!root.join("inbox").join("note.md").exists());
+        assert!(root.join("documents").join("note.md").exists());
+    }
+
+    #[test]
+    fn refuses_saved_proposal_when_source_changed() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        let note = root.join("inbox").join("note.md");
+        fs::write(&note, "# note").expect("write note");
+        let proposal = propose_for_root(&root).expect("propose");
+        fs::write(&note, "# changed").expect("change note");
+
+        let report = execute_proposals(&root, proposal).expect("execute saved proposal");
+
+        assert_eq!(report.executed_count, 0);
+        assert_eq!(report.skipped_count, 1);
+        assert!(root.join("inbox").join("note.md").exists());
+        assert!(!root.join("documents").join("note.md").exists());
     }
 }
