@@ -1,11 +1,14 @@
 mod analyzer;
 mod path_guard;
+mod proposal;
+mod rules;
 
 use std::env;
 use std::process;
 
 use analyzer::analyze_root;
 use path_guard::PathGuard;
+use proposal::propose_for_root;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -43,6 +46,22 @@ fn main() {
                 }
             }
         }
+        Some("propose") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match propose_for_root(root).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| proposal::ProposalError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("proposal failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
         _ => print_usage_and_exit(),
     }
 }
@@ -51,5 +70,6 @@ fn print_usage_and_exit() -> ! {
     eprintln!("usage:");
     eprintln!("  file-engine-cli guard <managed-root> <relative-path>");
     eprintln!("  file-engine-cli analyze <managed-root>");
+    eprintln!("  file-engine-cli propose <managed-root>");
     process::exit(2);
 }
