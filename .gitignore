@@ -12,3 +12,5 @@ target/
 *.db-wal
 apps/mobile/android/local.properties
 apps/mobile/ios/Flutter/ephemeral/
+
+.AGENTS.md
