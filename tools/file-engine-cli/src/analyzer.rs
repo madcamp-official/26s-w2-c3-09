@@ -59,6 +59,10 @@ fn collect_files(
             message: error.to_string(),
         })?;
         let path = entry.path();
+        if is_housemouse_state_dir(&path) {
+            continue;
+        }
+
         let metadata = fs::symlink_metadata(&path).map_err(|error| AnalyzeError::Metadata {
             path: path.clone(),
             message: error.to_string(),
@@ -107,6 +111,12 @@ fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_millis())
+}
+
+fn is_housemouse_state_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == ".housemouse")
 }
 
 impl fmt::Display for AnalyzeError {

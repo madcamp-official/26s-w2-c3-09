@@ -10,6 +10,8 @@ target/
 *.db
 *.db-shm
 *.db-wal
+.housemouse/
+**/.housemouse/
 apps/mobile/android/local.properties
 apps/mobile/ios/Flutter/ephemeral/
 
