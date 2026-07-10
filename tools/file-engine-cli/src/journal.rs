@@ -10,8 +10,8 @@ use serde::Serialize;
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::precondition::{precheck_root, PrecheckError, PrecheckStatus};
 
-const STATE_DIR: &str = ".housemouse";
-const JOURNAL_FILE: &str = "journal.jsonl";
+pub const STATE_DIR: &str = ".housemouse";
+pub const JOURNAL_FILE: &str = "journal.jsonl";
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct JournalWriteReport {
@@ -35,6 +35,7 @@ pub struct JournalEntry {
 #[serde(rename_all = "snake_case")]
 pub enum JournalStatus {
     Planned,
+    Executed,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

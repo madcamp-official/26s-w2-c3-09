@@ -53,6 +53,34 @@ impl PathGuard {
 
         Ok(resolved)
     }
+
+    pub fn resolve_for_create(
+        &self,
+        relative_path: impl AsRef<Path>,
+    ) -> Result<PathBuf, PathGuardError> {
+        let relative_path = relative_path.as_ref();
+        reject_unsafe_components(relative_path)?;
+
+        let candidate = self.root.join(relative_path);
+        let parent = candidate
+            .parent()
+            .ok_or_else(|| PathGuardError::MissingPath(candidate.clone()))?;
+        let resolved_parent = canonicalize_existing(parent)
+            .map_err(|_| PathGuardError::MissingPath(parent.to_path_buf()))?;
+
+        if !resolved_parent.starts_with(&self.root) {
+            return Err(PathGuardError::EscapesRoot {
+                root: self.root.clone(),
+                resolved: resolved_parent,
+            });
+        }
+
+        Ok(resolved_parent.join(
+            candidate
+                .file_name()
+                .ok_or_else(|| PathGuardError::MissingPath(candidate.clone()))?,
+        ))
+    }
 }
 
 fn reject_unsafe_components(path: &Path) -> Result<(), PathGuardError> {
@@ -189,6 +217,38 @@ mod tests {
         let error = guard
             .resolve_existing("missing.txt")
             .expect_err("reject missing path");
+
+        assert!(matches!(error, PathGuardError::MissingPath(_)));
+    }
+
+    #[test]
+    fn resolves_create_target_when_parent_exists() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("documents")).expect("create parent");
+
+        let guard = PathGuard::new(&root).expect("guard");
+        let target = guard
+            .resolve_for_create("documents/readme.md")
+            .expect("resolve target");
+
+        assert!(target.starts_with(guard.root()));
+        assert_eq!(
+            target.file_name().and_then(|name| name.to_str()),
+            Some("readme.md")
+        );
+    }
+
+    #[test]
+    fn rejects_create_target_with_missing_parent() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("create root");
+
+        let guard = PathGuard::new(&root).expect("guard");
+        let error = guard
+            .resolve_for_create("missing/readme.md")
+            .expect_err("reject missing parent");
 
         assert!(matches!(error, PathGuardError::MissingPath(_)));
     }

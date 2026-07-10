@@ -1,4 +1,5 @@
 mod analyzer;
+mod execute;
 mod journal;
 mod path_guard;
 mod precondition;
@@ -9,6 +10,7 @@ use std::env;
 use std::process;
 
 use analyzer::analyze_root;
+use execute::execute_root;
 use journal::write_planned_journal;
 use path_guard::PathGuard;
 use precondition::precheck_root;
@@ -98,6 +100,22 @@ fn main() {
                 }
             }
         }
+        Some("execute") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match execute_root(root).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| execute::ExecuteError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("execute failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
         _ => print_usage_and_exit(),
     }
 }
@@ -109,5 +127,6 @@ fn print_usage_and_exit() -> ! {
     eprintln!("  file-engine-cli propose <managed-root>");
     eprintln!("  file-engine-cli precheck <managed-root>");
     eprintln!("  file-engine-cli journal <managed-root>");
+    eprintln!("  file-engine-cli execute <managed-root>");
     process::exit(2);
 }
