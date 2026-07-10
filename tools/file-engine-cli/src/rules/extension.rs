@@ -27,6 +27,8 @@ impl ProposalRule for ExtensionRule {
             action: ProposalAction::Move,
             from: file.path.clone(),
             to: target,
+            source_size_bytes: file.size_bytes,
+            source_modified_unix_ms: file.modified_unix_ms,
             reason: format!(
                 "{} files belong in {category}/",
                 extension_label(&file.path)

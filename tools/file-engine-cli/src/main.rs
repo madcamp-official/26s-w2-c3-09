@@ -1,5 +1,6 @@
 mod analyzer;
 mod path_guard;
+mod precondition;
 mod proposal;
 mod rules;
 
@@ -8,6 +9,7 @@ use std::process;
 
 use analyzer::analyze_root;
 use path_guard::PathGuard;
+use precondition::precheck_root;
 use proposal::propose_for_root;
 
 fn main() {
@@ -62,6 +64,22 @@ fn main() {
                 }
             }
         }
+        Some("precheck") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match precheck_root(root).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| precondition::PrecheckError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("precheck failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
         _ => print_usage_and_exit(),
     }
 }
@@ -71,5 +89,6 @@ fn print_usage_and_exit() -> ! {
     eprintln!("  file-engine-cli guard <managed-root> <relative-path>");
     eprintln!("  file-engine-cli analyze <managed-root>");
     eprintln!("  file-engine-cli propose <managed-root>");
+    eprintln!("  file-engine-cli precheck <managed-root>");
     process::exit(2);
 }

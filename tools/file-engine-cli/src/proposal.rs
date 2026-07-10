@@ -18,6 +18,8 @@ pub struct Proposal {
     pub action: ProposalAction,
     pub from: String,
     pub to: String,
+    pub source_size_bytes: u64,
+    pub source_modified_unix_ms: Option<u128>,
     pub reason: String,
     pub status: ProposalStatus,
 }
