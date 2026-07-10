@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::precondition::{precheck_root, PrecheckError, PrecheckStatus};
@@ -21,7 +21,7 @@ pub struct JournalWriteReport {
     pub skipped_count: usize,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct JournalEntry {
     pub operation_id: String,
     pub status: JournalStatus,
@@ -31,14 +31,16 @@ pub struct JournalEntry {
     pub created_unix_ms: u128,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JournalStatus {
     Planned,
     Executed,
+    UndoPlanned,
+    Undone,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JournalAction {
     Move,

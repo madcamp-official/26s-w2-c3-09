@@ -5,6 +5,7 @@ mod path_guard;
 mod precondition;
 mod proposal;
 mod rules;
+mod undo;
 
 use std::env;
 use std::process;
@@ -15,6 +16,7 @@ use journal::write_planned_journal;
 use path_guard::PathGuard;
 use precondition::precheck_root;
 use proposal::propose_for_root;
+use undo::undo_root;
 
 fn main() {
     let mut args = env::args().skip(1);
@@ -116,6 +118,22 @@ fn main() {
                 }
             }
         }
+        Some("undo") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match undo_root(root).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| undo::UndoError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("undo failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
         _ => print_usage_and_exit(),
     }
 }
@@ -128,5 +146,6 @@ fn print_usage_and_exit() -> ! {
     eprintln!("  file-engine-cli precheck <managed-root>");
     eprintln!("  file-engine-cli journal <managed-root>");
     eprintln!("  file-engine-cli execute <managed-root>");
+    eprintln!("  file-engine-cli undo <managed-root>");
     process::exit(2);
 }
