@@ -1,0 +1,6 @@
+packages:
+  - apps/desktop
+  - apps/server
+  - apps/worker
+  - packages/*
+  - tools/*

@@ -1,0 +1,13 @@
+/apps/desktop/src-tauri/                @nounmoumn
+/apps/desktop/src/features/files/       @nounmoumn
+/apps/desktop/src/features/admin/       @nounmoumn
+/apps/desktop/src/features/overlay/     @nounmoumn @westyoon
+/apps/desktop/src/features/character/   @westyoon
+/apps/mobile/                           @westyoon
+/apps/server/                           @westyoon
+/apps/worker/                           @westyoon
+/infra/                                 @westyoon
+/packages/contracts/                    @nounmoumn @westyoon
+/docs/                                  @nounmoumn @westyoon
+/.env.example                           @nounmoumn @westyoon
+/README.md                              @nounmoumn @westyoon

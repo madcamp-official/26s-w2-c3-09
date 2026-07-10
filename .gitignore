@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+dist/
+build/
+target/
+.dart_tool/
+.flutter-plugins*
+*.log
+*.db
+*.db-shm
+*.db-wal
+apps/mobile/android/local.properties
+apps/mobile/ios/Flutter/ephemeral/

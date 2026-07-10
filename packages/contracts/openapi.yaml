@@ -1,0 +1,12 @@
+openapi: 3.1.0
+info:
+  title: Folder Roommate API
+  version: 0.1.0
+  description: 구현된 endpoint만 추가하는 contract-first API입니다.
+paths: {}
+components:
+  securitySchemes:
+    firebaseBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: Firebase ID token
