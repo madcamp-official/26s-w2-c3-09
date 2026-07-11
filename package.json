@@ -1,6 +1,7 @@
 {
   "name": "folder-roommate",
   "private": true,
+  "packageManager": "pnpm@11.11.0",
   "scripts": {
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
