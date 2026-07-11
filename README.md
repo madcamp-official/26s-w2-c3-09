@@ -1,6 +1,8 @@
-# 26s-w2-c3-09
+# HOUSEMOUSE (26s-w2-c3-09)
 
 > 폴더 룸메이트 MVP의 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md)을 기준으로 합니다.
+>
+> 현재 통합 기준: `dev` / `3d43800` (`2026-07-12`), `origin/dev`와 동기화 완료
 
 ## 공통과제 II : 협업형 실전 산출물 제작 (2인 1팀)
 
@@ -24,111 +26,175 @@
 
 | 이름 | 학교 | GitHub | 역할 |
 |---|---|---|---|
-| 김윤서 | 이화여자대학교 | westyoon | 데스크탑-모바일 연결 |
-| 임성진 | 고려대학교 | nounmoumn | 데스크탑 에이전트 |
+| 김윤서 | 이화여자대학교 | westyoon | B — Product & Cloud: 모바일, 서버, worker, 인증·실시간 연결 |
+| 임성진 | 고려대학교 | nounmoumn | A — Desktop Agent: 로컬 파일 안전, Tauri/Rust, watcher·실행·복구 |
 
 ---
 
 ## 선택 옵션
 
-- [v] 실시간 인터랙션
+- [x] 실시간 인터랙션
 - [ ] LLM Wrapper
-- [v] Cross-Platform
+- [x] Cross-Platform
 
 ---
 
-## 기획안
+## 프로젝트 개요
 
-- **산출물 주제:**
-- **제작 목적:**
-- **선택 옵션:**
-- **핵심 구현 요소:**
-  -
-  -
-  -
-- **사용 / 시연 시나리오:**
-- **팀원별 역할:**
+HOUSEMOUSE는 사용자가 등록한 로컬 폴더를 데스크톱 에이전트가 안전하게 분석하고, 모바일에서 제안을 검토·승인한 뒤 파일 정리와 복구를 수행하는 local-first 크로스플랫폼 서비스다.
 
-### 개발 일정
+- **P0 정리 흐름:** 모바일 command → 서버 영속 저장 → 데스크톱 분석 → proposal → 사용자 승인 → 실행 직전 재검증 → journal → no-overwrite 실행 → 결과 동기화 → undo
+- **P0 파일 접근:** 온라인 데스크톱 탐색 → managed root 재검증 → 만료형 전송 → 모바일 checksum 검증 → ACK/TTL 삭제
+- **안전 원칙:** 등록 root 밖 접근 차단, symlink/junction/reparse point 우회 차단, 승인 없는 쓰기 금지, journal-before-write, 기존 파일 덮어쓰기 금지
+- **실시간 원칙:** Socket.IO는 알림 수단이며 PostgreSQL과 replay cursor가 상태 복구의 기준이다.
+- **외부 연동 원칙:** 미설정 provider는 성공으로 가장하지 않고 `UNCONFIGURED`로 처리한다.
 
-| 날짜 | 목표 |
-|---|---|
-| Day 1 |  |
-| Day 2 |  |
-| Day 3 |  |
-| Day 4 |  |
-| Day 5 |  |
-| Day 6 |  |
-| Day 7 |  |
+## 시스템 구조
 
----
-
-## 구현 명세서
-
-| 구현 요소 | 설명 | 우선순위 |
-|---|---|---|
-|  |  | 필수 |
-|  |  | 필수 |
-|  |  | 선택 |
-|  |  | 선택 |
-
----
-
-## 아키텍처
-
-<!-- 실시간 인터랙션: WebSocket/SSE/WebRTC 구조도 / LLM Wrapper: API 연동 흐름도 / Cross-Platform: 플랫폼 구성도 -->
-
----
-
-## 설계 문서
-
-> 프로젝트 성격에 따라 필요한 항목만 작성
-
-### 화면 / 인터페이스 설계
-
-<!-- Figma 링크, 화면 이미지, CLI 사용 예시, 앱 화면 등 -->
-
-### 데이터 구조
-
-<!-- DB 스키마, JSON 구조, 파일 저장 방식 등 -->
-
-### API / 외부 서비스 연동
-
-| Method / 방식 | Endpoint / 서비스 | 설명 | 요청 | 응답 | 비고 |
-|---|---|---|---|---|---|
-|  |  |  |  |  |  |
-
----
-
-## 산출물 및 실행 방법
-
-- **산출물 설명:**
-- **실행 환경:**
-- **실행 방법:**
-- **시연 영상 / 이미지:** (선택)
-
-### 실행 방법
-
-```bash
-# 환경 설정
-cp .env.example .env
-
-# 의존성 설치
-npm install   # 또는 pip install -r requirements.txt 등
-
-# 실행
-npm run dev   # 또는 python main.py 등
+```text
+Flutter Android
+  ↕ REST + Socket.IO
+NestJS/Fastify Server ─ PostgreSQL
+  ├─ Redis/Valkey: presence TTL, rate limit, 짧은 lock
+  ├─ BullMQ Worker: 알림, 재시도, object 만료·삭제
+  └─ S3-compatible Storage: P0 만료형 전송 / P1 opt-in cache
+  ↕ REST + Socket.IO
+Tauri Desktop
+  ├─ React/Vite UI
+  ├─ Rust file engine: path guard, scan, watcher, rule, journal, undo
+  └─ SQLite WAL: managed roots, file index, operation history
 ```
 
-### 기술 구성
-
-| 분류 | 사용 기술 |
+| 경로 | 역할 |
 |---|---|
-| 핵심 기술 |  |
-| 실행 환경 |  |
-| 데이터 저장 |  |
-| 외부 API / 서비스 |  |
-| 기타 |  |
+| `apps/desktop` | A 소유 Tauri/React/Rust 데스크톱 앱 |
+| `tools/file-engine-cli` | 데스크톱과 같은 Rust 파일 엔진을 검증하는 CLI |
+| `apps/mobile` | B 소유 Flutter Android 앱 |
+| `apps/server` | B 소유 REST, Socket.IO, 인증, 상태 머신과 영속 queue |
+| `apps/worker` | 전송·캐시 object lifecycle worker |
+| `packages/contracts` | OpenAPI, JSON Schema, Zod 공개 계약 |
+| `packages/database` | Drizzle schema와 PostgreSQL migration |
+
+## `dev` 브랜치 구현 현황
+
+### A — Desktop Agent
+
+구현된 코드:
+
+- managed root canonicalization, overlap·traversal·symlink/junction/reparse point 방어
+- SQLite WAL 기반 managed root, file index, operation journal과 auto-approval 설정 저장
+- scan, 검색, paginated browse, watcher debounce·reconcile·startup 복원
+- Rule DSL, proposal, 사용자 decision, 실행 직전 precheck
+- journal-before-write, no-overwrite move, 복구형 trash, create/rename, history, undo, journal recovery
+- React 파일 관리 UI와 Tauri invoke bridge
+- overlay window/event bridge skeleton
+- 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
+
+아직 연결되지 않은 범위:
+
+- 실제 서버 transport: pairing, device token keychain, heartbeat, Socket.IO, REST replay/outbox
+- 서버 command → 로컬 proposal → 모바일 decision → execution 결과의 첫 P0 E2E
+- README 생성/diff/write 로컬 적용
+- FileTransfer source version 검증, chunk, SHA-256, 취소와 source-change 처리
+- system tray, autostart, updater, Windows installer
+- 실제 Rive overlay와 P1 usage event/cache candidate
+
+현재 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. Tauri bundle도 아직 `active: false`다.
+
+### B — Product & Cloud
+
+- Firebase Android 및 Google 로그인, Firebase Admin token 검증 경로
+- PostgreSQL/Drizzle 15개 migration과 Redis/Valkey local compose
+- pairing, device, room, heartbeat/presence, command/proposal/decision/execution API
+- Socket.IO `/realtime`, idempotency, audit, cursor replay
+- Flutter home/room/rule/proposal/result/chat/files/smart-cache UI와 Drift cache/outbox
+- P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
+- worker, Render blueprint, backup/restore 및 안전 문서
+
+실제 S3-compatible storage, Rive asset, Android release keystore, Sentry와 운영 배포 secret은 아직 설정되지 않았다. 따라서 관련 기능은 `UNCONFIGURED` 또는 검증 대기 상태다.
+
+### Phase별 판정
+
+| Phase | 현재 판정 | 남은 완료 조건 |
+|---|---|---|
+| 0 계약·파일 안전 POC | 대부분 구현 | Rust toolchain에서 140개 Rust test와 fixture E2E 재검증 |
+| 1 로그인·페어링·Presence | B 완료, A 미연결 | Desktop pairing/token/heartbeat/realtime transport |
+| 2 관리 폴더·스캔·청결도 | 양쪽 코드 구현, 통합 전 | room 등록과 snapshot을 실제 서버로 연결 |
+| 3 규칙·명령·제안 | 양쪽 코드 구현, 통합 전 | 서버 command를 Rust proposal로 변환해 왕복 |
+| 4 실행·Undo·README·파일 전달 | 부분 구현 | README와 A FileTransfer, 실제 storage E2E |
+| 5 캐릭터·채팅 | skeleton/metadata | Rive asset, 실제 overlay window, AI provider 선택 |
+| 6 오프라인·재접속 | B 구현, A 미연결 | Desktop outbox/cursor/replay와 reconnect E2E |
+| 7 하드닝·배포 | 진행 중 | Rust CI, tray/autostart, installer, release signing, 운영 배포 |
+| 8 P1 스마트 캐시 | B control plane만 선행 | P0 안정화 뒤 A usage scoring/upload/stale 처리 |
+
+## 검증 기록 (`2026-07-12`)
+
+| 검사 | 결과 |
+|---|---|
+| `pnpm check:contracts` | 서버 controller 58개와 OpenAPI 일치 |
+| `pnpm typecheck` | Node/React workspace 전체 통과 |
+| Desktop `tsc + vite build` | production web bundle 성공 |
+| contracts test | 17개 통과 |
+| server test | 실제 PostgreSQL 기준 23개 통과, 실제 object storage가 필요한 2개 suite 제외 |
+| desktop-agent-simulator test | 1개 통과 |
+| `flutter analyze` | 오류 0개 |
+| Flutter test | 19개 통과 |
+| Rust test/E2E | 소스에 140개 test가 있으나 이 PC에 Rust toolchain이 없어 재실행하지 못함 |
+
+현재 CI에는 Rust job이 없고 push 대상이 `develop`으로 설정되어 실제 통합 브랜치 `dev` push를 직접 검사하지 않는다. PR 검사는 실행되지만, Phase 7 전에 branch 이름과 Rust job을 바로잡아야 한다.
+
+## 다음 구현 순서
+
+1. Rust stable/MSVC toolchain을 설치하고 CLI·Tauri test 및 fixture E2E를 모두 통과시킨다.
+2. Desktop에 실제 pairing/device-token 저장/heartbeat/Socket.IO/replay transport를 구현한다.
+3. 첫 P0 vertical slice(command → proposal → mobile approval → journaled execute → result → undo)를 한 managed root로 연결한다.
+4. A의 FileTransfer validation/chunk/SHA-256/cancel/source-change를 B의 transfer session에 연결한다.
+5. 실제 private S3-compatible bucket에서 PUT/HEAD/GET/delete/TTL lifecycle E2E를 수행한다.
+6. CI의 `dev` trigger와 Rust job을 추가한 뒤 tray/autostart/Windows installer를 만든다.
+7. Rive·FCM·Sentry·release signing을 마무리한다. P1 스마트 캐시는 두 P0 slice가 안정화된 뒤 진행한다.
+
+## 실행 방법
+
+필수 환경 변수는 [.env.example](.env.example)을 기준으로 현재 shell 또는 secret manager에 주입한다. 실제 secret과 서비스 계정 원문은 Git에 넣지 않는다.
+
+```powershell
+# Node workspace
+pnpm install --frozen-lockfile
+
+# PostgreSQL + Redis/Valkey
+docker compose up -d
+pnpm --filter @housemouse/database db:migrate
+
+# Server
+pnpm --filter @housemouse/server start:dev
+
+# Desktop: Rust stable/MSVC toolchain 필요
+pnpm --filter @housemouse/desktop tauri:dev
+```
+
+Android 실기기에서 USB로 로컬 서버를 사용할 때:
+
+```powershell
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" reverse tcp:3000 tcp:3000
+
+Set-Location apps/mobile
+flutter run `
+  --dart-define=FIREBASE_ENABLED=true `
+  --dart-define=HOUSEMOUSE_API_URL=http://127.0.0.1:3000 `
+  --dart-define=GOOGLE_SERVER_CLIENT_ID=<Google-Web-OAuth-Client-ID>
+```
+
+핵심 검증 명령:
+
+```powershell
+pnpm check:contracts
+pnpm typecheck
+pnpm test
+
+Set-Location apps/mobile
+flutter analyze
+flutter test
+```
 
 ---
 
