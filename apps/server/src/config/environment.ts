@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
+
+const optionalString = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.string().min(1).optional(),
+);
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
@@ -6,9 +12,10 @@ const schema = z.object({
   DATABASE_URL: z.url(),
   REDIS_URL: z.url(),
   WEB_ORIGIN: z.url(),
-  FIREBASE_PROJECT_ID: z.string().min(1),
-  FIREBASE_CLIENT_EMAIL: z.email(),
-  FIREBASE_PRIVATE_KEY: z.string().min(1),
+  FIREBASE_SERVICE_ACCOUNT_PATH: optionalString,
+  FIREBASE_PROJECT_ID: optionalString,
+  FIREBASE_CLIENT_EMAIL: optionalString,
+  FIREBASE_PRIVATE_KEY: optionalString,
   JWT_OR_DEVICE_TOKEN_SECRET: z.string().min(32),
   FILE_TRANSFER_MAX_BYTES: z.coerce.number().int().positive(),
   FILE_TRANSFER_TTL_SECONDS: z.coerce.number().int().min(60).max(3600),
@@ -19,6 +26,66 @@ const schema = z.object({
   SMART_CACHE_DEFAULT_MAX_FILE_BYTES: z.coerce.number().int().positive(),
 });
 
+const serviceAccountSchema = z.object({
+  type: z.literal('service_account'),
+  project_id: z.string().min(1),
+  client_email: z.email(),
+  private_key: z.string().min(1),
+});
+
+function firebaseCredentials(environment: z.infer<typeof schema>) {
+  if (environment.FIREBASE_SERVICE_ACCOUNT_PATH) {
+    try {
+      const account = serviceAccountSchema.parse(
+        JSON.parse(
+          readFileSync(environment.FIREBASE_SERVICE_ACCOUNT_PATH, 'utf8'),
+        ),
+      );
+      return {
+        FIREBASE_PROJECT_ID: account.project_id,
+        FIREBASE_CLIENT_EMAIL: account.client_email,
+        FIREBASE_PRIVATE_KEY: account.private_key,
+      };
+    } catch {
+      throw new Error('UNCONFIGURED: FIREBASE_SERVICE_ACCOUNT_PATH');
+    }
+  }
+
+  if (
+    !environment.FIREBASE_PROJECT_ID ||
+    !environment.FIREBASE_CLIENT_EMAIL ||
+    !environment.FIREBASE_PRIVATE_KEY
+  ) {
+    throw new Error(
+      'UNCONFIGURED: FIREBASE_SERVICE_ACCOUNT_PATH or ' +
+        'FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY',
+    );
+  }
+
+  const direct = serviceAccountSchema
+    .pick({
+      project_id: true,
+      client_email: true,
+      private_key: true,
+    })
+    .safeParse({
+      project_id: environment.FIREBASE_PROJECT_ID,
+      client_email: environment.FIREBASE_CLIENT_EMAIL,
+      private_key: environment.FIREBASE_PRIVATE_KEY,
+    });
+  if (!direct.success) {
+    throw new Error(
+      'UNCONFIGURED: FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, ' +
+        'FIREBASE_PRIVATE_KEY',
+    );
+  }
+  return {
+    FIREBASE_PROJECT_ID: direct.data.project_id,
+    FIREBASE_CLIENT_EMAIL: direct.data.client_email,
+    FIREBASE_PRIVATE_KEY: direct.data.private_key,
+  };
+}
+
 export function loadEnvironment(source: NodeJS.ProcessEnv = process.env) {
   const result = schema.safeParse(source);
   if (!result.success) {
@@ -26,5 +93,5 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env) {
       `UNCONFIGURED: ${result.error.issues.map((i) => i.path.join('.')).join(', ')}`,
     );
   }
-  return result.data;
+  return { ...result.data, ...firebaseCredentials(result.data) };
 }

@@ -14,16 +14,19 @@ export class AuthService {
 
   async authenticate(idToken: string): Promise<AuthPrincipal> {
     try {
-      const env = loadEnvironment();
+      const existingApp = getApps()[0];
       const app =
-        getApps()[0] ??
-        initializeApp({
-          credential: cert({
-            projectId: env.FIREBASE_PROJECT_ID,
-            clientEmail: env.FIREBASE_CLIENT_EMAIL,
-            privateKey: env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-          }),
-        });
+        existingApp ??
+        (() => {
+          const env = loadEnvironment();
+          return initializeApp({
+            credential: cert({
+              projectId: env.FIREBASE_PROJECT_ID,
+              clientEmail: env.FIREBASE_CLIENT_EMAIL,
+              privateKey: env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            }),
+          });
+        })();
       const decoded = await getAuth(app).verifyIdToken(idToken, true);
       const displayName =
         decoded.name?.trim() ||
