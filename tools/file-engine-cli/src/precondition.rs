@@ -6,6 +6,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
+use crate::decision::DecisionError;
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::proposal::{propose_for_root, Proposal, ProposalError, ProposalReport, ProposalStatus};
 
@@ -36,6 +37,7 @@ pub enum PrecheckStatus {
 #[derive(Debug)]
 pub enum PrecheckError {
     Proposal(ProposalError),
+    Decision(DecisionError),
     Guard(PathGuardError),
     RootMismatch { expected: String, actual: String },
     Serialize(String),
@@ -157,6 +159,7 @@ impl fmt::Display for PrecheckError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PrecheckError::Proposal(error) => write!(formatter, "{error}"),
+            PrecheckError::Decision(error) => write!(formatter, "{error}"),
             PrecheckError::Guard(error) => write!(formatter, "{error}"),
             PrecheckError::RootMismatch { expected, actual } => {
                 write!(

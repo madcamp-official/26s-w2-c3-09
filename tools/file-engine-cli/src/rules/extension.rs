@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::analyzer::FileEntry;
-use crate::proposal::{Proposal, ProposalAction, ProposalStatus};
+use crate::proposal::{proposal_id, Proposal, ProposalAction, ProposalStatus};
 use crate::rules::{normalize_relative_path, ProposalRule, RuleContext};
 
 pub struct ExtensionRule;
@@ -23,8 +23,11 @@ impl ProposalRule for ExtensionRule {
             ProposalStatus::Ready
         };
 
+        let action = ProposalAction::Move;
+
         Some(Proposal {
-            action: ProposalAction::Move,
+            proposal_id: proposal_id(&action, &file.path, &target),
+            action,
             from: file.path.clone(),
             to: target,
             source_size_bytes: file.size_bytes,

@@ -8,14 +8,15 @@ use serde::{Deserialize, Serialize};
 use crate::analyzer::{analyze_root, AnalyzeError};
 use crate::rules::{default_rules, normalize_relative_path, RuleContext};
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProposalReport {
     pub root: String,
     pub proposals: Vec<Proposal>,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Proposal {
+    pub proposal_id: String,
     pub action: ProposalAction,
     pub from: String,
     pub to: String,
@@ -25,13 +26,13 @@ pub struct Proposal {
     pub status: ProposalStatus,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalAction {
     Move,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalStatus {
     Ready,
@@ -66,6 +67,27 @@ pub fn propose_for_root(root: impl AsRef<Path>) -> Result<ProposalReport, Propos
         root: report.root,
         proposals,
     })
+}
+
+pub fn proposal_id(action: &ProposalAction, from: &str, to: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        action.as_str(),
+        normalize_id_part(from),
+        normalize_id_part(to)
+    )
+}
+
+fn normalize_id_part(path: &str) -> String {
+    path.replace('\\', "/").to_ascii_lowercase()
+}
+
+impl ProposalAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ProposalAction::Move => "move",
+        }
+    }
 }
 
 pub fn read_proposal_file(path: impl AsRef<Path>) -> Result<ProposalReport, ProposalError> {
@@ -146,6 +168,10 @@ mod tests {
         );
         assert!(root.join("inbox").join("note.md").exists());
         assert!(root.join("inbox").join("photo.png").exists());
+        assert_eq!(
+            report.proposals[0].proposal_id,
+            "move:inbox/note.md:documents/note.md"
+        );
     }
 
     #[test]

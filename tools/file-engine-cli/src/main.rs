@@ -1,4 +1,5 @@
 mod analyzer;
+mod decision;
 mod execute;
 mod journal;
 mod path_guard;
@@ -11,6 +12,7 @@ use std::env;
 use std::process;
 
 use analyzer::analyze_root;
+use decision::{apply_decisions, read_decision_file};
 use execute::{execute_proposals, execute_root};
 use journal::write_planned_journal;
 use path_guard::PathGuard;
@@ -74,11 +76,15 @@ fn main() {
             let Some(root) = args.next() else {
                 print_usage_and_exit();
             };
-            let proposal_path = parse_proposal_option(args);
+            let options = parse_options(args);
 
-            let result = match proposal_path {
+            let result = match options.proposal {
                 Some(path) => read_proposal_file(path)
                     .map_err(precondition::PrecheckError::Proposal)
+                    .and_then(|proposal| {
+                        apply_optional_decisions(proposal, options.decision)
+                            .map_err(precondition::PrecheckError::Decision)
+                    })
                     .and_then(|proposal| precheck_proposals(root, proposal)),
                 None => precheck_root(root),
             };
@@ -114,11 +120,15 @@ fn main() {
             let Some(root) = args.next() else {
                 print_usage_and_exit();
             };
-            let proposal_path = parse_proposal_option(args);
+            let options = parse_options(args);
 
-            let result = match proposal_path {
+            let result = match options.proposal {
                 Some(path) => read_proposal_file(path)
                     .map_err(execute::ExecuteError::PrecheckProposal)
+                    .and_then(|proposal| {
+                        apply_optional_decisions(proposal, options.decision)
+                            .map_err(execute::ExecuteError::Decision)
+                    })
                     .and_then(|proposal| execute_proposals(root, proposal)),
                 None => execute_root(root),
             };
@@ -154,13 +164,41 @@ fn main() {
     }
 }
 
-fn parse_proposal_option(args: impl Iterator<Item = String>) -> Option<String> {
-    let mut args = args;
-    match args.next().as_deref() {
-        Some("--proposal") => args.next(),
-        Some(_) => print_usage_and_exit(),
-        None => None,
+fn apply_optional_decisions(
+    proposal: proposal::ProposalReport,
+    decision_path: Option<String>,
+) -> Result<proposal::ProposalReport, decision::DecisionError> {
+    match decision_path {
+        Some(path) => {
+            read_decision_file(path).map(|decisions| apply_decisions(proposal, &decisions))
+        }
+        None => Ok(proposal),
     }
+}
+
+#[derive(Debug, Default)]
+struct CommandOptions {
+    proposal: Option<String>,
+    decision: Option<String>,
+}
+
+fn parse_options(args: impl Iterator<Item = String>) -> CommandOptions {
+    let mut options = CommandOptions::default();
+    let mut args = args;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--proposal" => options.proposal = args.next(),
+            "--decision" => options.decision = args.next(),
+            _ => print_usage_and_exit(),
+        }
+    }
+
+    if options.decision.is_some() && options.proposal.is_none() {
+        print_usage_and_exit();
+    }
+
+    options
 }
 
 fn print_usage_and_exit() -> ! {
@@ -168,9 +206,13 @@ fn print_usage_and_exit() -> ! {
     eprintln!("  file-engine-cli guard <managed-root> <relative-path>");
     eprintln!("  file-engine-cli analyze <managed-root>");
     eprintln!("  file-engine-cli propose <managed-root>");
-    eprintln!("  file-engine-cli precheck <managed-root> [--proposal <proposal.json>]");
+    eprintln!(
+        "  file-engine-cli precheck <managed-root> [--proposal <proposal.json> [--decision <decision.jsonl>]]"
+    );
     eprintln!("  file-engine-cli journal <managed-root>");
-    eprintln!("  file-engine-cli execute <managed-root> [--proposal <proposal.json>]");
+    eprintln!(
+        "  file-engine-cli execute <managed-root> [--proposal <proposal.json> [--decision <decision.jsonl>]]"
+    );
     eprintln!("  file-engine-cli undo <managed-root>");
     process::exit(2);
 }

@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
+use crate::decision::DecisionError;
 use crate::journal::{JournalAction, JournalEntry, JournalStatus, JOURNAL_FILE, STATE_DIR};
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::precondition::{
@@ -44,6 +45,7 @@ pub enum ExecuteError {
     Guard(PathGuardError),
     Precheck(PrecheckError),
     PrecheckProposal(ProposalError),
+    Decision(DecisionError),
     CreateStateDir {
         path: PathBuf,
         message: String,
@@ -247,6 +249,7 @@ impl fmt::Display for ExecuteError {
             ExecuteError::Guard(error) => write!(formatter, "{error}"),
             ExecuteError::Precheck(error) => write!(formatter, "{error}"),
             ExecuteError::PrecheckProposal(error) => write!(formatter, "{error}"),
+            ExecuteError::Decision(error) => write!(formatter, "{error}"),
             ExecuteError::CreateStateDir { path, message } => {
                 write!(
                     formatter,
