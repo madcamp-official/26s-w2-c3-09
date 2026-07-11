@@ -215,6 +215,33 @@ pre {
   color: #5f6972;
 }
 
+.search-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.search-list {
+  display: grid;
+  gap: 6px;
+}
+
+.search-row-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e1e5e8;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.search-row-item strong {
+  overflow-wrap: anywhere;
+}
+
+.search-row-item small {
+  color: #5f6972;
+}
+
 .browse-list {
   display: grid;
   gap: 6px;

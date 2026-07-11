@@ -7,6 +7,7 @@ import {
   DecisionEntry,
   executeFileChanges,
   ExecuteReport,
+  IndexedFile,
   JournalCorruption,
   listenForRootChanges,
   listOperationHistory,
@@ -19,6 +20,8 @@ import {
   proposeFileChanges,
   recoverJournal,
   registerManagedRoot,
+  reindexManagedRoot,
+  searchManagedRoot,
   selectManagedRootDirectory,
   startWatchingRoot,
   stopWatchingRoot,
@@ -45,12 +48,16 @@ export function FileEnginePanel() {
   const [browsePath, setBrowsePath] = useState("");
   const [browseEntries, setBrowseEntries] = useState<BrowseEntry[]>([]);
   const [watchingRootIds, setWatchingRootIds] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<IndexedFile[] | null>(null);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
   const [resultLines, setResultLines] = useState<string[]>([]);
 
   const selectedRootIdRef = useRef(selectedRootId);
   const browsePathRef = useRef(browsePath);
+  const searchQueryRef = useRef(searchQuery);
+  const searchResultsRef = useRef(searchResults);
 
   const selectedRoot = roots.find((root) => root.root_id === selectedRootId);
   const isWatchingSelectedRoot = selectedRootId ? watchingRootIds.has(selectedRootId) : false;
@@ -90,6 +97,14 @@ export function FileEnginePanel() {
   }, [browsePath]);
 
   useEffect(() => {
+    searchQueryRef.current = searchQuery;
+  }, [searchQuery]);
+
+  useEffect(() => {
+    searchResultsRef.current = searchResults;
+  }, [searchResults]);
+
+  useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
 
     let unlisten: (() => void) | undefined;
@@ -99,6 +114,11 @@ export function FileEnginePanel() {
       if (rootId !== selectedRootIdRef.current) return;
       void refreshBrowse(rootId, browsePathRef.current);
       void refreshHistory(rootId);
+      // The watcher already refreshed the index on the Rust side; re-run any active search
+      // so results reflect what just changed on disk.
+      if (searchResultsRef.current !== null) {
+        void runSearch(rootId, searchQueryRef.current);
+      }
     }).then((stop) => {
       if (cancelled) {
         stop();
@@ -375,6 +395,38 @@ export function FileEnginePanel() {
     }
   }
 
+  async function runSearch(rootId = selectedRootId, query = searchQuery) {
+    if (!rootId) return;
+
+    setError(null);
+    try {
+      const report = await searchManagedRoot(rootId, query);
+      setSearchResults(report.files);
+      setStatus(`Found ${report.files.length} indexed files`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Search failed");
+    }
+  }
+
+  async function reindexSelectedRoot() {
+    if (!selectedRootId) return;
+
+    setError(null);
+    setStatus("Reindexing");
+    try {
+      const report = await reindexManagedRoot(selectedRootId);
+      setStatus(`Indexed ${report.files.length} files`);
+      // Refresh whatever the search box is currently showing against the new index.
+      if (searchResults !== null) {
+        await runSearch(selectedRootId, searchQuery);
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Reindex failed");
+    }
+  }
+
   function openBrowseEntry(entry: BrowseEntry) {
     if (entry.is_dir) {
       setBrowsePath(entry.path);
@@ -393,6 +445,8 @@ export function FileEnginePanel() {
     setRejectionReasons({});
     setResultLines([]);
     setBrowsePath("");
+    setSearchQuery("");
+    setSearchResults(null);
   }
 
   function setDecision(item: Proposal, decision: DecisionState[string]) {
@@ -558,6 +612,46 @@ export function FileEnginePanel() {
               </article>
             )) || <p>No proposal loaded.</p>}
           </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="section-header">
+          <h2>Search</h2>
+          <button type="button" onClick={reindexSelectedRoot} disabled={!selectedRootId}>
+            Reindex
+          </button>
+        </div>
+        <form
+          className="input-row search-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runSearch();
+          }}
+        >
+          <input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search indexed files by name"
+            disabled={!selectedRootId}
+          />
+          <button type="submit" disabled={!selectedRootId}>
+            Search
+          </button>
+        </form>
+        <div className="search-list">
+          {searchResults?.map((file) => (
+            <article key={file.relative_path} className="search-row-item">
+              <span>📄</span>
+              <strong>{file.relative_path}</strong>
+              <small>{formatBrowseSize(file.size_bytes)}</small>
+            </article>
+          ))}
+          {searchResults?.length === 0 ? <p>No indexed files match.</p> : null}
+          {searchResults === null && selectedRootId ? (
+            <p>Reindex, then search the managed root's files. Watching a root keeps its index fresh.</p>
+          ) : null}
+          {!selectedRootId ? <p>Select a root to search its files.</p> : null}
         </div>
       </section>
 

@@ -2,6 +2,7 @@ use file_engine_cli::analyzer::{analyze_root as analyze_file_root, AnalyzeReport
 use file_engine_cli::browse::{browse_root, BrowseReport};
 use file_engine_cli::decision::{apply_decisions, DecisionApplication, DecisionEntry};
 use file_engine_cli::execute::{execute_decision_application, ExecuteReport};
+use file_engine_cli::file_index::{list_index, reindex_root, search_index, FileIndexReport};
 use file_engine_cli::journal::{
     read_operation_history, recover_journal as recover_journal_file, JournalRecoveryReport,
     OperationHistoryReport,
@@ -77,6 +78,46 @@ pub fn browse_root_tree(
 ) -> Result<BrowseReport, String> {
     let root = resolve_root_id(store, &root_id)?;
     browse_root_tree_impl(root, path)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn reindex_managed_root(
+    root_id: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<FileIndexReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    reindex_managed_root_impl(root)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn reindex_managed_root(
+    root_id: String,
+    store: &ManagedRootStore,
+) -> Result<FileIndexReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    reindex_managed_root_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn search_managed_root(
+    root_id: String,
+    query: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<FileIndexReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    search_managed_root_impl(root, query)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn search_managed_root(
+    root_id: String,
+    query: String,
+    store: &ManagedRootStore,
+) -> Result<FileIndexReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    search_managed_root_impl(root, query)
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -254,6 +295,18 @@ fn browse_root_tree_impl(root: String, path: Option<String>) -> Result<BrowseRep
     browse_root(root, path.as_deref()).map_err(command_error)
 }
 
+fn reindex_managed_root_impl(root: String) -> Result<FileIndexReport, String> {
+    reindex_root(root).map_err(command_error)
+}
+
+fn search_managed_root_impl(root: String, query: String) -> Result<FileIndexReport, String> {
+    if query.trim().is_empty() {
+        list_index(root).map_err(command_error)
+    } else {
+        search_index(root, &query).map_err(command_error)
+    }
+}
+
 fn propose_file_changes_impl(root: String) -> Result<ProposalReport, String> {
     propose_for_root(root).map_err(command_error)
 }
@@ -343,7 +396,7 @@ mod tests {
     use super::{
         browse_root_tree, execute_file_changes, list_managed_roots, list_operation_history,
         precheck_file_changes, propose_file_changes, recover_journal, register_managed_root,
-        register_managed_root_in_store, undo_operation,
+        register_managed_root_in_store, reindex_managed_root, search_managed_root, undo_operation,
     };
 
     #[test]
@@ -519,6 +572,31 @@ mod tests {
             list_operation_history(managed.root_id, &store).expect("history after recovery");
         assert!(history.corruption.is_none());
         assert!(history.operations.is_empty());
+    }
+
+    #[test]
+    fn reindex_then_search_finds_indexed_files() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+        fs::write(root.join("inbox").join("photo.png"), "png").expect("write photo");
+
+        let store = ManagedRootStore::default();
+        let managed = register_managed_root_in_store(root.display().to_string(), &store)
+            .expect("register managed root");
+
+        let indexed = reindex_managed_root(managed.root_id.clone(), &store).expect("reindex");
+        assert_eq!(indexed.files.len(), 2);
+
+        let hits = search_managed_root(managed.root_id.clone(), "note".to_string(), &store)
+            .expect("search");
+        assert_eq!(hits.files.len(), 1);
+        assert_eq!(hits.files[0].relative_path, "inbox/note.md");
+
+        // Empty query lists everything currently indexed.
+        let all = search_managed_root(managed.root_id, String::new(), &store).expect("list");
+        assert_eq!(all.files.len(), 2);
     }
 
     #[test]

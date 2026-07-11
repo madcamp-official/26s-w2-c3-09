@@ -29,6 +29,8 @@ pub fn run() {
             commands::file_engine::list_managed_roots,
             commands::file_engine::analyze_root,
             commands::file_engine::browse_root_tree,
+            commands::file_engine::reindex_managed_root,
+            commands::file_engine::search_managed_root,
             commands::file_engine::propose_file_changes,
             commands::file_engine::precheck_file_changes,
             commands::file_engine::execute_file_changes,

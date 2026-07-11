@@ -39,6 +39,18 @@ export type BrowseReport = {
   entries: BrowseEntry[];
 };
 
+export type IndexedFile = {
+  relative_path: string;
+  size_bytes: number;
+  modified_unix_ms: number | null;
+  extension: string | null;
+};
+
+export type FileIndexReport = {
+  root: string;
+  files: IndexedFile[];
+};
+
 export type ProposalStatus = "ready" | "destination_exists";
 
 export type Proposal = {
@@ -156,6 +168,14 @@ export function analyzeRoot(rootId: string) {
 
 export function browseRootTree(rootId: string, path?: string) {
   return invokeCommand<BrowseReport>("browse_root_tree", { rootId, path: path || null });
+}
+
+export function reindexManagedRoot(rootId: string) {
+  return invokeCommand<FileIndexReport>("reindex_managed_root", { rootId });
+}
+
+export function searchManagedRoot(rootId: string, query: string) {
+  return invokeCommand<FileIndexReport>("search_managed_root", { rootId, query });
 }
 
 export function proposeFileChanges(rootId: string) {
