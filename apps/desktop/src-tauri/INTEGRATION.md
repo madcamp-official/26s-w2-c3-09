@@ -52,6 +52,14 @@ Study note: this keeps the UI from carrying raw folder-picker paths as the sourc
 
 The desktop frontend is a minimal React/Vite app under `apps/desktop/src`. It calls these commands through `@tauri-apps/api/core` from `features/files/fileEngineApi.ts`.
 
+Current frontend behavior:
+
+- `Browse` opens the OS folder picker through `@tauri-apps/plugin-dialog`.
+- `Demo` fills the local UI fixture path for fast manual testing.
+- rejected proposals require a non-empty reason before precheck or execute.
+- execute runs precheck first, blocks non-ready items, and asks for final confirmation.
+- execute and undo results are saved in browser `localStorage` and shown in the History panel.
+
 ## Proposed Tauri Commands
 
 These command names are the app-facing bridge contract. They should return JSON-compatible structs matching `tools/file-engine-cli/README.md`.

@@ -4,6 +4,7 @@ pub mod storage;
 #[cfg(feature = "tauri-commands")]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(storage::managed_roots::ManagedRootStore::default())
         .setup(|app| {
             use tauri::Manager;

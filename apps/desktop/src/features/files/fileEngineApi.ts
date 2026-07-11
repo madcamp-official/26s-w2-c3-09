@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 declare global {
   interface Window {
@@ -141,14 +142,28 @@ export function undoLastFileOperation(rootId: string) {
   return invokeCommand<UndoReport>("undo_last_file_operation", { rootId });
 }
 
+export async function selectManagedRootDirectory() {
+  ensureTauriRuntime();
+
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Select a managed root"
+  });
+
+  return typeof selected === "string" ? selected : null;
+}
+
 function invokeCommand<T>(command: string, args?: Record<string, unknown>) {
-  if (!window.__TAURI_INTERNALS__) {
-    return Promise.reject(
-      new Error(
-        "Tauri runtime is not available. Run the desktop app with `cargo run --features tauri-commands` from apps/desktop/src-tauri, not only the Vite browser page."
-      )
-    );
-  }
+  ensureTauriRuntime();
 
   return invoke<T>(command, args);
+}
+
+function ensureTauriRuntime() {
+  if (!window.__TAURI_INTERNALS__) {
+    throw new Error(
+      "Tauri runtime is not available. Run the desktop app with `cargo run --features tauri-commands` from apps/desktop/src-tauri, not only the Vite browser page."
+    );
+  }
 }

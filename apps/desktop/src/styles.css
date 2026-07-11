@@ -104,7 +104,7 @@ pre {
 
 .input-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 8px;
 }
 
@@ -148,6 +148,31 @@ pre {
 
 .error-text {
   color: #b42318;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.history-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #e1e5e8;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.history-row span,
+.history-row small {
+  color: #5f6972;
 }
 
 @media (max-width: 760px) {
