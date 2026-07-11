@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://housemouse.local/contracts/events/proposal.schema.json",
+  "title": "ProposalReport",
+  "description": "Desktop-to-server proposal batch generated from a command. Proposals describe candidate local file mutations; they do not authorize execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "proposalBatchId",
+    "commandId",
+    "roomId",
+    "deviceId",
+    "schemaVersion",
+    "createdAt",
+    "status",
+    "proposals"
+  ],
+  "properties": {
+    "proposalBatchId": { "type": "string", "format": "uuid" },
+    "commandId": { "type": "string", "format": "uuid" },
+    "roomId": { "type": "string", "format": "uuid" },
+    "deviceId": { "type": "string", "format": "uuid" },
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "enum": ["ready", "partial", "failed"]
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "UNCONFIGURED",
+        "DEVICE_OFFLINE",
+        "ROOT_NOT_REGISTERED",
+        "OUT_OF_ROOT",
+        "ROOT_OVERLAP",
+        "REPARSE_POINT_BLOCKED",
+        "RULES_INVALID",
+        "SCAN_FAILED",
+        "UNKNOWN"
+      ]
+    },
+    "errorMessage": { "type": "string", "maxLength": 2000 },
+    "proposals": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/Proposal" }
+    }
+  },
+  "$defs": {
+    "SafeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "not": {
+        "anyOf": [
+          { "pattern": "^[A-Za-z]:" },
+          { "pattern": "^/" },
+          { "pattern": "^\\\\" },
+          { "pattern": "(^|[\\\\/])\\.\\.($|[\\\\/])" }
+        ]
+      }
+    },
+    "ProposalId": {
+      "type": "string",
+      "pattern": "^[a-z_]+:[0-9a-f]{16}$"
+    },
+    "Proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposalId",
+        "action",
+        "from",
+        "to",
+        "sourceSizeBytes",
+        "sourceModifiedUnixMs",
+        "reason",
+        "status"
+      ],
+      "properties": {
+        "proposalId": { "$ref": "#/$defs/ProposalId" },
+        "action": { "type": "string", "enum": ["move"] },
+        "from": { "$ref": "#/$defs/SafeRelativePath" },
+        "to": { "$ref": "#/$defs/SafeRelativePath" },
+        "sourceSizeBytes": { "type": "integer", "minimum": 0 },
+        "sourceModifiedUnixMs": { "type": ["integer", "null"], "minimum": 0 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "status": {
+          "type": "string",
+          "enum": ["ready", "destination_exists"]
+        }
+      }
+    }
+  }
+}

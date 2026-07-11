@@ -13,3 +13,13 @@ components:
   schemas:
     Command:
       $ref: ./events/command.schema.json
+    ProposalReport:
+      $ref: ./events/proposal.schema.json
+    DecisionBatch:
+      $ref: ./events/decision.schema.json
+    ExecutionResult:
+      $ref: ./events/execution-result.schema.json
+    FileBrowseResult:
+      $ref: ./events/file-browse.schema.json
+    FileTransferEvent:
+      $ref: ./events/file-transfer.schema.json

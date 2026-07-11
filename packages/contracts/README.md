@@ -22,3 +22,21 @@ Safety assumptions:
 - File writes still require approval and a local journal before mutation.
 
 Example commands live in `fixtures/command-*.json`.
+
+## Response/Event Contracts
+
+The desktop agent responds with separate event payloads instead of pretending commands succeeded:
+
+- `events/proposal.schema.json`: proposal batches returned after `organize_files`.
+- `events/decision.schema.json`: user decision batches persisted by the server and forwarded to the desktop.
+- `events/execution-result.schema.json`: actual journaled execution results after `apply_decisions`.
+- `events/file-browse.schema.json`: one-page managed-root file browse results.
+- `events/file-transfer.schema.json`: transfer lifecycle/progress/completion/failure events.
+
+Fixtures live beside the command fixtures:
+
+- `fixtures/proposal-report.json`
+- `fixtures/decision-batch.json`
+- `fixtures/execution-result.json`
+- `fixtures/file-browse-result.json`
+- `fixtures/file-transfer-event.json`

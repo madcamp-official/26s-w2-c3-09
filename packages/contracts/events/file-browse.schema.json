@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://housemouse.local/contracts/events/file-browse.schema.json",
+  "title": "FileBrowseResult",
+  "description": "Desktop-to-server response for a browse_files command. Entries expose managed-root-relative metadata only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "browseResultId",
+    "commandId",
+    "roomId",
+    "deviceId",
+    "schemaVersion",
+    "createdAt",
+    "status",
+    "relativePath",
+    "entries"
+  ],
+  "properties": {
+    "browseResultId": { "type": "string", "format": "uuid" },
+    "commandId": { "type": "string", "format": "uuid" },
+    "roomId": { "type": "string", "format": "uuid" },
+    "deviceId": { "type": "string", "format": "uuid" },
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed"]
+    },
+    "relativePath": { "$ref": "#/$defs/SafeRelativePathOrRoot" },
+    "nextCursor": {
+      "type": ["string", "null"],
+      "maxLength": 1024
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "UNCONFIGURED",
+        "DEVICE_OFFLINE",
+        "ROOT_NOT_REGISTERED",
+        "OUT_OF_ROOT",
+        "NOT_A_DIRECTORY",
+        "REPARSE_POINT_BLOCKED",
+        "CURSOR_INVALIDATED",
+        "TIMED_OUT",
+        "UNKNOWN"
+      ]
+    },
+    "errorMessage": { "type": "string", "maxLength": 2000 },
+    "entries": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/FileBrowseEntry" }
+    }
+  },
+  "$defs": {
+    "SafeRelativePathOrRoot": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 4096,
+      "not": {
+        "anyOf": [
+          { "pattern": "^[A-Za-z]:" },
+          { "pattern": "^/" },
+          { "pattern": "^\\\\" },
+          { "pattern": "(^|[\\\\/])\\.\\.($|[\\\\/])" }
+        ]
+      }
+    },
+    "FileBrowseEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "relativePath",
+        "kind",
+        "sizeBytes",
+        "modifiedUnixMs"
+      ],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "relativePath": { "$ref": "#/$defs/SafeRelativePathOrRoot" },
+        "kind": { "type": "string", "enum": ["directory", "file"] },
+        "sizeBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "modifiedUnixMs": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    }
+  }
+}
