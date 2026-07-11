@@ -11,6 +11,8 @@ Run from `tools/file-engine-cli`:
 ```powershell
 cargo run --quiet -- analyze <managed-root>
 cargo run --quiet -- browse <managed-root> [--path <relative-path>]
+cargo run --quiet -- index <managed-root>
+cargo run --quiet -- search <managed-root> <query>
 cargo run --quiet -- propose <managed-root>
 cargo run --quiet -- precheck <managed-root> --proposal <proposal.json> --decision <decision.jsonl>
 cargo run --quiet -- execute <managed-root> --proposal <proposal.json> --decision <decision.jsonl>
@@ -28,12 +30,55 @@ $env:Path = "C:\Users\user\.cargo\bin;$env:Path"
 
 1. `analyze` lists files inside the managed root.
 2. `browse` lists one directory level (folders then files) so a UI can navigate the tree without a full recursive scan.
-3. `propose` creates deterministic file-move proposals without changing files.
-4. The user or app writes `decision.jsonl`.
-5. `precheck` validates the saved proposal against the current filesystem state.
-6. `execute` journals first, then performs no-overwrite moves.
-7. `undo` uses `.housemouse/journal.jsonl` to restore executed moves.
-8. If a journal line is unparseable, history reporting stays available (it reports everything before the bad line plus where it broke) but `execute`/`undo` refuse to run until `recover-journal` quarantines the broken file and starts a fresh one.
+3. `rules` prints the rule set that `propose` will apply (the root's `.housemouse/rules.json`, or a built-in default when that file is absent).
+4. `propose` evaluates those rules against the files and creates deterministic file-move proposals without changing files.
+5. The user or app writes `decision.jsonl`.
+6. `precheck` validates the saved proposal against the current filesystem state.
+7. `execute` journals first, then performs no-overwrite moves.
+8. `undo` uses the operation journal to restore executed moves.
+9. If a journal row is unreadable, history reporting stays available (it reports everything before the bad row plus where it broke) but `execute`/`undo` refuse to run until `recover-journal` quarantines the journal and starts a fresh one.
+
+## Storage
+
+Per-root state lives in a SQLite database at `<managed-root>/.housemouse/housemouse.db`:
+
+- `file_index` — the scanned file metadata `index` populates and `search` reads.
+- `operation_journal` — the append-only execute/undo event log (formerly `journal.jsonl`).
+
+`index` rebuilds `file_index` from a fresh scan; `search` does a case-insensitive substring match over the indexed relative paths. On the desktop app, the managed-root registry lives in a separate app-level `managed-roots.db`.
+
+## Rule DSL
+
+Organizing rules are **data, not code**. Each managed root may carry `.housemouse/rules.json`; when absent, a built-in default (extension buckets: documents/images/archives) is used. Because a rule can come from an untrusted source (e.g. a natural-language request translated to JSON server-side, or a per-user file), the rule set is validated before it is ever applied.
+
+```json
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "old-invoices",
+      "priority": 5,
+      "when": {
+        "extension_in": ["pdf"],
+        "older_than_days": 30,
+        "name_matches": "*invoice*"
+      },
+      "then": { "move_to": "documents/billing" }
+    }
+  ]
+}
+```
+
+- `version` must equal the schema version the build supports (currently `1`); a mismatch is rejected, not reinterpreted.
+- `when` conditions are ANDed. A rule must have at least one condition — an empty `when` is rejected so it can never mean "move everything".
+  - `extension_in`: bare, lowercase extensions (`"pdf"`, not `".pdf"`).
+  - `older_than_days`: file modified time must be at least this many days in the past. A file with no known modified time never matches.
+  - `name_matches`: case-insensitive glob against the file name (`*` any run, `?` one char).
+- `then.move_to` is a directory relative to the managed root. Absolute paths and `..` traversal are rejected at load time (same boundary as `PathGuard`).
+- `priority` orders evaluation (lower first, ties broken by `id`); the **first fully-matching rule wins** for each file, keeping results deterministic.
+- Unknown JSON fields are rejected. A present-but-invalid `rules.json` is a hard error — the engine will not silently fall back to the default and hide a misconfiguration.
+
+Run `file-engine-cli rules <managed-root>` to see the effective rule set (default or loaded) as JSON.
 
 ## Decision JSONL
 
@@ -153,7 +198,7 @@ Possible `status` values:
 ```json
 {
   "root": "C:\\managed-root",
-  "journal_path": "C:\\managed-root\\.housemouse\\journal.jsonl",
+  "journal_path": "C:\\managed-root\\.housemouse\\housemouse.db",
   "executed_count": 1,
   "skipped_count": 0,
   "rejected_count": 0,
@@ -179,7 +224,7 @@ Possible result `status` values:
 ```json
 {
   "root": "C:\\managed-root",
-  "journal_path": "C:\\managed-root\\.housemouse\\journal.jsonl",
+  "journal_path": "C:\\managed-root\\.housemouse\\housemouse.db",
   "undone_count": 1,
   "skipped_count": 0,
   "results": [
@@ -198,7 +243,7 @@ Possible result `status` values:
 ```json
 {
   "root": "C:\\managed-root",
-  "journal_path": "C:\\managed-root\\.housemouse\\journal.jsonl",
+  "journal_path": "C:\\managed-root\\.housemouse\\housemouse.db",
   "quarantined_path": "C:\\managed-root\\.housemouse\\journal.jsonl.corrupted-1783672855045"
 }
 ```

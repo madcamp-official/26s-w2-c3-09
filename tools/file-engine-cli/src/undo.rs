@@ -1,14 +1,13 @@
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::journal::{JournalAction, JournalEntry, JournalStatus, JOURNAL_FILE, STATE_DIR};
+use crate::journal::{JournalAction, JournalEntry, JournalError, JournalStatus, JournalStore};
 use crate::path_guard::{PathGuard, PathGuardError};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -38,23 +37,8 @@ pub enum UndoStatus {
 #[derive(Debug)]
 pub enum UndoError {
     Guard(PathGuardError),
-    ReadJournal {
-        path: PathBuf,
-        message: String,
-    },
-    ParseJournal {
-        line: usize,
-        message: String,
-    },
+    Journal(JournalError),
     CreateParentDir {
-        path: PathBuf,
-        message: String,
-    },
-    OpenJournal {
-        path: PathBuf,
-        message: String,
-    },
-    WriteJournal {
         path: PathBuf,
         message: String,
     },
@@ -85,14 +69,13 @@ fn undo_with_filter(
     only_operation_id: Option<&str>,
 ) -> Result<UndoReport, UndoError> {
     let guard = PathGuard::new(root).map_err(UndoError::Guard)?;
-    let journal_path = guard.root().join(STATE_DIR).join(JOURNAL_FILE);
-    let entries = read_journal(&journal_path)?;
+    let store = JournalStore::open(guard.root()).map_err(UndoError::Journal)?;
+    let entries = store.read_all().map_err(UndoError::Journal)?;
     let undone_operation_ids = entries
         .iter()
         .filter(|entry| entry.status == JournalStatus::Undone)
         .map(|entry| entry.operation_id.clone())
         .collect::<HashSet<_>>();
-    let mut journal = open_journal(&journal_path)?;
 
     let mut undone_count = 0;
     let mut skipped_count = 0;
@@ -114,11 +97,9 @@ fn undo_with_filter(
             Ok(path) => path,
             Err(error) => {
                 if guard.resolve_existing(&entry.from).is_ok() {
-                    append_journal(
-                        &mut journal,
-                        &journal_path,
-                        undo_entry(entry, JournalStatus::Undone),
-                    )?;
+                    store
+                        .append(&undo_entry(entry, JournalStatus::Undone))
+                        .map_err(UndoError::Journal)?;
                     undone_count += 1;
                     results.push(UndoResult {
                         from: entry.to.clone(),
@@ -159,21 +140,17 @@ fn undo_with_filter(
             continue;
         }
 
-        append_journal(
-            &mut journal,
-            &journal_path,
-            undo_entry(entry, JournalStatus::UndoPlanned),
-        )?;
+        store
+            .append(&undo_entry(entry, JournalStatus::UndoPlanned))
+            .map_err(UndoError::Journal)?;
         fs::rename(&current_path, &original_path).map_err(|error| UndoError::Move {
             from: current_path,
             to: original_path,
             message: error.to_string(),
         })?;
-        append_journal(
-            &mut journal,
-            &journal_path,
-            undo_entry(entry, JournalStatus::Undone),
-        )?;
+        store
+            .append(&undo_entry(entry, JournalStatus::Undone))
+            .map_err(UndoError::Journal)?;
 
         undone_count += 1;
         results.push(UndoResult {
@@ -194,52 +171,10 @@ fn undo_with_filter(
 
     Ok(UndoReport {
         root: guard.root().display().to_string(),
-        journal_path: journal_path.display().to_string(),
+        journal_path: store.journal_path_display(),
         undone_count,
         skipped_count,
         results,
-    })
-}
-
-fn read_journal(journal_path: &Path) -> Result<Vec<JournalEntry>, UndoError> {
-    let content = fs::read_to_string(journal_path).map_err(|error| UndoError::ReadJournal {
-        path: journal_path.to_path_buf(),
-        message: error.to_string(),
-    })?;
-
-    content
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| {
-            serde_json::from_str::<JournalEntry>(line).map_err(|error| UndoError::ParseJournal {
-                line: index + 1,
-                message: error.to_string(),
-            })
-        })
-        .collect()
-}
-
-fn open_journal(journal_path: &Path) -> Result<fs::File, UndoError> {
-    OpenOptions::new()
-        .append(true)
-        .open(journal_path)
-        .map_err(|error| UndoError::OpenJournal {
-            path: journal_path.to_path_buf(),
-            message: error.to_string(),
-        })
-}
-
-fn append_journal(
-    journal: &mut fs::File,
-    journal_path: &Path,
-    entry: JournalEntry,
-) -> Result<(), UndoError> {
-    let line =
-        serde_json::to_string(&entry).map_err(|error| UndoError::Serialize(error.to_string()))?;
-    writeln!(journal, "{line}").map_err(|error| UndoError::WriteJournal {
-        path: journal_path.to_path_buf(),
-        message: error.to_string(),
     })
 }
 
@@ -274,34 +209,11 @@ impl fmt::Display for UndoError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UndoError::Guard(error) => write!(formatter, "{error}"),
-            UndoError::ReadJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot read journal {}: {message}",
-                    path.display()
-                )
-            }
-            UndoError::ParseJournal { line, message } => {
-                write!(formatter, "cannot parse journal line {line}: {message}")
-            }
+            UndoError::Journal(error) => write!(formatter, "{error}"),
             UndoError::CreateParentDir { path, message } => {
                 write!(
                     formatter,
                     "cannot create original parent {}: {message}",
-                    path.display()
-                )
-            }
-            UndoError::OpenJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot open journal {}: {message}",
-                    path.display()
-                )
-            }
-            UndoError::WriteJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot write journal {}: {message}",
                     path.display()
                 )
             }
@@ -344,15 +256,18 @@ mod tests {
         execute_root(&root).expect("execute");
 
         let report = undo_root(&root).expect("undo");
-        let journal =
-            fs::read_to_string(root.join(".housemouse").join("journal.jsonl")).expect("journal");
+        let history = crate::journal::read_operation_history(&root).expect("history");
 
         assert_eq!(report.undone_count, 1);
         assert_eq!(report.skipped_count, 0);
         assert!(root.join("inbox").join("note.md").exists());
         assert!(!root.join("documents").join("note.md").exists());
-        assert!(journal.contains("\"status\":\"undo_planned\""));
-        assert!(journal.contains("\"status\":\"undone\""));
+        // The operation ends in the undone state and is no longer undoable.
+        assert_eq!(
+            history.operations[0].latest_status,
+            crate::journal::JournalStatus::Undone
+        );
+        assert!(!history.operations[0].can_undo);
     }
 
     #[test]
@@ -387,11 +302,13 @@ mod tests {
         .expect("simulate restored file before undone journal");
 
         let report = undo_root(&root).expect("undo");
-        let journal =
-            fs::read_to_string(root.join(".housemouse").join("journal.jsonl")).expect("journal");
+        let history = crate::journal::read_operation_history(&root).expect("history");
 
         assert_eq!(report.undone_count, 1);
         assert_eq!(report.skipped_count, 0);
-        assert!(journal.contains("\"status\":\"undone\""));
+        assert_eq!(
+            history.operations[0].latest_status,
+            crate::journal::JournalStatus::Undone
+        );
     }
 }

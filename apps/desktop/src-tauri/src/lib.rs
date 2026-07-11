@@ -16,10 +16,10 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|error| format!("cannot resolve app data directory: {error}"))?
-                .join("managed-roots.json");
+                .join("managed-roots.db");
 
             store
-                .load_from_file(storage_path)
+                .load_from_db(storage_path)
                 .map_err(|error| format!("cannot load managed roots: {error}"))?;
 
             Ok(())

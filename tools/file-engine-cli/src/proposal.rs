@@ -2,11 +2,12 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::analyzer::{analyze_root, AnalyzeError};
-use crate::rules::{default_rules, normalize_relative_path, RuleContext};
+use crate::rules::{load_rule_set_for_root, normalize_relative_path, RuleContext, RuleError};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProposalReport {
@@ -42,31 +43,43 @@ pub enum ProposalStatus {
 #[derive(Debug)]
 pub enum ProposalError {
     Analyze(AnalyzeError),
+    Rule(RuleError),
     ReadProposal { path: String, message: String },
     ParseProposal { path: String, message: String },
     Serialize(String),
 }
 
 pub fn propose_for_root(root: impl AsRef<Path>) -> Result<ProposalReport, ProposalError> {
+    let root = root.as_ref();
+    let rule_set = load_rule_set_for_root(root).map_err(ProposalError::Rule)?;
     let report = analyze_root(root).map_err(ProposalError::Analyze)?;
     let existing_paths = report
         .files
         .iter()
         .map(|file| normalize_relative_path(&file.path))
         .collect();
-    let context = RuleContext { existing_paths };
-    let rules = default_rules();
+    let context = RuleContext {
+        existing_paths,
+        now_unix_ms: unix_ms(),
+    };
 
     let proposals = report
         .files
         .iter()
-        .filter_map(|file| rules.iter().find_map(|rule| rule.propose(file, &context)))
+        .filter_map(|file| rule_set.propose(file, &context))
         .collect::<Vec<_>>();
 
     Ok(ProposalReport {
         root: report.root,
         proposals,
     })
+}
+
+fn unix_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
 }
 
 pub fn proposal_id(action: &ProposalAction, from: &str, to: &str) -> String {
@@ -122,6 +135,7 @@ impl fmt::Display for ProposalError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProposalError::Analyze(error) => write!(formatter, "{error}"),
+            ProposalError::Rule(error) => write!(formatter, "{error}"),
             ProposalError::ReadProposal { path, message } => {
                 write!(formatter, "cannot read proposal file {path}: {message}")
             }

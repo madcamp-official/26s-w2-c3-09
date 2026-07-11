@@ -493,10 +493,20 @@ mod tests {
         execute_file_changes(managed.root_id.clone(), proposal, decisions, &store)
             .expect("execute");
 
-        let journal_path = root.join(".housemouse").join("journal.jsonl");
-        let mut journal = fs::read_to_string(&journal_path).expect("read journal");
-        journal.push_str("{not valid json\n");
-        fs::write(&journal_path, journal).expect("corrupt journal");
+        // Corrupt the SQLite-backed journal by inserting an unrecognized row, the analog of
+        // the old "append a bad JSONL line".
+        let pool = file_engine_cli::db::open_root_db(std::path::Path::new(&managed.root))
+            .expect("open journal db");
+        file_engine_cli::db::block_on(async {
+            sqlx::query(
+                "INSERT INTO operation_journal
+                    (operation_id, status, action, from_path, to_path, created_unix_ms)
+                 VALUES ('op-bad', 'garbage', 'move', 'a', 'b', 1)",
+            )
+            .execute(&pool)
+            .await
+            .expect("insert bad row");
+        });
 
         let history = list_operation_history(managed.root_id.clone(), &store)
             .expect("history tolerates corruption");

@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
+use file_engine_cli::db::{block_on, open_pool_at};
 use serde::{Deserialize, Serialize};
+use sqlx::{Row, SqlitePool};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ManagedRoot {
@@ -12,30 +13,39 @@ pub struct ManagedRoot {
     pub display_name: String,
 }
 
+/// In-memory registry of managed roots, durably backed by an app-level SQLite database once
+/// `load_from_db` is called. The map stays authoritative for fast reads; the database mirrors
+/// it so registrations survive restarts. A store with no database configured still works
+/// entirely in memory (used in tests).
 #[derive(Debug, Default)]
 pub struct ManagedRootStore {
     roots: Mutex<BTreeMap<String, ManagedRoot>>,
-    storage_path: Mutex<Option<PathBuf>>,
+    pool: Mutex<Option<SqlitePool>>,
 }
 
 impl ManagedRootStore {
-    pub fn load_from_file(&self, path: impl AsRef<Path>) -> Result<(), String> {
-        let path = path.as_ref().to_path_buf();
-        let roots = read_roots_from_file(&path)?;
+    /// Opens (creating if needed) the managed-roots database at `path`, then loads its rows
+    /// into memory. Replaces the previous `managed-roots.json` persistence.
+    pub fn load_from_db(&self, path: impl AsRef<Path>) -> Result<(), String> {
+        let pool = open_pool_at(path.as_ref()).map_err(|error| error.to_string())?;
+        let loaded = block_on(async {
+            migrate(&pool).await?;
+            read_roots(&pool).await
+        })?;
 
         {
-            let mut stored_path = self
-                .storage_path
+            let mut stored_pool = self
+                .pool
                 .lock()
-                .map_err(|_| "managed root storage path lock poisoned".to_string())?;
-            *stored_path = Some(path);
+                .map_err(|_| "managed root pool lock poisoned".to_string())?;
+            *stored_pool = Some(pool);
         }
 
         let mut stored_roots = self
             .roots
             .lock()
             .map_err(|_| "managed root store lock poisoned".to_string())?;
-        *stored_roots = roots
+        *stored_roots = loaded
             .into_iter()
             .map(|root| (root.root_id.clone(), root))
             .collect();
@@ -44,17 +54,15 @@ impl ManagedRootStore {
     }
 
     pub fn upsert(&self, root: ManagedRoot) -> Result<ManagedRoot, String> {
-        let snapshot = {
+        {
             let mut roots = self
                 .roots
                 .lock()
                 .map_err(|_| "managed root store lock poisoned".to_string())?;
-
             roots.insert(root.root_id.clone(), root.clone());
-            roots.values().cloned().collect::<Vec<_>>()
-        };
+        }
 
-        self.save_snapshot(&snapshot)?;
+        self.persist(&root)?;
         Ok(root)
     }
 
@@ -88,66 +96,81 @@ impl ManagedRootStore {
         Ok(roots.values().any(|managed| managed.root == root))
     }
 
-    fn save_snapshot(&self, roots: &[ManagedRoot]) -> Result<(), String> {
-        let path = self
-            .storage_path
+    fn persist(&self, root: &ManagedRoot) -> Result<(), String> {
+        let pool = self
+            .pool
             .lock()
-            .map_err(|_| "managed root storage path lock poisoned".to_string())?
+            .map_err(|_| "managed root pool lock poisoned".to_string())?
             .clone();
 
-        if let Some(path) = path {
-            write_roots_to_file(&path, roots)?;
+        if let Some(pool) = pool {
+            block_on(async { upsert_root(&pool, root).await })?;
         }
 
         Ok(())
     }
 }
 
-fn read_roots_from_file(path: &Path) -> Result<Vec<ManagedRoot>, String> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
+async fn migrate(pool: &SqlitePool) -> Result<(), String> {
+    // `canonical_path` is UNIQUE so the same folder cannot be registered under two ids, the
+    // overlap invariant the plan calls for at the storage layer.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS managed_roots (
+            root_id         TEXT PRIMARY KEY,
+            canonical_path  TEXT NOT NULL UNIQUE,
+            display_name    TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("cannot create managed_roots table: {error}"))?;
 
-    let content = fs::read_to_string(path)
-        .map_err(|error| format!("cannot read managed roots {}: {error}", path.display()))?;
-
-    serde_json::from_str(&content)
-        .map_err(|error| format!("cannot parse managed roots {}: {error}", path.display()))
+    Ok(())
 }
 
-fn write_roots_to_file(path: &Path, roots: &[ManagedRoot]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "cannot create managed root storage directory {}: {error}",
-                parent.display()
-            )
-        })?;
+async fn read_roots(pool: &SqlitePool) -> Result<Vec<ManagedRoot>, String> {
+    let rows = sqlx::query("SELECT root_id, canonical_path, display_name FROM managed_roots")
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("cannot read managed roots: {error}"))?;
+
+    let mut roots = Vec::with_capacity(rows.len());
+    for row in rows {
+        roots.push(ManagedRoot {
+            root_id: row
+                .try_get("root_id")
+                .map_err(|error| format!("cannot read managed root id: {error}"))?,
+            root: row
+                .try_get("canonical_path")
+                .map_err(|error| format!("cannot read managed root path: {error}"))?,
+            display_name: row
+                .try_get("display_name")
+                .map_err(|error| format!("cannot read managed root name: {error}"))?,
+        });
     }
 
-    let content = serde_json::to_string_pretty(roots)
-        .map_err(|error| format!("cannot serialize managed roots: {error}"))?;
-    let temp_path = path.with_extension("json.tmp");
+    Ok(roots)
+}
 
-    fs::write(&temp_path, content).map_err(|error| {
-        format!(
-            "cannot write managed roots temp file {}: {error}",
-            temp_path.display()
-        )
-    })?;
-    fs::rename(&temp_path, path).map_err(|error| {
-        format!(
-            "cannot replace managed roots file {} with {}: {error}",
-            path.display(),
-            temp_path.display()
-        )
-    })
+async fn upsert_root(pool: &SqlitePool, root: &ManagedRoot) -> Result<(), String> {
+    sqlx::query(
+        "INSERT INTO managed_roots (root_id, canonical_path, display_name)
+         VALUES (?, ?, ?)
+         ON CONFLICT(root_id) DO UPDATE SET
+             canonical_path = excluded.canonical_path,
+             display_name = excluded.display_name",
+    )
+    .bind(&root.root_id)
+    .bind(&root.root)
+    .bind(&root.display_name)
+    .execute(pool)
+    .await
+    .map(|_| ())
+    .map_err(|error| format!("cannot persist managed root: {error}"))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use tempfile::tempdir;
 
     use super::{ManagedRoot, ManagedRootStore};
@@ -178,12 +201,12 @@ mod tests {
     }
 
     #[test]
-    fn upsert_persists_roots_after_loading_storage_path() {
+    fn upsert_persists_roots_after_loading_database() {
         let temp = tempdir().expect("tempdir");
-        let path = temp.path().join("managed-roots.json");
+        let path = temp.path().join("managed-roots.db");
         let store = ManagedRootStore::default();
 
-        store.load_from_file(&path).expect("configure storage path");
+        store.load_from_db(&path).expect("configure database");
         store
             .upsert(ManagedRoot {
                 root_id: "root:cafe".to_string(),
@@ -192,29 +215,36 @@ mod tests {
             })
             .expect("insert root");
 
-        let content = fs::read_to_string(&path).expect("read stored roots");
-        let stored = serde_json::from_str::<Vec<ManagedRoot>>(&content).expect("parse roots");
+        // A fresh store loading the same database sees the persisted root.
+        let reloaded = ManagedRootStore::default();
+        reloaded.load_from_db(&path).expect("reload database");
+        let roots = reloaded.list().expect("list roots");
 
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].root, "C:/work");
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].root, "C:/work");
     }
 
     #[test]
-    fn load_from_file_restores_roots() {
+    fn load_from_database_restores_roots() {
         let temp = tempdir().expect("tempdir");
-        let path = temp.path().join("managed-roots.json");
-        fs::write(
-            &path,
-            r#"[{"root_id":"root:cafe","root":"C:/work","display_name":"work"}]"#,
-        )
-        .expect("write roots");
+        let path = temp.path().join("managed-roots.db");
+
         let store = ManagedRootStore::default();
+        store.load_from_db(&path).expect("configure database");
+        store
+            .upsert(ManagedRoot {
+                root_id: "root:cafe".to_string(),
+                root: "C:/work".to_string(),
+                display_name: "work".to_string(),
+            })
+            .expect("insert root");
 
-        store.load_from_file(&path).expect("load roots");
+        let reloaded = ManagedRootStore::default();
+        reloaded.load_from_db(&path).expect("load roots");
 
-        assert!(store.contains_root("C:/work").expect("contains root"));
+        assert!(reloaded.contains_root("C:/work").expect("contains root"));
         assert_eq!(
-            store.get("root:cafe").expect("get root").display_name,
+            reloaded.get("root:cafe").expect("get root").display_name,
             "work"
         );
     }

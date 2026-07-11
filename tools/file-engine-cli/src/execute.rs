@@ -1,14 +1,13 @@
 use std::error::Error;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
 use crate::decision::{DecisionApplication, DecisionError, RejectedProposal};
-use crate::journal::{JournalAction, JournalEntry, JournalStatus, JOURNAL_FILE, STATE_DIR};
+use crate::journal::{JournalAction, JournalEntry, JournalError, JournalStatus, JournalStore};
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::precondition::{
     precheck_proposals, precheck_root, PrecheckError, PrecheckReport, PrecheckResult,
@@ -48,27 +47,8 @@ pub enum ExecuteError {
     Precheck(PrecheckError),
     PrecheckProposal(ProposalError),
     Decision(DecisionError),
-    CreateStateDir {
-        path: PathBuf,
-        message: String,
-    },
+    Journal(JournalError),
     CreateParentDir {
-        path: PathBuf,
-        message: String,
-    },
-    OpenJournal {
-        path: PathBuf,
-        message: String,
-    },
-    ReadJournal {
-        path: PathBuf,
-        message: String,
-    },
-    ParseJournal {
-        line: usize,
-        message: String,
-    },
-    WriteJournal {
         path: PathBuf,
         message: String,
     },
@@ -119,9 +99,8 @@ fn execute_prechecked(
     guard: PathGuard,
     precheck: PrecheckReport,
 ) -> Result<ExecuteReport, ExecuteError> {
-    let journal_path = ensure_journal_path(guard.root())?;
-    let prior_entries = read_journal_entries(&journal_path)?;
-    let mut journal = open_journal(&journal_path)?;
+    let store = JournalStore::open(guard.root()).map_err(ExecuteError::Journal)?;
+    let prior_entries = store.read_all().map_err(ExecuteError::Journal)?;
 
     let mut executed_count = 0;
     let mut skipped_count = 0;
@@ -129,9 +108,7 @@ fn execute_prechecked(
 
     for (index, check) in precheck.checks.iter().enumerate() {
         if check.status != PrecheckStatus::Ready {
-            if let Some(result) =
-                recover_planned_move(&guard, &prior_entries, &mut journal, &journal_path, check)?
-            {
+            if let Some(result) = recover_planned_move(&guard, &prior_entries, &store, check)? {
                 executed_count += 1;
                 results.push(result);
                 continue;
@@ -143,11 +120,9 @@ fn execute_prechecked(
         }
 
         let operation_id = format!("op-{}-{index}", unix_ms());
-        append_journal(
-            &mut journal,
-            &journal_path,
-            planned_entry(&operation_id, check),
-        )?;
+        store
+            .append(&planned_entry(&operation_id, check))
+            .map_err(ExecuteError::Journal)?;
 
         let source = match guard.resolve_existing(&check.from) {
             Ok(source) => source,
@@ -185,11 +160,9 @@ fn execute_prechecked(
             message: error.to_string(),
         })?;
 
-        append_journal(
-            &mut journal,
-            &journal_path,
-            executed_entry(&operation_id, check),
-        )?;
+        store
+            .append(&executed_entry(&operation_id, check))
+            .map_err(ExecuteError::Journal)?;
         executed_count += 1;
         results.push(ExecuteResult {
             from: check.from.clone(),
@@ -201,7 +174,7 @@ fn execute_prechecked(
 
     Ok(ExecuteReport {
         root: precheck.root,
-        journal_path: journal_path.display().to_string(),
+        journal_path: store.journal_path_display(),
         executed_count,
         skipped_count,
         rejected_count: 0,
@@ -209,67 +182,10 @@ fn execute_prechecked(
     })
 }
 
-fn ensure_journal_path(root: &Path) -> Result<PathBuf, ExecuteError> {
-    let state_dir = root.join(STATE_DIR);
-    fs::create_dir_all(&state_dir).map_err(|error| ExecuteError::CreateStateDir {
-        path: state_dir.clone(),
-        message: error.to_string(),
-    })?;
-    Ok(state_dir.join(JOURNAL_FILE))
-}
-
-fn open_journal(journal_path: &Path) -> Result<fs::File, ExecuteError> {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(journal_path)
-        .map_err(|error| ExecuteError::OpenJournal {
-            path: journal_path.to_path_buf(),
-            message: error.to_string(),
-        })
-}
-
-fn read_journal_entries(journal_path: &Path) -> Result<Vec<JournalEntry>, ExecuteError> {
-    if !journal_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(journal_path).map_err(|error| ExecuteError::ReadJournal {
-        path: journal_path.to_path_buf(),
-        message: error.to_string(),
-    })?;
-
-    content
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| {
-            serde_json::from_str::<JournalEntry>(line).map_err(|error| ExecuteError::ParseJournal {
-                line: index + 1,
-                message: error.to_string(),
-            })
-        })
-        .collect()
-}
-
-fn append_journal(
-    journal: &mut fs::File,
-    journal_path: &Path,
-    entry: JournalEntry,
-) -> Result<(), ExecuteError> {
-    let line = serde_json::to_string(&entry)
-        .map_err(|error| ExecuteError::Serialize(error.to_string()))?;
-    writeln!(journal, "{line}").map_err(|error| ExecuteError::WriteJournal {
-        path: journal_path.to_path_buf(),
-        message: error.to_string(),
-    })
-}
-
 fn recover_planned_move(
     guard: &PathGuard,
     prior_entries: &[JournalEntry],
-    journal: &mut fs::File,
-    journal_path: &Path,
+    store: &JournalStore,
     check: &PrecheckResult,
 ) -> Result<Option<ExecuteResult>, ExecuteError> {
     if check.status != PrecheckStatus::MissingSource {
@@ -285,7 +201,9 @@ fn recover_planned_move(
         return Ok(None);
     }
 
-    append_journal(journal, journal_path, executed_entry(&operation_id, check))?;
+    store
+        .append(&executed_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
 
     Ok(Some(ExecuteResult {
         from: check.from.clone(),
@@ -377,41 +295,11 @@ impl fmt::Display for ExecuteError {
             ExecuteError::Precheck(error) => write!(formatter, "{error}"),
             ExecuteError::PrecheckProposal(error) => write!(formatter, "{error}"),
             ExecuteError::Decision(error) => write!(formatter, "{error}"),
-            ExecuteError::CreateStateDir { path, message } => {
-                write!(
-                    formatter,
-                    "cannot create state directory {}: {message}",
-                    path.display()
-                )
-            }
+            ExecuteError::Journal(error) => write!(formatter, "{error}"),
             ExecuteError::CreateParentDir { path, message } => {
                 write!(
                     formatter,
                     "cannot create destination parent {}: {message}",
-                    path.display()
-                )
-            }
-            ExecuteError::OpenJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot open journal {}: {message}",
-                    path.display()
-                )
-            }
-            ExecuteError::ReadJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot read journal {}: {message}",
-                    path.display()
-                )
-            }
-            ExecuteError::ParseJournal { line, message } => {
-                write!(formatter, "cannot parse journal line {line}: {message}")
-            }
-            ExecuteError::WriteJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot write journal {}: {message}",
                     path.display()
                 )
             }
@@ -439,7 +327,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::decision::{Decision, DecisionEntry};
-    use crate::journal::{JournalAction, JournalEntry, JournalStatus, JOURNAL_FILE, STATE_DIR};
+    use crate::journal::{JournalAction, JournalEntry, JournalStatus, JournalStore};
     use crate::proposal::propose_for_root;
 
     use super::{execute_decision_application, execute_proposals, execute_root, ExecuteStatus};
@@ -452,16 +340,16 @@ mod tests {
         fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
 
         let report = execute_root(&root).expect("execute");
-        let journal = fs::read_to_string(root.join(".housemouse").join("journal.jsonl"))
-            .expect("read journal");
+        let history = crate::journal::read_operation_history(&root).expect("history");
 
         assert_eq!(report.executed_count, 1);
         assert_eq!(report.skipped_count, 0);
         assert_eq!(report.rejected_count, 0);
         assert!(!root.join("inbox").join("note.md").exists());
         assert!(root.join("documents").join("note.md").exists());
-        assert!(journal.contains("\"status\":\"planned\""));
-        assert!(journal.contains("\"status\":\"executed\""));
+        // The journal recorded the executed move (planned then executed collapse to one op).
+        assert_eq!(history.operations.len(), 1);
+        assert_eq!(history.operations[0].latest_status, JournalStatus::Executed);
     }
 
     #[test]
@@ -556,21 +444,19 @@ mod tests {
         fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
         let proposal = propose_for_root(&root).expect("propose");
 
-        let state_dir = root.join(STATE_DIR);
-        fs::create_dir_all(&state_dir).expect("create state dir");
-        let planned = JournalEntry {
-            operation_id: "op-recover-0".to_string(),
-            status: JournalStatus::Planned,
-            action: JournalAction::Move,
-            from: "inbox/note.md".to_string(),
-            to: "documents/note.md".to_string(),
-            created_unix_ms: 1,
-        };
-        fs::write(
-            state_dir.join(JOURNAL_FILE),
-            format!("{}\n", serde_json::to_string(&planned).expect("serialize")),
-        )
-        .expect("write journal");
+        // Simulate a crash between the planned journal write and the executed one: the planned
+        // row exists and the file was already moved, but no executed row was recorded.
+        let store = JournalStore::open(&root.canonicalize().expect("canonical")).expect("store");
+        store
+            .append(&JournalEntry {
+                operation_id: "op-recover-0".to_string(),
+                status: JournalStatus::Planned,
+                action: JournalAction::Move,
+                from: "inbox/note.md".to_string(),
+                to: "documents/note.md".to_string(),
+                created_unix_ms: 1,
+            })
+            .expect("append planned");
         fs::create_dir_all(root.join("documents")).expect("create documents");
         fs::rename(
             root.join("inbox").join("note.md"),
@@ -579,12 +465,12 @@ mod tests {
         .expect("simulate completed move before executed journal");
 
         let report = execute_proposals(&root, proposal).expect("execute recover");
-        let journal =
-            fs::read_to_string(root.join(STATE_DIR).join(JOURNAL_FILE)).expect("read journal");
+        let history = crate::journal::read_operation_history(&root).expect("history");
 
         assert_eq!(report.executed_count, 1);
         assert_eq!(report.skipped_count, 0);
-        assert!(journal.contains("\"status\":\"executed\""));
+        assert_eq!(history.operations.len(), 1);
+        assert_eq!(history.operations[0].latest_status, JournalStatus::Executed);
         assert!(root.join("documents").join("note.md").exists());
     }
 }

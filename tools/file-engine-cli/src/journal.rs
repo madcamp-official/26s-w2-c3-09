@@ -1,12 +1,14 @@
 use std::error::Error;
 use std::fmt;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sqlx::{Row, SqlitePool};
 
+use crate::db::{block_on, db_path_for_root, open_root_db, DbError};
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::precondition::{precheck_root, PrecheckError, PrecheckStatus};
 
@@ -29,10 +31,10 @@ pub struct OperationHistoryReport {
     pub corruption: Option<JournalCorruption>,
 }
 
-/// Describes the first unparseable journal line. `operations` in `OperationHistoryReport`
-/// only reflects entries before this line: once one line is untrustworthy, later "undone"
-/// markers could reference operations we can no longer verify, so history stops there
-/// instead of guessing.
+/// Describes the first unreadable journal row. `operations` in `OperationHistoryReport` only
+/// reflects entries before this point: once one row is untrustworthy, later "undone" markers
+/// could reference operations we can no longer verify, so history stops there instead of
+/// guessing. (`line` is the 1-based row ordinal; the name is kept for API stability.)
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct JournalCorruption {
     pub line: usize,
@@ -73,31 +75,221 @@ pub enum JournalStatus {
     Undone,
 }
 
+impl JournalStatus {
+    fn as_db_str(&self) -> &'static str {
+        match self {
+            JournalStatus::Planned => "planned",
+            JournalStatus::Executed => "executed",
+            JournalStatus::UndoPlanned => "undo_planned",
+            JournalStatus::Undone => "undone",
+        }
+    }
+
+    fn from_db_str(value: &str) -> Option<Self> {
+        match value {
+            "planned" => Some(JournalStatus::Planned),
+            "executed" => Some(JournalStatus::Executed),
+            "undo_planned" => Some(JournalStatus::UndoPlanned),
+            "undone" => Some(JournalStatus::Undone),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JournalAction {
     Move,
 }
 
+impl JournalAction {
+    fn as_db_str(&self) -> &'static str {
+        match self {
+            JournalAction::Move => "move",
+        }
+    }
+
+    fn from_db_str(value: &str) -> Option<Self> {
+        match value {
+            "move" => Some(JournalAction::Move),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum JournalError {
     Guard(PathGuardError),
     Precheck(PrecheckError),
-    CreateStateDir { path: PathBuf, message: String },
-    ReadJournal { path: PathBuf, message: String },
-    ParseJournal { line: usize, message: String },
-    OpenJournal { path: PathBuf, message: String },
-    WriteJournal { path: PathBuf, message: String },
-    NotCorrupted { path: PathBuf },
+    Db(DbError),
+    /// A strict read (execute/undo) hit a row whose stored status/action is not recognized.
+    /// These paths refuse to mutate on an untrustworthy journal.
+    Corrupt {
+        line: usize,
+        message: String,
+    },
+    NotCorrupted {
+        path: PathBuf,
+    },
+    WriteQuarantine {
+        path: PathBuf,
+        message: String,
+    },
     Serialize(String),
+}
+
+/// SQLite-backed operation journal for one managed root. Every execute/undo/plan event is a
+/// row in `operation_journal`; this type is the single place that reads and appends them,
+/// replacing the append-to-JSONL logic that used to live separately in execute and undo.
+pub struct JournalStore {
+    pool: SqlitePool,
+    db_path: PathBuf,
+}
+
+impl JournalStore {
+    pub fn open(root: &Path) -> Result<Self, JournalError> {
+        let pool = open_root_db(root).map_err(JournalError::Db)?;
+        Ok(Self {
+            pool,
+            db_path: db_path_for_root(root),
+        })
+    }
+
+    pub fn journal_path_display(&self) -> String {
+        self.db_path.display().to_string()
+    }
+
+    pub fn append(&self, entry: &JournalEntry) -> Result<(), JournalError> {
+        block_on(async {
+            sqlx::query(
+                "INSERT INTO operation_journal
+                    (operation_id, status, action, from_path, to_path, created_unix_ms)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&entry.operation_id)
+            .bind(entry.status.as_db_str())
+            .bind(entry.action.as_db_str())
+            .bind(&entry.from)
+            .bind(&entry.to)
+            .bind(entry.created_unix_ms as i64)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(query_error)
+        })
+        .map_err(JournalError::Db)
+    }
+
+    /// Reads every entry in insertion order, failing if any row is unrecognized. Used by
+    /// execute/undo, which must not proceed on a journal they cannot fully trust.
+    pub fn read_all(&self) -> Result<Vec<JournalEntry>, JournalError> {
+        let (entries, corruption) = self.read_all_lenient()?;
+        if let Some(corruption) = corruption {
+            return Err(JournalError::Corrupt {
+                line: corruption.line,
+                message: corruption.message,
+            });
+        }
+        Ok(entries)
+    }
+
+    /// Reads entries in order but stops at the first unrecognized row, returning what came
+    /// before plus a corruption marker — the tolerant read history display uses so a single
+    /// bad row does not blank the whole timeline.
+    fn read_all_lenient(
+        &self,
+    ) -> Result<(Vec<JournalEntry>, Option<JournalCorruption>), JournalError> {
+        let raw = self.read_raw()?;
+        let mut entries = Vec::with_capacity(raw.len());
+
+        for (index, row) in raw.iter().enumerate() {
+            let status = JournalStatus::from_db_str(&row.status);
+            let action = JournalAction::from_db_str(&row.action);
+
+            match (status, action) {
+                (Some(status), Some(action)) => entries.push(JournalEntry {
+                    operation_id: row.operation_id.clone(),
+                    status,
+                    action,
+                    from: row.from_path.clone(),
+                    to: row.to_path.clone(),
+                    created_unix_ms: row.created_unix_ms as u128,
+                }),
+                _ => {
+                    return Ok((
+                        entries,
+                        Some(JournalCorruption {
+                            line: index + 1,
+                            message: format!(
+                                "unrecognized journal row (status='{}', action='{}')",
+                                row.status, row.action
+                            ),
+                        }),
+                    ));
+                }
+            }
+        }
+
+        Ok((entries, None))
+    }
+
+    fn read_raw(&self) -> Result<Vec<RawJournalRow>, JournalError> {
+        block_on(async {
+            let rows = sqlx::query(
+                "SELECT seq, operation_id, status, action, from_path, to_path, created_unix_ms
+                 FROM operation_journal
+                 ORDER BY seq",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(query_error)?;
+
+            let mut parsed = Vec::with_capacity(rows.len());
+            for row in rows {
+                parsed.push(RawJournalRow {
+                    seq: row.try_get("seq").map_err(query_error)?,
+                    operation_id: row.try_get("operation_id").map_err(query_error)?,
+                    status: row.try_get("status").map_err(query_error)?,
+                    action: row.try_get("action").map_err(query_error)?,
+                    from_path: row.try_get("from_path").map_err(query_error)?,
+                    to_path: row.try_get("to_path").map_err(query_error)?,
+                    created_unix_ms: row.try_get("created_unix_ms").map_err(query_error)?,
+                });
+            }
+            Ok(parsed)
+        })
+        .map_err(JournalError::Db)
+    }
+
+    fn clear(&self) -> Result<(), JournalError> {
+        block_on(async {
+            sqlx::query("DELETE FROM operation_journal")
+                .execute(&self.pool)
+                .await
+                .map(|_| ())
+                .map_err(query_error)
+        })
+        .map_err(JournalError::Db)
+    }
+}
+
+#[derive(Serialize)]
+struct RawJournalRow {
+    seq: i64,
+    operation_id: String,
+    status: String,
+    action: String,
+    from_path: String,
+    to_path: String,
+    created_unix_ms: i64,
 }
 
 pub fn read_operation_history(
     root: impl AsRef<Path>,
 ) -> Result<OperationHistoryReport, JournalError> {
     let guard = PathGuard::new(root).map_err(JournalError::Guard)?;
-    let journal_path = guard.root().join(STATE_DIR).join(JOURNAL_FILE);
-    let (entries, corruption) = read_journal_entries_lenient(&journal_path)?;
+    let store = JournalStore::open(guard.root())?;
+    let (entries, corruption) = store.read_all_lenient()?;
     let mut operations: Vec<OperationHistoryEntry> = Vec::new();
 
     for entry in entries {
@@ -169,7 +361,7 @@ pub fn read_operation_history(
 
     Ok(OperationHistoryReport {
         root: guard.root().display().to_string(),
-        journal_path: journal_path.display().to_string(),
+        journal_path: store.journal_path_display(),
         operations,
         corruption,
     })
@@ -221,31 +413,46 @@ pub struct JournalRecoveryReport {
     pub quarantined_path: String,
 }
 
-/// Quarantines a corrupted journal so mutation (execute/undo) can resume. This does not try
-/// to repair or reinterpret the bad line: it moves the whole file aside as evidence and lets
-/// a fresh journal start from empty. Operations recorded before the corrupt line are no
-/// longer undoable through the app after this runs, so callers must get explicit user
-/// confirmation before calling it.
+/// Quarantines a corrupted journal so mutation (execute/undo) can resume. It does not repair
+/// or reinterpret the bad row: it dumps every current row to a `journal.jsonl.corrupted-<ts>`
+/// file as evidence, then clears the table so a fresh journal starts empty. Operations
+/// recorded before the corruption are no longer undoable through the app afterward, so callers
+/// must get explicit user confirmation first.
 pub fn recover_journal(root: impl AsRef<Path>) -> Result<JournalRecoveryReport, JournalError> {
     let guard = PathGuard::new(root).map_err(JournalError::Guard)?;
-    let journal_path = guard.root().join(STATE_DIR).join(JOURNAL_FILE);
-    let (_, corruption) = read_journal_entries_lenient(&journal_path)?;
+    let store = JournalStore::open(guard.root())?;
+    let (_, corruption) = store.read_all_lenient()?;
 
     if corruption.is_none() {
-        return Err(JournalError::NotCorrupted { path: journal_path });
+        return Err(JournalError::NotCorrupted {
+            path: store.db_path.clone(),
+        });
     }
 
-    let quarantined_path =
-        journal_path.with_file_name(format!("{JOURNAL_FILE}.corrupted-{}", unix_ms()));
+    let quarantined_path = store
+        .db_path
+        .with_file_name(format!("{JOURNAL_FILE}.corrupted-{}", unix_ms()));
+    let raw = store.read_raw()?;
 
-    fs::rename(&journal_path, &quarantined_path).map_err(|error| JournalError::WriteJournal {
-        path: quarantined_path.clone(),
-        message: error.to_string(),
-    })?;
+    let mut dump =
+        fs::File::create(&quarantined_path).map_err(|error| JournalError::WriteQuarantine {
+            path: quarantined_path.clone(),
+            message: error.to_string(),
+        })?;
+    for row in &raw {
+        let line = serde_json::to_string(row)
+            .map_err(|error| JournalError::Serialize(error.to_string()))?;
+        writeln!(dump, "{line}").map_err(|error| JournalError::WriteQuarantine {
+            path: quarantined_path.clone(),
+            message: error.to_string(),
+        })?;
+    }
+
+    store.clear()?;
 
     Ok(JournalRecoveryReport {
         root: guard.root().display().to_string(),
-        journal_path: journal_path.display().to_string(),
+        journal_path: store.journal_path_display(),
         quarantined_path: quarantined_path.display().to_string(),
     })
 }
@@ -253,21 +460,7 @@ pub fn recover_journal(root: impl AsRef<Path>) -> Result<JournalRecoveryReport, 
 pub fn write_planned_journal(root: impl AsRef<Path>) -> Result<JournalWriteReport, JournalError> {
     let guard = PathGuard::new(root).map_err(JournalError::Guard)?;
     let precheck = precheck_root(guard.root()).map_err(JournalError::Precheck)?;
-    let state_dir = guard.root().join(STATE_DIR);
-    fs::create_dir_all(&state_dir).map_err(|error| JournalError::CreateStateDir {
-        path: state_dir.clone(),
-        message: error.to_string(),
-    })?;
-
-    let journal_path = state_dir.join(JOURNAL_FILE);
-    let mut journal = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&journal_path)
-        .map_err(|error| JournalError::OpenJournal {
-            path: journal_path.clone(),
-            message: error.to_string(),
-        })?;
+    let store = JournalStore::open(guard.root())?;
 
     let created_unix_ms = unix_ms();
     let mut planned_count = 0;
@@ -279,27 +472,20 @@ pub fn write_planned_journal(root: impl AsRef<Path>) -> Result<JournalWriteRepor
             continue;
         }
 
-        let entry = JournalEntry {
+        store.append(&JournalEntry {
             operation_id: format!("op-{created_unix_ms}-{index}"),
             status: JournalStatus::Planned,
             action: JournalAction::Move,
             from: check.from.clone(),
             to: check.to.clone(),
             created_unix_ms,
-        };
-        let line = serde_json::to_string(&entry)
-            .map_err(|error| JournalError::Serialize(error.to_string()))?;
-
-        writeln!(journal, "{line}").map_err(|error| JournalError::WriteJournal {
-            path: journal_path.clone(),
-            message: error.to_string(),
         })?;
         planned_count += 1;
     }
 
     Ok(JournalWriteReport {
         root: precheck.root,
-        journal_path: journal_path.display().to_string(),
+        journal_path: store.journal_path_display(),
         planned_count,
         skipped_count,
     })
@@ -312,66 +498,10 @@ fn unix_ms() -> u128 {
         .unwrap_or(0)
 }
 
-pub fn read_journal_entries(journal_path: &Path) -> Result<Vec<JournalEntry>, JournalError> {
-    if !journal_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(journal_path).map_err(|error| JournalError::ReadJournal {
-        path: journal_path.to_path_buf(),
+fn query_error(error: sqlx::Error) -> DbError {
+    DbError::Query {
         message: error.to_string(),
-    })?;
-
-    content
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| !line.trim().is_empty())
-        .map(|(index, line)| {
-            serde_json::from_str::<JournalEntry>(line).map_err(|error| JournalError::ParseJournal {
-                line: index + 1,
-                message: error.to_string(),
-            })
-        })
-        .collect()
-}
-
-/// Like `read_journal_entries`, but stops at the first unparseable line instead of failing
-/// the whole read. History display can then show everything known up to that point plus a
-/// `JournalCorruption` marker, rather than going blank on a single bad line.
-fn read_journal_entries_lenient(
-    journal_path: &Path,
-) -> Result<(Vec<JournalEntry>, Option<JournalCorruption>), JournalError> {
-    if !journal_path.exists() {
-        return Ok((Vec::new(), None));
     }
-
-    let content = fs::read_to_string(journal_path).map_err(|error| JournalError::ReadJournal {
-        path: journal_path.to_path_buf(),
-        message: error.to_string(),
-    })?;
-
-    let mut entries = Vec::new();
-
-    for (index, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        match serde_json::from_str::<JournalEntry>(line) {
-            Ok(entry) => entries.push(entry),
-            Err(error) => {
-                return Ok((
-                    entries,
-                    Some(JournalCorruption {
-                        line: index + 1,
-                        message: error.to_string(),
-                    }),
-                ));
-            }
-        }
-    }
-
-    Ok((entries, None))
 }
 
 impl fmt::Display for JournalError {
@@ -379,41 +509,21 @@ impl fmt::Display for JournalError {
         match self {
             JournalError::Guard(error) => write!(formatter, "{error}"),
             JournalError::Precheck(error) => write!(formatter, "{error}"),
-            JournalError::CreateStateDir { path, message } => {
-                write!(
-                    formatter,
-                    "cannot create state directory {}: {message}",
-                    path.display()
-                )
-            }
-            JournalError::ReadJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot read journal {}: {message}",
-                    path.display()
-                )
-            }
-            JournalError::ParseJournal { line, message } => {
-                write!(formatter, "cannot parse journal line {line}: {message}")
-            }
-            JournalError::OpenJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot open journal {}: {message}",
-                    path.display()
-                )
-            }
-            JournalError::WriteJournal { path, message } => {
-                write!(
-                    formatter,
-                    "cannot write journal {}: {message}",
-                    path.display()
-                )
+            JournalError::Db(error) => write!(formatter, "{error}"),
+            JournalError::Corrupt { line, message } => {
+                write!(formatter, "cannot parse journal row {line}: {message}")
             }
             JournalError::NotCorrupted { path } => {
                 write!(
                     formatter,
                     "journal is not corrupted; refusing to recover: {}",
+                    path.display()
+                )
+            }
+            JournalError::WriteQuarantine { path, message } => {
+                write!(
+                    formatter,
+                    "cannot write quarantine file {}: {message}",
                     path.display()
                 )
             }
@@ -429,6 +539,7 @@ impl Error for JournalError {}
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use tempfile::tempdir;
 
@@ -436,26 +547,41 @@ mod tests {
     use crate::undo::undo_operation;
 
     use super::{
-        read_operation_history, recover_journal, write_planned_journal, JournalError,
-        JournalStatus, JOURNAL_FILE, STATE_DIR,
+        read_operation_history, recover_journal, write_planned_journal, JournalError, JournalStatus,
     };
 
+    /// Injects an unrecognized row directly into the journal table to simulate a corrupted
+    /// journal (the SQLite analog of the old "append a bad JSONL line").
+    fn corrupt_journal(root: &Path) {
+        let pool = crate::db::open_root_db(root).expect("open db");
+        crate::db::block_on(async {
+            sqlx::query(
+                "INSERT INTO operation_journal
+                    (operation_id, status, action, from_path, to_path, created_unix_ms)
+                 VALUES ('op-bad', 'garbage', 'move', 'a', 'b', 1)",
+            )
+            .execute(&pool)
+            .await
+            .expect("insert bad row");
+        });
+    }
+
     #[test]
-    fn writes_ready_items_to_jsonl_journal() {
+    fn writes_ready_items_to_journal() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         fs::create_dir_all(root.join("inbox")).expect("create inbox");
         fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
 
         let report = write_planned_journal(&root).expect("journal");
-        let journal_path = root.join(STATE_DIR).join(JOURNAL_FILE);
-        let journal = fs::read_to_string(&journal_path).expect("read journal");
+        let history = read_operation_history(&root).expect("history");
 
         assert_eq!(report.planned_count, 1);
         assert_eq!(report.skipped_count, 0);
-        assert!(journal.contains("\"status\":\"planned\""));
-        assert!(journal.contains("\"from\":\"inbox/note.md\""));
-        assert!(journal.contains("\"to\":\"documents/note.md\""));
+        assert_eq!(history.operations.len(), 1);
+        assert_eq!(history.operations[0].latest_status, JournalStatus::Planned);
+        assert_eq!(history.operations[0].from, "inbox/note.md");
+        assert_eq!(history.operations[0].to, "documents/note.md");
     }
 
     #[test]
@@ -468,12 +594,11 @@ mod tests {
         fs::write(root.join("documents").join("note.md"), "# existing").expect("write existing");
 
         let report = write_planned_journal(&root).expect("journal");
-        let journal_path = root.join(STATE_DIR).join(JOURNAL_FILE);
-        let journal = fs::read_to_string(&journal_path).expect("read journal");
+        let history = read_operation_history(&root).expect("history");
 
         assert_eq!(report.planned_count, 0);
         assert_eq!(report.skipped_count, 1);
-        assert!(journal.is_empty());
+        assert!(history.operations.is_empty());
     }
 
     #[test]
@@ -598,10 +723,8 @@ mod tests {
         fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
         execute_root(&root).expect("execute");
 
-        let journal_path = root.join(STATE_DIR).join(JOURNAL_FILE);
-        let mut journal = fs::read_to_string(&journal_path).expect("read journal");
-        journal.push_str("{not valid json\n");
-        fs::write(&journal_path, journal).expect("append corrupt line");
+        // Execute writes a planned + executed row; the injected bad row is the third.
+        corrupt_journal(&root);
 
         let history = read_operation_history(&root).expect("history tolerates corruption");
 
@@ -612,22 +735,17 @@ mod tests {
     }
 
     #[test]
-    fn recover_journal_quarantines_broken_file_and_starts_fresh() {
+    fn recover_journal_quarantines_broken_journal_and_starts_fresh() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         fs::create_dir_all(root.join("inbox")).expect("create inbox");
         fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
         execute_root(&root).expect("execute");
-
-        let journal_path = root.join(STATE_DIR).join(JOURNAL_FILE);
-        let mut journal = fs::read_to_string(&journal_path).expect("read journal");
-        journal.push_str("{not valid json\n");
-        fs::write(&journal_path, journal).expect("append corrupt line");
+        corrupt_journal(&root);
 
         let report = recover_journal(&root).expect("recover journal");
 
-        assert!(!journal_path.exists());
-        assert!(std::path::Path::new(&report.quarantined_path).exists());
+        assert!(Path::new(&report.quarantined_path).exists());
 
         let history = read_operation_history(&root).expect("history after recovery");
         assert!(history.operations.is_empty());

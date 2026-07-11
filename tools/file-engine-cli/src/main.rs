@@ -5,10 +5,12 @@ use file_engine_cli::analyzer::{self, analyze_root};
 use file_engine_cli::browse::{self, browse_root};
 use file_engine_cli::decision::{self, apply_decisions, read_decision_file, DecisionApplication};
 use file_engine_cli::execute::{self, execute_decision_application, execute_root};
+use file_engine_cli::file_index::{list_index, reindex_root, search_index};
 use file_engine_cli::journal::{self, recover_journal, write_planned_journal};
 use file_engine_cli::path_guard::PathGuard;
 use file_engine_cli::precondition::{self, precheck_proposals, precheck_root};
 use file_engine_cli::proposal::{self, propose_for_root, read_proposal_file};
+use file_engine_cli::rules::{self, load_rule_set_for_root};
 use file_engine_cli::undo::{self, undo_root};
 
 fn main() {
@@ -60,6 +62,57 @@ fn main() {
                 Ok(json) => println!("{json}"),
                 Err(error) => {
                     eprintln!("browse failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Some("index") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match reindex_root(root) {
+                Ok(report) => print_json_or_exit(&report),
+                Err(error) => {
+                    eprintln!("index failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Some("search") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+            let Some(query) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            let result = if query.is_empty() {
+                list_index(root)
+            } else {
+                search_index(root, &query)
+            };
+
+            match result {
+                Ok(report) => print_json_or_exit(&report),
+                Err(error) => {
+                    eprintln!("search failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Some("rules") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match load_rule_set_for_root(root).and_then(|rule_set| {
+                serde_json::to_string_pretty(&rule_set)
+                    .map_err(|error| rules::RuleError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("rules failed: {error}");
                     process::exit(1);
                 }
             }
@@ -188,6 +241,16 @@ fn main() {
     }
 }
 
+fn print_json_or_exit<T: serde::Serialize>(value: &T) {
+    match serde_json::to_string_pretty(value) {
+        Ok(json) => println!("{json}"),
+        Err(error) => {
+            eprintln!("cannot serialize report: {error}");
+            process::exit(1);
+        }
+    }
+}
+
 fn apply_optional_decisions(
     proposal: proposal::ProposalReport,
     decision_path: Option<String>,
@@ -248,6 +311,9 @@ fn print_usage_and_exit() -> ! {
     eprintln!("  file-engine-cli guard <managed-root> <relative-path>");
     eprintln!("  file-engine-cli analyze <managed-root>");
     eprintln!("  file-engine-cli browse <managed-root> [--path <relative-path>]");
+    eprintln!("  file-engine-cli index <managed-root>");
+    eprintln!("  file-engine-cli search <managed-root> <query>");
+    eprintln!("  file-engine-cli rules <managed-root>");
     eprintln!("  file-engine-cli propose <managed-root>");
     eprintln!(
         "  file-engine-cli precheck <managed-root> [--proposal <proposal.json> [--decision <decision.jsonl>]]"
