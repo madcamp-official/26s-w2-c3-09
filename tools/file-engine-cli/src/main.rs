@@ -12,8 +12,8 @@ use std::env;
 use std::process;
 
 use analyzer::analyze_root;
-use decision::{apply_decisions, read_decision_file};
-use execute::{execute_proposals, execute_root};
+use decision::{apply_decisions, read_decision_file, DecisionApplication};
+use execute::{execute_decision_application, execute_root};
 use journal::write_planned_journal;
 use path_guard::PathGuard;
 use precondition::{precheck_proposals, precheck_root};
@@ -85,7 +85,7 @@ fn main() {
                         apply_optional_decisions(proposal, options.decision)
                             .map_err(precondition::PrecheckError::Decision)
                     })
-                    .and_then(|proposal| precheck_proposals(root, proposal)),
+                    .and_then(|application| precheck_proposals(root, application.approved)),
                 None => precheck_root(root),
             };
 
@@ -129,7 +129,7 @@ fn main() {
                         apply_optional_decisions(proposal, options.decision)
                             .map_err(execute::ExecuteError::Decision)
                     })
-                    .and_then(|proposal| execute_proposals(root, proposal)),
+                    .and_then(|application| execute_decision_application(root, application)),
                 None => execute_root(root),
             };
 
@@ -167,12 +167,16 @@ fn main() {
 fn apply_optional_decisions(
     proposal: proposal::ProposalReport,
     decision_path: Option<String>,
-) -> Result<proposal::ProposalReport, decision::DecisionError> {
+) -> Result<DecisionApplication, decision::DecisionError> {
     match decision_path {
         Some(path) => {
-            read_decision_file(path).map(|decisions| apply_decisions(proposal, &decisions))
+            let decisions = read_decision_file(path)?;
+            apply_decisions(proposal, &decisions)
         }
-        None => Ok(proposal),
+        None => Ok(DecisionApplication {
+            approved: proposal,
+            rejected: Vec::new(),
+        }),
     }
 }
 

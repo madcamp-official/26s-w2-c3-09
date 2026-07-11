@@ -92,6 +92,25 @@ pub fn undo_root(root: impl AsRef<Path>) -> Result<UndoReport, UndoError> {
         let current_path = match guard.resolve_existing(&entry.to) {
             Ok(path) => path,
             Err(error) => {
+                if guard.resolve_existing(&entry.from).is_ok() {
+                    append_journal(
+                        &mut journal,
+                        &journal_path,
+                        undo_entry(entry, JournalStatus::Undone),
+                    )?;
+                    undone_count += 1;
+                    results.push(UndoResult {
+                        from: entry.to.clone(),
+                        to: entry.from.clone(),
+                        status: UndoStatus::Undone,
+                        reason: Some(
+                            "destination missing and original path exists; recorded recovered undo"
+                                .to_string(),
+                        ),
+                    });
+                    continue;
+                }
+
                 skipped_count += 1;
                 results.push(skipped_result(entry, Some(error.to_string())));
                 continue;
@@ -320,5 +339,27 @@ mod tests {
         assert_eq!(report.skipped_count, 1);
         assert_eq!(original, "# new");
         assert!(root.join("documents").join("note.md").exists());
+    }
+
+    #[test]
+    fn records_recovered_undo_when_file_was_already_restored() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+        execute_root(&root).expect("execute");
+        fs::rename(
+            root.join("documents").join("note.md"),
+            root.join("inbox").join("note.md"),
+        )
+        .expect("simulate restored file before undone journal");
+
+        let report = undo_root(&root).expect("undo");
+        let journal =
+            fs::read_to_string(root.join(".housemouse").join("journal.jsonl")).expect("journal");
+
+        assert_eq!(report.undone_count, 1);
+        assert_eq!(report.skipped_count, 0);
+        assert!(journal.contains("\"status\":\"undone\""));
     }
 }

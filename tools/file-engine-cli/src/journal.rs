@@ -21,7 +21,7 @@ pub struct JournalWriteReport {
     pub skipped_count: usize,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct JournalEntry {
     pub operation_id: String,
     pub status: JournalStatus,
@@ -31,7 +31,7 @@ pub struct JournalEntry {
     pub created_unix_ms: u128,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JournalStatus {
     Planned,
@@ -40,7 +40,7 @@ pub enum JournalStatus {
     Undone,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JournalAction {
     Move,

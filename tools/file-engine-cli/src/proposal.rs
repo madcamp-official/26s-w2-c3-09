@@ -70,16 +70,29 @@ pub fn propose_for_root(root: impl AsRef<Path>) -> Result<ProposalReport, Propos
 }
 
 pub fn proposal_id(action: &ProposalAction, from: &str, to: &str) -> String {
-    format!(
-        "{}:{}:{}",
+    let input = format!(
+        "{}|{}|{}",
         action.as_str(),
         normalize_id_part(from),
         normalize_id_part(to)
-    )
+    );
+
+    format!("{}:{:016x}", action.as_str(), fnv1a64(input.as_bytes()))
 }
 
 fn normalize_id_part(path: &str) -> String {
     path.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325;
+
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    hash
 }
 
 impl ProposalAction {
@@ -168,10 +181,8 @@ mod tests {
         );
         assert!(root.join("inbox").join("note.md").exists());
         assert!(root.join("inbox").join("photo.png").exists());
-        assert_eq!(
-            report.proposals[0].proposal_id,
-            "move:inbox/note.md:documents/note.md"
-        );
+        assert!(report.proposals[0].proposal_id.starts_with("move:"));
+        assert_eq!(report.proposals[0].proposal_id.len(), 21);
     }
 
     #[test]
