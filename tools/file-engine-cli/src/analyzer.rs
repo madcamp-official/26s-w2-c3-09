@@ -192,8 +192,16 @@ mod tests {
             .expect("create symlink");
 
         #[cfg(windows)]
-        std::os::windows::fs::symlink_file(root.join("real.txt"), root.join("link.txt"))
-            .expect("create symlink");
+        if let Err(error) =
+            std::os::windows::fs::symlink_file(root.join("real.txt"), root.join("link.txt"))
+        {
+            // Windows without Developer Mode or elevation returns ERROR_PRIVILEGE_NOT_HELD.
+            if error.raw_os_error() == Some(1314) {
+                eprintln!("skipping symlink safety test; symlink privilege is unavailable");
+                return;
+            }
+            panic!("create symlink: {error}");
+        }
 
         let report = analyze_root(&root).expect("analyze");
 

@@ -1,6 +1,6 @@
 use crate::storage::managed_roots::ManagedRootStore;
 use crate::storage::watchers::WatcherStore;
-use crate::watcher_lifecycle::{start_root_watcher, ROOT_CHANGED_EVENT};
+use crate::watcher_lifecycle::start_root_watcher;
 
 #[tauri::command]
 pub fn start_watching_root(
