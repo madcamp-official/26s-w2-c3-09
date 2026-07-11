@@ -4,6 +4,7 @@ node_modules/
 dist/
 build/
 target/
+apps/desktop/src-tauri/gen/
 .dart_tool/
 .flutter-plugins*
 *.log

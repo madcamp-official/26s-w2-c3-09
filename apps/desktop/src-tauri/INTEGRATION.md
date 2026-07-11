@@ -43,6 +43,10 @@ The `tauri::command` macro is behind the `tauri-commands` feature so the module 
 
 Study note: this is the Rust version of a controller layer. The command receives UI-friendly data, calls the domain function, and converts errors into strings that Tauri can return to the frontend.
 
+The Tauri app entrypoint is now in `src/lib.rs` and registers the commands through `tauri::generate_handler!`. `ManagedRootStore` is attached with `Builder::manage(...)`, so command calls share one in-memory root registry for the running app process.
+
+Current bootstrapping note: `tauri.conf.json` points `frontendDist` at `../src` only so the Rust/Tauri command layer can compile before a real frontend build output exists. Replace it with `../dist` once the desktop UI build is wired.
+
 ## Proposed Tauri Commands
 
 These command names are the app-facing bridge contract. They should return JSON-compatible structs matching `tools/file-engine-cli/README.md`.

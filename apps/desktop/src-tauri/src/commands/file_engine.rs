@@ -5,20 +5,129 @@ use file_engine_cli::path_guard::PathGuard;
 use file_engine_cli::precondition::{precheck_proposals, PrecheckReport};
 use file_engine_cli::proposal::{propose_for_root, ProposalReport};
 use file_engine_cli::undo::{undo_root as undo_file_root, UndoReport};
-use serde::Serialize;
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct ManagedRoot {
-    pub root: String,
-    pub display_name: String,
+use crate::storage::managed_roots::{ManagedRoot, ManagedRootStore};
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn register_managed_root(
+    path: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<ManagedRoot, String> {
+    register_managed_root_in_store(path, &store)
 }
 
-#[cfg_attr(feature = "tauri-commands", tauri::command)]
+#[cfg(not(feature = "tauri-commands"))]
 pub fn register_managed_root(path: String) -> Result<ManagedRoot, String> {
+    register_managed_root_without_store(path)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn list_managed_roots(
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<Vec<ManagedRoot>, String> {
+    store.list()
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn list_managed_roots(store: &ManagedRootStore) -> Result<Vec<ManagedRoot>, String> {
+    store.list()
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn analyze_root(
+    root: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<AnalyzeReport, String> {
+    ensure_registered_root(&store, &root)?;
+    analyze_root_impl(root)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn analyze_root(root: String) -> Result<AnalyzeReport, String> {
+    analyze_root_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn propose_file_changes(
+    root: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<ProposalReport, String> {
+    ensure_registered_root(&store, &root)?;
+    propose_file_changes_impl(root)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn propose_file_changes(root: String) -> Result<ProposalReport, String> {
+    propose_file_changes_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn precheck_file_changes(
+    root: String,
+    proposal: ProposalReport,
+    decisions: Vec<DecisionEntry>,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<PrecheckReport, String> {
+    ensure_registered_root(&store, &root)?;
+    precheck_file_changes_impl(root, proposal, decisions)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn precheck_file_changes(
+    root: String,
+    proposal: ProposalReport,
+    decisions: Vec<DecisionEntry>,
+) -> Result<PrecheckReport, String> {
+    precheck_file_changes_impl(root, proposal, decisions)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn execute_file_changes(
+    root: String,
+    proposal: ProposalReport,
+    decisions: Vec<DecisionEntry>,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<ExecuteReport, String> {
+    ensure_registered_root(&store, &root)?;
+    execute_file_changes_impl(root, proposal, decisions)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn execute_file_changes(
+    root: String,
+    proposal: ProposalReport,
+    decisions: Vec<DecisionEntry>,
+) -> Result<ExecuteReport, String> {
+    execute_file_changes_impl(root, proposal, decisions)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn undo_last_file_operation(
+    root: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<UndoReport, String> {
+    ensure_registered_root(&store, &root)?;
+    undo_last_file_operation_impl(root)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn undo_last_file_operation(root: String) -> Result<UndoReport, String> {
+    undo_last_file_operation_impl(root)
+}
+
+fn register_managed_root_without_store(path: String) -> Result<ManagedRoot, String> {
     let guard = PathGuard::new(path).map_err(command_error)?;
     let root = guard.root();
 
     Ok(ManagedRoot {
+        root_id: managed_root_id(&root.display().to_string()),
         root: root.display().to_string(),
         display_name: root
             .file_name()
@@ -28,18 +137,24 @@ pub fn register_managed_root(path: String) -> Result<ManagedRoot, String> {
     })
 }
 
-#[cfg_attr(feature = "tauri-commands", tauri::command)]
-pub fn analyze_root(root: String) -> Result<AnalyzeReport, String> {
+#[cfg(any(feature = "tauri-commands", test))]
+fn register_managed_root_in_store(
+    path: String,
+    store: &ManagedRootStore,
+) -> Result<ManagedRoot, String> {
+    let managed = register_managed_root_without_store(path)?;
+    store.upsert(managed)
+}
+
+fn analyze_root_impl(root: String) -> Result<AnalyzeReport, String> {
     analyze_file_root(root).map_err(command_error)
 }
 
-#[cfg_attr(feature = "tauri-commands", tauri::command)]
-pub fn propose_file_changes(root: String) -> Result<ProposalReport, String> {
+fn propose_file_changes_impl(root: String) -> Result<ProposalReport, String> {
     propose_for_root(root).map_err(command_error)
 }
 
-#[cfg_attr(feature = "tauri-commands", tauri::command)]
-pub fn precheck_file_changes(
+fn precheck_file_changes_impl(
     root: String,
     proposal: ProposalReport,
     decisions: Vec<DecisionEntry>,
@@ -49,8 +164,7 @@ pub fn precheck_file_changes(
     })
 }
 
-#[cfg_attr(feature = "tauri-commands", tauri::command)]
-pub fn execute_file_changes(
+fn execute_file_changes_impl(
     root: String,
     proposal: ProposalReport,
     decisions: Vec<DecisionEntry>,
@@ -60,8 +174,7 @@ pub fn execute_file_changes(
     })
 }
 
-#[cfg_attr(feature = "tauri-commands", tauri::command)]
-pub fn undo_last_file_operation(root: String) -> Result<UndoReport, String> {
+fn undo_last_file_operation_impl(root: String) -> Result<UndoReport, String> {
     undo_file_root(root).map_err(command_error)
 }
 
@@ -83,6 +196,30 @@ fn command_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+#[cfg(feature = "tauri-commands")]
+fn ensure_registered_root(store: &ManagedRootStore, root: &str) -> Result<(), String> {
+    if store.contains_root(root)? {
+        Ok(())
+    } else {
+        Err("managed root is not registered".to_string())
+    }
+}
+
+fn managed_root_id(root: &str) -> String {
+    format!("root:{:016x}", fnv1a64(root.as_bytes()))
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325;
+
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+
+    hash
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -90,9 +227,11 @@ mod tests {
     use file_engine_cli::decision::{Decision, DecisionEntry};
     use tempfile::tempdir;
 
+    use crate::storage::managed_roots::ManagedRootStore;
+
     use super::{
-        execute_file_changes, precheck_file_changes, propose_file_changes, register_managed_root,
-        undo_last_file_operation,
+        execute_file_changes, list_managed_roots, precheck_file_changes, propose_file_changes,
+        register_managed_root, register_managed_root_in_store, undo_last_file_operation,
     };
 
     #[test]
@@ -111,7 +250,22 @@ mod tests {
                 .display()
                 .to_string()
         );
+        assert!(managed.root_id.starts_with("root:"));
         assert_eq!(managed.display_name, "root");
+    }
+
+    #[test]
+    fn register_managed_root_stores_root_for_later_listing() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("create root");
+        let store = ManagedRootStore::default();
+
+        let managed = register_managed_root_in_store(root.display().to_string(), &store)
+            .expect("register stored root");
+        let roots = list_managed_roots(&store).expect("list roots");
+
+        assert_eq!(roots, vec![managed]);
     }
 
     #[test]

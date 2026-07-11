@@ -1224,6 +1224,7 @@ dependencies = [
  "file-engine-cli",
  "serde",
  "tauri",
+ "tauri-build",
  "tempfile",
 ]
 
