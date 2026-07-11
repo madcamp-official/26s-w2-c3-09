@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use file_engine_cli::analyzer::{analyze_root as analyze_file_root, AnalyzeReport};
+use file_engine_cli::auto_approval::auto_approve_decisions;
 use file_engine_cli::browse::{browse_root, BrowseReport};
 use file_engine_cli::decision::{apply_decisions, DecisionApplication, DecisionEntry};
 use file_engine_cli::execute::{execute_decision_application, ExecuteReport};
@@ -21,6 +22,9 @@ use file_engine_cli::undo::{
     undo_operation as undo_file_operation, undo_root as undo_file_root, UndoReport,
 };
 
+use crate::storage::auto_approval::{
+    AutoApprovalPolicyPatch, AutoApprovalPolicyRecord, AutoApprovalStore,
+};
 use crate::storage::managed_roots::{ManagedRoot, ManagedRootStatePatch, ManagedRootStore};
 use crate::storage::watchers::WatcherStore;
 
@@ -178,6 +182,67 @@ pub fn propose_file_changes(
 ) -> Result<ProposalReport, String> {
     let root = resolve_root_id(store, &root_id)?;
     propose_file_changes_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn get_auto_approval_policy(
+    root_id: String,
+    roots: tauri::State<'_, ManagedRootStore>,
+    policies: tauri::State<'_, AutoApprovalStore>,
+) -> Result<AutoApprovalPolicyRecord, String> {
+    get_auto_approval_policy_impl(root_id, &roots, &policies)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn get_auto_approval_policy(
+    root_id: String,
+    roots: &ManagedRootStore,
+    policies: &AutoApprovalStore,
+) -> Result<AutoApprovalPolicyRecord, String> {
+    get_auto_approval_policy_impl(root_id, roots, policies)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn update_auto_approval_policy(
+    root_id: String,
+    patch: AutoApprovalPolicyPatch,
+    roots: tauri::State<'_, ManagedRootStore>,
+    policies: tauri::State<'_, AutoApprovalStore>,
+) -> Result<AutoApprovalPolicyRecord, String> {
+    update_auto_approval_policy_impl(root_id, patch, &roots, &policies)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn update_auto_approval_policy(
+    root_id: String,
+    patch: AutoApprovalPolicyPatch,
+    roots: &ManagedRootStore,
+    policies: &AutoApprovalStore,
+) -> Result<AutoApprovalPolicyRecord, String> {
+    update_auto_approval_policy_impl(root_id, patch, roots, policies)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn auto_approve_file_changes(
+    root_id: String,
+    proposal: ProposalReport,
+    roots: tauri::State<'_, ManagedRootStore>,
+    policies: tauri::State<'_, AutoApprovalStore>,
+) -> Result<Vec<DecisionEntry>, String> {
+    auto_approve_file_changes_impl(root_id, proposal, &roots, &policies)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn auto_approve_file_changes(
+    root_id: String,
+    proposal: ProposalReport,
+    roots: &ManagedRootStore,
+    policies: &AutoApprovalStore,
+) -> Result<Vec<DecisionEntry>, String> {
+    auto_approve_file_changes_impl(root_id, proposal, roots, policies)
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -409,6 +474,40 @@ fn update_managed_root_state_impl(
     Ok(updated)
 }
 
+fn get_auto_approval_policy_impl(
+    root_id: String,
+    roots: &ManagedRootStore,
+    policies: &AutoApprovalStore,
+) -> Result<AutoApprovalPolicyRecord, String> {
+    roots.get(&root_id)?;
+    policies.get_or_default(&root_id)
+}
+
+fn update_auto_approval_policy_impl(
+    root_id: String,
+    patch: AutoApprovalPolicyPatch,
+    roots: &ManagedRootStore,
+    policies: &AutoApprovalStore,
+) -> Result<AutoApprovalPolicyRecord, String> {
+    roots.get(&root_id)?;
+    policies.patch(&root_id, patch)
+}
+
+fn auto_approve_file_changes_impl(
+    root_id: String,
+    proposal: ProposalReport,
+    roots: &ManagedRootStore,
+    policies: &AutoApprovalStore,
+) -> Result<Vec<DecisionEntry>, String> {
+    let root = resolve_root_id(roots, &root_id)?;
+    if proposal.root != root {
+        return Err("proposal root does not match the selected managed root".to_string());
+    }
+
+    let policy = policies.get_or_default(&root_id)?.to_engine_policy();
+    auto_approve_decisions(&proposal, &policy).map_err(command_error)
+}
+
 fn prepare_demo_root_impl() -> Result<String, String> {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -587,13 +686,15 @@ mod tests {
     use file_engine_cli::decision::{Decision, DecisionEntry};
     use tempfile::tempdir;
 
+    use crate::storage::auto_approval::{AutoApprovalPolicyPatch, AutoApprovalStore};
     use crate::storage::managed_roots::ManagedRootStore;
 
     use super::{
-        browse_root_tree, create_file, execute_file_changes, list_managed_roots,
-        list_operation_history, precheck_file_changes, prepare_demo_root, propose_file_changes,
-        recover_journal, register_managed_root, register_managed_root_in_store,
-        reindex_managed_root, rename_file, search_managed_root, trash_file, undo_operation,
+        auto_approve_file_changes, browse_root_tree, create_file, execute_file_changes,
+        get_auto_approval_policy, list_managed_roots, list_operation_history,
+        precheck_file_changes, prepare_demo_root, propose_file_changes, recover_journal,
+        register_managed_root, register_managed_root_in_store, reindex_managed_root, rename_file,
+        search_managed_root, trash_file, undo_operation, update_auto_approval_policy,
     };
 
     #[test]
@@ -724,6 +825,59 @@ mod tests {
 
         let history = list_operation_history(managed.root_id, &store).expect("history");
         assert!(!history.operations[0].can_undo);
+    }
+
+    #[test]
+    fn auto_approval_policy_is_root_scoped_and_generates_decisions() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::create_dir_all(root.join(".housemouse")).expect("create state dir");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+        fs::write(root.join("inbox").join("noise.tmp"), "noise").expect("write temp");
+        fs::write(
+            root.join(".housemouse").join("rules.json"),
+            r#"{"version":1,"rules":[{"id":"temp-trash","when":{"name_matches":"*.tmp"},"then":{"trash":true}}]}"#,
+        )
+        .expect("write rules");
+
+        let roots = ManagedRootStore::default();
+        let policies = AutoApprovalStore::default();
+        let managed = register_managed_root_in_store(root.display().to_string(), &roots)
+            .expect("register managed root");
+        let default_policy =
+            get_auto_approval_policy(managed.root_id.clone(), &roots, &policies).expect("policy");
+        assert!(!default_policy.enabled);
+
+        update_auto_approval_policy(
+            managed.root_id.clone(),
+            AutoApprovalPolicyPatch {
+                enabled: Some(true),
+                allowed_actions: Some(vec![file_engine_cli::proposal::ProposalAction::Trash]),
+                max_files_per_run: Some(5),
+                expires_unix_ms: None,
+            },
+            &roots,
+            &policies,
+        )
+        .expect("enable policy");
+
+        let proposal =
+            propose_file_changes(managed.root_id.clone(), &roots).expect("propose file changes");
+        let decisions =
+            auto_approve_file_changes(managed.root_id.clone(), proposal.clone(), &roots, &policies)
+                .expect("auto decisions");
+
+        assert_eq!(decisions.len(), 1);
+        let approved = proposal
+            .proposals
+            .iter()
+            .find(|proposal| proposal.proposal_id == decisions[0].proposal_id)
+            .expect("approved proposal");
+        assert_eq!(
+            approved.action,
+            file_engine_cli::proposal::ProposalAction::Trash
+        );
     }
 
     #[test]

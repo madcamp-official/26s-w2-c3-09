@@ -63,10 +63,11 @@ export type FileIndexReport = {
 };
 
 export type ProposalStatus = "ready" | "destination_exists";
+export type ProposalAction = "move" | "trash";
 
 export type Proposal = {
   proposal_id: string;
-  action: "move" | "trash";
+  action: ProposalAction;
   from: string;
   to: string;
   source_size_bytes: number;
@@ -78,6 +79,22 @@ export type Proposal = {
 export type ProposalReport = {
   root: string;
   proposals: Proposal[];
+};
+
+export type AutoApprovalPolicy = {
+  root_id: string;
+  enabled: boolean;
+  allowed_actions: ProposalAction[];
+  max_files_per_run: number;
+  expires_unix_ms: number | null;
+  updated_unix_ms: number;
+};
+
+export type AutoApprovalPolicyPatch = {
+  enabled?: boolean;
+  allowed_actions?: ProposalAction[];
+  max_files_per_run?: number;
+  expires_unix_ms?: number;
 };
 
 export type DecisionEntry = {
@@ -223,6 +240,18 @@ export function searchManagedRoot(rootId: string, query: string) {
 
 export function proposeFileChanges(rootId: string) {
   return invokeCommand<ProposalReport>("propose_file_changes", { rootId });
+}
+
+export function getAutoApprovalPolicy(rootId: string) {
+  return invokeCommand<AutoApprovalPolicy>("get_auto_approval_policy", { rootId });
+}
+
+export function updateAutoApprovalPolicy(rootId: string, patch: AutoApprovalPolicyPatch) {
+  return invokeCommand<AutoApprovalPolicy>("update_auto_approval_policy", { rootId, patch });
+}
+
+export function autoApproveFileChanges(rootId: string, proposal: ProposalReport) {
+  return invokeCommand<DecisionEntry[]>("auto_approve_file_changes", { rootId, proposal });
 }
 
 export function precheckFileChanges(

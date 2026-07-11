@@ -11,6 +11,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(agent::AgentRuntime::default())
         .manage(overlay::OverlayRuntime::default())
+        .manage(storage::auto_approval::AutoApprovalStore::default())
         .manage(storage::managed_roots::ManagedRootStore::default())
         .manage(storage::watchers::WatcherStore::default())
         .setup(|app| {
@@ -26,6 +27,16 @@ pub fn run() {
             store
                 .load_from_db(storage_path)
                 .map_err(|error| format!("cannot load managed roots: {error}"))?;
+            let auto_approval = app.state::<storage::auto_approval::AutoApprovalStore>();
+            let auto_approval_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("cannot resolve app data directory: {error}"))?
+                .join("auto-approval.db");
+
+            auto_approval
+                .load_from_db(auto_approval_path)
+                .map_err(|error| format!("cannot load auto approval policies: {error}"))?;
             let watchers = app.state::<storage::watchers::WatcherStore>();
             let restore_results = watcher_lifecycle::restore_startup_watchers(
                 app.handle().clone(),
@@ -53,6 +64,9 @@ pub fn run() {
             commands::file_engine::reindex_managed_root,
             commands::file_engine::search_managed_root,
             commands::file_engine::propose_file_changes,
+            commands::file_engine::get_auto_approval_policy,
+            commands::file_engine::update_auto_approval_policy,
+            commands::file_engine::auto_approve_file_changes,
             commands::file_engine::precheck_file_changes,
             commands::file_engine::execute_file_changes,
             commands::file_engine::trash_file,

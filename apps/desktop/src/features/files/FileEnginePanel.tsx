@@ -2,11 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   analyzeRoot,
+  AutoApprovalPolicy,
+  autoApproveFileChanges,
   BrowseEntry,
   browseRootTree,
   DecisionEntry,
   executeFileChanges,
   ExecuteReport,
+  getAutoApprovalPolicy,
   IndexedFile,
   JournalCorruption,
   listenForRootChanges,
@@ -27,6 +30,7 @@ import {
   startWatchingRoot,
   stopWatchingRoot,
   trashFile,
+  updateAutoApprovalPolicy,
   updateManagedRootState,
   undoLastFileOperation,
   undoOperation,
@@ -49,6 +53,7 @@ export function FileEnginePanel() {
   const [journalCorruption, setJournalCorruption] = useState<JournalCorruption | null>(null);
   const [browsePath, setBrowsePath] = useState("");
   const [browseEntries, setBrowseEntries] = useState<BrowseEntry[]>([]);
+  const [autoApprovalPolicy, setAutoApprovalPolicy] = useState<AutoApprovalPolicy | null>(null);
   const [watchingRootIds, setWatchingRootIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<IndexedFile[] | null>(null);
@@ -77,8 +82,10 @@ export function FileEnginePanel() {
   useEffect(() => {
     if (selectedRootId) {
       void refreshHistory(selectedRootId);
+      void refreshAutoApprovalPolicy(selectedRootId);
     } else {
       setHistory([]);
+      setAutoApprovalPolicy(null);
     }
   }, [selectedRootId]);
 
@@ -189,6 +196,21 @@ export function FileEnginePanel() {
     }
   }
 
+  async function refreshAutoApprovalPolicy(rootId = selectedRootId) {
+    if (!rootId) {
+      setAutoApprovalPolicy(null);
+      return;
+    }
+
+    try {
+      const policy = await getAutoApprovalPolicy(rootId);
+      setAutoApprovalPolicy(policy);
+    } catch (caught) {
+      setAutoApprovalPolicy(null);
+      setError(errorMessage(caught));
+    }
+  }
+
   async function recoverJournalForSelectedRoot() {
     if (!selectedRootId || !journalCorruption) return;
 
@@ -240,6 +262,23 @@ export function FileEnginePanel() {
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Root state update failed");
+    }
+  }
+
+  async function updateSelectedAutoApprovalPolicy(
+    patch: Parameters<typeof updateAutoApprovalPolicy>[1]
+  ) {
+    if (!selectedRootId) return;
+
+    setError(null);
+    setStatus("Updating auto approval");
+    try {
+      const policy = await updateAutoApprovalPolicy(selectedRootId, patch);
+      setAutoApprovalPolicy(policy);
+      setStatus("Auto approval updated");
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Auto approval update failed");
     }
   }
 
@@ -302,6 +341,31 @@ export function FileEnginePanel() {
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Precheck failed");
+    }
+  }
+
+  async function autoApproveSelectedProposal() {
+    if (!selectedRootId || !proposal) return;
+
+    setError(null);
+    setStatus("Applying auto approval policy");
+    try {
+      const autoDecisions = await autoApproveFileChanges(selectedRootId, proposal);
+      if (autoDecisions.length === 0) {
+        setStatus("Auto approval found no eligible proposals");
+        return;
+      }
+
+      setDecisions((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          autoDecisions.map((decision) => [decision.proposal_id, decision.decision])
+        )
+      }));
+      setStatus(`Auto approved ${autoDecisions.length} proposals`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Auto approval failed");
     }
   }
 
@@ -516,6 +580,19 @@ export function FileEnginePanel() {
     setRejectionReasons((current) => ({ ...current, [item.proposal_id]: reason }));
   }
 
+  function setAutoApprovalAction(action: "move" | "trash", enabled: boolean) {
+    const current = autoApprovalPolicy?.allowed_actions || [];
+    const next = enabled
+      ? Array.from(new Set([...current, action]))
+      : current.filter((item) => item !== action);
+    if (next.length === 0) {
+      setError("Auto approval must keep at least one allowed action.");
+      return;
+    }
+
+    void updateSelectedAutoApprovalPolicy({ allowed_actions: next });
+  }
+
   function validatedDecisionEntries() {
     const missingReason = proposal?.proposals.find(
       (item) => decisions[item.proposal_id] === "rejected" && !rejectionReasons[item.proposal_id]?.trim()
@@ -614,6 +691,49 @@ export function FileEnginePanel() {
               <small>{selectedRoot.last_seen_status}</small>
             </div>
           ) : null}
+          {selectedRoot && autoApprovalPolicy ? (
+            <div className="auto-approval-panel">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={autoApprovalPolicy.enabled}
+                  onChange={(event) =>
+                    void updateSelectedAutoApprovalPolicy({ enabled: event.target.checked })
+                  }
+                />
+                Auto approval
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={autoApprovalPolicy.allowed_actions.includes("trash")}
+                  onChange={(event) => setAutoApprovalAction("trash", event.target.checked)}
+                />
+                Trash
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={autoApprovalPolicy.allowed_actions.includes("move")}
+                  onChange={(event) => setAutoApprovalAction("move", event.target.checked)}
+                />
+                Move
+              </label>
+              <label>
+                Max
+                <input
+                  type="number"
+                  min="1"
+                  value={autoApprovalPolicy.max_files_per_run}
+                  onChange={(event) =>
+                    void updateSelectedAutoApprovalPolicy({
+                      max_files_per_run: Math.max(1, Number(event.target.value) || 1)
+                    })
+                  }
+                />
+              </label>
+            </div>
+          ) : null}
 
           <div className="button-grid">
             <button type="button" onClick={analyzeSelectedRoot} disabled={!selectedRootId}>
@@ -628,6 +748,13 @@ export function FileEnginePanel() {
               disabled={!selectedRootId || !proposal}
             >
               Precheck
+            </button>
+            <button
+              type="button"
+              onClick={() => void autoApproveSelectedProposal()}
+              disabled={!selectedRootId || !proposal || !autoApprovalPolicy?.enabled}
+            >
+              Auto approve
             </button>
             <button
               type="button"
