@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://housemouse.local/contracts/events/auto-approval-policy.schema.json",
+  "title": "AutoApprovalPolicy",
+  "description": "User-granted scoped policy that lets the desktop auto-approve safe proposal actions. This does not bypass local prechecks, journaling, or undo.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rootId",
+    "enabled",
+    "allowedActions",
+    "maxFilesPerRun",
+    "createdAt"
+  ],
+  "properties": {
+    "rootId": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "enabled": { "type": "boolean" },
+    "allowedActions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "enum": ["move", "trash"] }
+    },
+    "maxFilesPerRun": { "type": "integer", "minimum": 1, "maximum": 200 },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": ["string", "null"], "format": "date-time" }
+  }
+}

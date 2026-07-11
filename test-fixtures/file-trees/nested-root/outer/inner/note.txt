@@ -1,0 +1,1 @@
+This nested file is used to test managed-root boundary handling.

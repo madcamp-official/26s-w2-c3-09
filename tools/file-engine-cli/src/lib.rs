@@ -1,0 +1,16 @@
+pub mod analyzer;
+pub mod auto_approval;
+pub mod browse;
+pub mod db;
+pub mod decision;
+pub mod execute;
+pub mod file_index;
+pub mod file_ops;
+pub mod fs_safety;
+pub mod journal;
+pub mod path_guard;
+pub mod precondition;
+pub mod proposal;
+pub mod rules;
+pub mod trash;
+pub mod undo;

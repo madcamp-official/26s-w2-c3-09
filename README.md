@@ -236,3 +236,18 @@ npm run dev   # 또는 python main.py 등
 - https://reactnative.dev/
 - https://docs.expo.dev/
 - https://kotlinlang.org/multiplatform/
+
+---
+
+## A File Engine Notes
+
+A-side local file engine documentation:
+
+- CLI usage and JSON contracts: [`tools/file-engine-cli/README.md`](tools/file-engine-cli/README.md)
+- Desktop/Tauri integration plan: [`apps/desktop/src-tauri/INTEGRATION.md`](apps/desktop/src-tauri/INTEGRATION.md)
+
+Current safe flow:
+
+```text
+propose -> decision.jsonl -> precheck -> execute -> undo
+```

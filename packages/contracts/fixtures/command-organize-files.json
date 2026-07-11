@@ -1,0 +1,17 @@
+{
+  "commandId": "11111111-1111-4111-8111-111111111111",
+  "schemaVersion": 1,
+  "commandType": "organize_files",
+  "roomId": "22222222-2222-4222-8222-222222222222",
+  "targetDeviceId": "33333333-3333-4333-8333-333333333333",
+  "issuedByUserId": "44444444-4444-4444-8444-444444444444",
+  "idempotencyKey": "cmd:organize:22222222-2222-4222-8222-222222222222:0001",
+  "createdAt": "2026-07-11T09:00:00Z",
+  "expiresAt": "2026-07-11T09:10:00Z",
+  "payload": {
+    "relativePath": "",
+    "maxProposals": 200,
+    "ruleMode": "managed_root_rules",
+    "userIntent": "Sort obvious documents and images in this room."
+  }
+}

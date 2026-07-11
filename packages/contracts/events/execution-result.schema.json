@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://housemouse.local/contracts/events/execution-result.schema.json",
+  "title": "ExecutionResult",
+  "description": "Desktop-to-server result for an apply_decisions command. Results must reflect actual local precondition checks and journaled operations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "executionId",
+    "commandId",
+    "proposalBatchId",
+    "roomId",
+    "deviceId",
+    "schemaVersion",
+    "startedAt",
+    "finishedAt",
+    "status",
+    "executedCount",
+    "skippedCount",
+    "rejectedCount",
+    "results"
+  ],
+  "properties": {
+    "executionId": { "type": "string", "format": "uuid" },
+    "commandId": { "type": "string", "format": "uuid" },
+    "proposalBatchId": { "type": "string", "format": "uuid" },
+    "roomId": { "type": "string", "format": "uuid" },
+    "deviceId": { "type": "string", "format": "uuid" },
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed"]
+    },
+    "journalRef": {
+      "type": "string",
+      "description": "Opaque local journal reference. Must not contain an absolute user path.",
+      "maxLength": 256
+    },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "UNCONFIGURED",
+        "DEVICE_OFFLINE",
+        "ROOT_NOT_REGISTERED",
+        "OUT_OF_ROOT",
+        "SOURCE_CHANGED",
+        "DESTINATION_EXISTS",
+        "JOURNAL_CORRUPT",
+        "JOURNAL_WRITE_FAILED",
+        "EXECUTION_FAILED",
+        "UNKNOWN"
+      ]
+    },
+    "errorMessage": { "type": "string", "maxLength": 2000 },
+    "executedCount": { "type": "integer", "minimum": 0 },
+    "skippedCount": { "type": "integer", "minimum": 0 },
+    "rejectedCount": { "type": "integer", "minimum": 0 },
+    "results": {
+      "type": "array",
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/ExecutionItemResult" }
+    }
+  },
+  "$defs": {
+    "SafeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "not": {
+        "anyOf": [
+          { "pattern": "^[A-Za-z]:" },
+          { "pattern": "^/" },
+          { "pattern": "^\\\\" },
+          { "pattern": "(^|[\\\\/])\\.\\.($|[\\\\/])" }
+        ]
+      }
+    },
+    "ExecutionItemResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action", "from", "to", "status"],
+      "properties": {
+        "action": { "type": "string", "enum": ["move", "trash"] },
+        "from": { "$ref": "#/$defs/SafeRelativePath" },
+        "to": { "$ref": "#/$defs/SafeRelativePath" },
+        "status": {
+          "type": "string",
+          "enum": ["executed", "skipped", "rejected"]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    }
+  }
+}

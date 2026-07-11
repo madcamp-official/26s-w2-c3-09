@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://housemouse.local/contracts/events/file-transfer.schema.json",
+  "title": "FileTransferEvent",
+  "description": "Desktop-to-server transfer state for a download_file command. Completion means the desktop uploaded bytes and computed a checksum; mobile download completion is tracked separately by the server/mobile flow.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "transferEventId",
+    "transferSessionId",
+    "commandId",
+    "roomId",
+    "deviceId",
+    "schemaVersion",
+    "occurredAt",
+    "status",
+    "relativePath"
+  ],
+  "properties": {
+    "transferEventId": { "type": "string", "format": "uuid" },
+    "transferSessionId": { "type": "string", "format": "uuid" },
+    "commandId": { "type": "string", "format": "uuid" },
+    "roomId": { "type": "string", "format": "uuid" },
+    "deviceId": { "type": "string", "format": "uuid" },
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "status": {
+      "type": "string",
+      "enum": [
+        "validating",
+        "uploading",
+        "completed",
+        "cancelled",
+        "failed"
+      ]
+    },
+    "relativePath": { "$ref": "#/$defs/SafeRelativePath" },
+    "bytesUploaded": { "type": "integer", "minimum": 0 },
+    "totalBytes": { "type": ["integer", "null"], "minimum": 0 },
+    "chunkSizeBytes": { "type": "integer", "minimum": 1 },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sourceModifiedUnixMs": { "type": ["integer", "null"], "minimum": 0 },
+    "errorCode": {
+      "type": "string",
+      "enum": [
+        "UNCONFIGURED",
+        "DEVICE_OFFLINE",
+        "ROOT_NOT_REGISTERED",
+        "OUT_OF_ROOT",
+        "NOT_A_FILE",
+        "FILE_TOO_LARGE",
+        "SOURCE_CHANGED",
+        "CHECKSUM_MISMATCH",
+        "TRANSFER_CANCELLED",
+        "UPLOAD_TARGET_EXPIRED",
+        "NETWORK_INTERRUPTED",
+        "UNKNOWN"
+      ]
+    },
+    "errorMessage": { "type": "string", "maxLength": 2000 }
+  },
+  "$defs": {
+    "SafeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "not": {
+        "anyOf": [
+          { "pattern": "^[A-Za-z]:" },
+          { "pattern": "^/" },
+          { "pattern": "^\\\\" },
+          { "pattern": "(^|[\\\\/])\\.\\.($|[\\\\/])" }
+        ]
+      }
+    }
+  }
+}

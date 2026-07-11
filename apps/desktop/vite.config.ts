@@ -1,0 +1,15 @@
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+
+export default defineConfig({
+  plugins: [react()],
+  clearScreen: false,
+  server: {
+    strictPort: true,
+    port: 1420
+  },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true
+  }
+});

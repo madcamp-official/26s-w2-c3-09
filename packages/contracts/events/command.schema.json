@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://housemouse.local/contracts/events/command.schema.json",
+  "title": "Command",
+  "description": "Durable server-to-desktop command. A command requests analysis, browse, transfer, or approved execution; the desktop must still validate managed-root boundaries and live file preconditions before any local mutation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "commandId",
+    "schemaVersion",
+    "commandType",
+    "roomId",
+    "targetDeviceId",
+    "issuedByUserId",
+    "idempotencyKey",
+    "createdAt",
+    "payload"
+  ],
+  "properties": {
+    "commandId": { "type": "string", "format": "uuid" },
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "commandType": {
+      "type": "string",
+      "enum": [
+        "organize_files",
+        "apply_decisions",
+        "browse_files",
+        "download_file",
+        "cancel_transfer"
+      ]
+    },
+    "roomId": { "type": "string", "format": "uuid" },
+    "targetDeviceId": { "type": "string", "format": "uuid" },
+    "issuedByUserId": { "type": "string", "format": "uuid" },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 160
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "payload": {
+      "oneOf": [
+        { "$ref": "#/$defs/OrganizeFilesPayload" },
+        { "$ref": "#/$defs/ApplyDecisionsPayload" },
+        { "$ref": "#/$defs/BrowseFilesPayload" },
+        { "$ref": "#/$defs/DownloadFilePayload" },
+        { "$ref": "#/$defs/CancelTransferPayload" }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "commandType": { "const": "organize_files" } },
+        "required": ["commandType"]
+      },
+      "then": {
+        "properties": {
+          "payload": { "$ref": "#/$defs/OrganizeFilesPayload" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "commandType": { "const": "apply_decisions" } },
+        "required": ["commandType"]
+      },
+      "then": {
+        "properties": {
+          "payload": { "$ref": "#/$defs/ApplyDecisionsPayload" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "commandType": { "const": "browse_files" } },
+        "required": ["commandType"]
+      },
+      "then": {
+        "properties": {
+          "payload": { "$ref": "#/$defs/BrowseFilesPayload" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "commandType": { "const": "download_file" } },
+        "required": ["commandType"]
+      },
+      "then": {
+        "properties": {
+          "payload": { "$ref": "#/$defs/DownloadFilePayload" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "commandType": { "const": "cancel_transfer" } },
+        "required": ["commandType"]
+      },
+      "then": {
+        "properties": {
+          "payload": { "$ref": "#/$defs/CancelTransferPayload" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "SafeRelativePath": {
+      "type": "string",
+      "description": "Path relative to the room's managed root. The desktop must still reject traversal, absolute paths, symlinks, junctions, and reparse escapes at execution time.",
+      "minLength": 0,
+      "maxLength": 4096,
+      "not": {
+        "anyOf": [
+          { "pattern": "^[A-Za-z]:" },
+          { "pattern": "^/" },
+          { "pattern": "^\\\\" },
+          { "pattern": "(^|[\\\\/])\\.\\.($|[\\\\/])" }
+        ]
+      }
+    },
+    "ProposalId": {
+      "type": "string",
+      "pattern": "^[a-z_]+:[0-9a-f]{16}$"
+    },
+    "OrganizeFilesPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxProposals"],
+      "properties": {
+        "relativePath": { "$ref": "#/$defs/SafeRelativePath" },
+        "maxProposals": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "ruleMode": {
+          "type": "string",
+          "enum": ["default", "managed_root_rules"]
+        },
+        "userIntent": {
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "ApplyDecisionsPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposalBatchId", "decisions"],
+      "properties": {
+        "proposalBatchId": { "type": "string", "format": "uuid" },
+        "decisions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/DecisionEntry" }
+        }
+      }
+    },
+    "DecisionEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposalId", "decision"],
+      "properties": {
+        "proposalId": { "$ref": "#/$defs/ProposalId" },
+        "decision": {
+          "type": "string",
+          "enum": ["approved", "rejected"]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "decision": { "const": "rejected" } },
+            "required": ["decision"]
+          },
+          "then": { "required": ["reason"] }
+        }
+      ]
+    },
+    "BrowseFilesPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relativePath", "pageSize"],
+      "properties": {
+        "relativePath": { "$ref": "#/$defs/SafeRelativePath" },
+        "pageSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "cursor": {
+          "type": ["string", "null"],
+          "maxLength": 1024
+        }
+      }
+    },
+    "DownloadFilePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relativePath", "transferSessionId", "maxBytes"],
+      "properties": {
+        "relativePath": { "$ref": "#/$defs/SafeRelativePath" },
+        "transferSessionId": { "type": "string", "format": "uuid" },
+        "expectedSizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "expectedModifiedUnixMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 104857600
+        }
+      }
+    },
+    "CancelTransferPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transferSessionId"],
+      "properties": {
+        "transferSessionId": { "type": "string", "format": "uuid" },
+        "reason": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    }
+  }
+}
