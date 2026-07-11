@@ -1,24 +1,14 @@
-mod analyzer;
-mod decision;
-mod execute;
-mod journal;
-mod path_guard;
-mod precondition;
-mod proposal;
-mod rules;
-mod undo;
-
 use std::env;
 use std::process;
 
-use analyzer::analyze_root;
-use decision::{apply_decisions, read_decision_file, DecisionApplication};
-use execute::{execute_decision_application, execute_root};
-use journal::write_planned_journal;
-use path_guard::PathGuard;
-use precondition::{precheck_proposals, precheck_root};
-use proposal::{propose_for_root, read_proposal_file};
-use undo::undo_root;
+use file_engine_cli::analyzer::{self, analyze_root};
+use file_engine_cli::decision::{self, apply_decisions, read_decision_file, DecisionApplication};
+use file_engine_cli::execute::{self, execute_decision_application, execute_root};
+use file_engine_cli::journal::{self, write_planned_journal};
+use file_engine_cli::path_guard::PathGuard;
+use file_engine_cli::precondition::{self, precheck_proposals, precheck_root};
+use file_engine_cli::proposal::{self, propose_for_root, read_proposal_file};
+use file_engine_cli::undo::{self, undo_root};
 
 fn main() {
     let mut args = env::args().skip(1);

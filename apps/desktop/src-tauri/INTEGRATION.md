@@ -2,7 +2,7 @@
 
 This document prepares the Tauri desktop side to call the A-owned file engine safely.
 
-The current implementation lives in `tools/file-engine-cli`. Until the desktop Rust crate is fully wired, the app should treat the CLI JSON contracts as the reference behavior.
+The shared implementation currently lives in `tools/file-engine-cli`. The CLI now exposes those modules through `src/lib.rs`, and the desktop crate calls the same code from `apps/desktop/src-tauri/src/commands/file_engine.rs`.
 
 ## Integration Goal
 
@@ -15,6 +15,33 @@ Expose local file operations to the desktop UI through explicit Tauri commands w
 - no overwrite
 - journal before mutation
 - undo visibility
+
+## Implemented Command Module
+
+The first desktop bridge is implemented in:
+
+```text
+apps/desktop/src-tauri/src/commands/file_engine.rs
+```
+
+It intentionally stays thin. Each command validates input through the existing file-engine functions instead of duplicating file logic in the Tauri layer.
+
+Implemented commands:
+
+```rust
+register_managed_root(path: String) -> Result<ManagedRoot, String>
+analyze_root(root: String) -> Result<AnalyzeReport, String>
+propose_file_changes(root: String) -> Result<ProposalReport, String>
+precheck_file_changes(root: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<PrecheckReport, String>
+execute_file_changes(root: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<ExecuteReport, String>
+undo_last_file_operation(root: String) -> Result<UndoReport, String>
+```
+
+`register_managed_root` returns the canonical managed-root path and a display name. The frontend should pass the returned `root` value into later file-engine commands instead of reusing the raw folder-picker string.
+
+The `tauri::command` macro is behind the `tauri-commands` feature so the module can be unit-tested before the full desktop shell is wired.
+
+Study note: this is the Rust version of a controller layer. The command receives UI-friendly data, calls the domain function, and converts errors into strings that Tauri can return to the frontend.
 
 ## Proposed Tauri Commands
 
@@ -78,18 +105,19 @@ Recommended UI mapping:
 Short term:
 
 - Keep using `tools/file-engine-cli` for verification.
-- Add Tauri command modules under `apps/desktop/src-tauri/src/commands/`.
-- Move shared file-engine logic into a reusable Rust module or crate before duplicating CLI logic.
+- Keep Tauri command modules under `apps/desktop/src-tauri/src/commands/`.
+- Keep shared file-engine behavior in the reusable `file-engine-cli` library until a dedicated core crate is worth splitting out.
 
 Preferred medium-term structure:
 
 ```text
 tools/file-engine-cli/
+  src/lib.rs               # shared engine module exports
   src/main.rs              # CLI argument parsing only
-  src/*.rs                 # temporary engine modules
+  src/*.rs                 # engine modules
 
 apps/desktop/src-tauri/
-  src/commands/files.rs    # Tauri invoke handlers
+  src/commands/file_engine.rs # Tauri invoke handlers
 
 packages or crates/
   file-engine-core/        # shared analyzer/proposal/precheck/execute/undo logic
