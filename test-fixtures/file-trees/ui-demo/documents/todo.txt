@@ -1,0 +1,1 @@
+Try registering this folder in the desktop UI, then run analyze, propose, precheck, execute, and undo.

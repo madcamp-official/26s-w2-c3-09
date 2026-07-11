@@ -30,22 +30,27 @@ Implemented commands:
 
 ```rust
 register_managed_root(path: String) -> Result<ManagedRoot, String>
-analyze_root(root: String) -> Result<AnalyzeReport, String>
-propose_file_changes(root: String) -> Result<ProposalReport, String>
-precheck_file_changes(root: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<PrecheckReport, String>
-execute_file_changes(root: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<ExecuteReport, String>
-undo_last_file_operation(root: String) -> Result<UndoReport, String>
+list_managed_roots() -> Result<Vec<ManagedRoot>, String>
+analyze_root(root_id: String) -> Result<AnalyzeReport, String>
+propose_file_changes(root_id: String) -> Result<ProposalReport, String>
+precheck_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<PrecheckReport, String>
+execute_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<ExecuteReport, String>
+undo_last_file_operation(root_id: String) -> Result<UndoReport, String>
 ```
 
-`register_managed_root` returns the canonical managed-root path and a display name. The frontend should pass the returned `root` value into later file-engine commands instead of reusing the raw folder-picker string.
+`register_managed_root` returns a `root_id`, the canonical managed-root path, and a display name. The frontend should pass the returned `root_id` into later file-engine commands instead of carrying the raw path.
 
 The `tauri::command` macro is behind the `tauri-commands` feature so the module can be unit-tested before the full desktop shell is wired.
 
 Study note: this is the Rust version of a controller layer. The command receives UI-friendly data, calls the domain function, and converts errors into strings that Tauri can return to the frontend.
 
-The Tauri app entrypoint is now in `src/lib.rs` and registers the commands through `tauri::generate_handler!`. `ManagedRootStore` is attached with `Builder::manage(...)`, so command calls share one in-memory root registry for the running app process.
+The Tauri app entrypoint is now in `src/lib.rs` and registers the commands through `tauri::generate_handler!`. `ManagedRootStore` is attached with `Builder::manage(...)`, so command calls share one root registry for the running app process.
 
-Current bootstrapping note: `tauri.conf.json` points `frontendDist` at `../src` only so the Rust/Tauri command layer can compile before a real frontend build output exists. Replace it with `../dist` once the desktop UI build is wired.
+Managed roots are persisted to the app data directory as `managed-roots.json`. On startup, `setup(...)` loads this file into `ManagedRootStore`; on `register_managed_root`, the store writes the updated root list back to disk.
+
+Study note: this keeps the UI from carrying raw folder-picker paths as the source of truth. The registered `root_id` becomes the app-facing handle, and later commands resolve it through `ManagedRootStore` before touching files.
+
+The desktop frontend is a minimal React/Vite app under `apps/desktop/src`. It calls these commands through `@tauri-apps/api/core` from `features/files/fileEngineApi.ts`.
 
 ## Proposed Tauri Commands
 
@@ -53,26 +58,27 @@ These command names are the app-facing bridge contract. They should return JSON-
 
 ```rust
 register_managed_root(path: String) -> ManagedRoot
-analyze_root(root: String) -> AnalyzeReport
-propose_file_changes(root: String) -> ProposalReport
-precheck_file_changes(root: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> PrecheckReport
-execute_file_changes(root: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> ExecuteReport
-undo_last_file_operation(root: String) -> UndoReport
+list_managed_roots() -> Vec<ManagedRoot>
+analyze_root(root_id: String) -> AnalyzeReport
+propose_file_changes(root_id: String) -> ProposalReport
+precheck_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> PrecheckReport
+execute_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> ExecuteReport
+undo_last_file_operation(root_id: String) -> UndoReport
 ```
 
 ## Recommended Desktop Flow
 
 1. User selects a folder with the OS folder picker.
-2. Tauri canonicalizes and stores the managed root.
-3. UI calls `analyze_root` for a read-only preview.
-4. UI calls `propose_file_changes`.
+2. Tauri canonicalizes and stores the managed root, returning `root_id`.
+3. UI calls `analyze_root(root_id)` for a read-only preview.
+4. UI calls `propose_file_changes(root_id)`.
 5. UI renders proposals and collects approvals/rejections.
 6. UI requires a reason for each rejection.
-7. UI calls `precheck_file_changes`.
+7. UI calls `precheck_file_changes(root_id, proposal, decisions)`.
 8. If every approved item is `ready`, UI asks for final confirmation.
-9. UI calls `execute_file_changes`.
+9. UI calls `execute_file_changes(root_id, proposal, decisions)`.
 10. UI displays `executed`, `skipped`, and `rejected` results separately.
-11. History screen calls `undo_last_file_operation` when the user asks to undo.
+11. History screen calls `undo_last_file_operation(root_id)` when the user asks to undo.
 
 ## Data Mapping
 

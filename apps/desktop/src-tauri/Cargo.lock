@@ -1223,6 +1223,7 @@ version = "0.1.0"
 dependencies = [
  "file-engine-cli",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tempfile",

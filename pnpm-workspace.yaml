@@ -4,3 +4,7 @@ packages:
   - apps/worker
   - packages/*
   - tools/*
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true

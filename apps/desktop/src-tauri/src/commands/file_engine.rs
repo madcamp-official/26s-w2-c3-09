@@ -38,87 +38,100 @@ pub fn list_managed_roots(store: &ManagedRootStore) -> Result<Vec<ManagedRoot>, 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn analyze_root(
-    root: String,
+    root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<AnalyzeReport, String> {
-    ensure_registered_root(&store, &root)?;
+    let root = resolve_root_id(&store, &root_id)?;
     analyze_root_impl(root)
 }
 
 #[cfg(not(feature = "tauri-commands"))]
-pub fn analyze_root(root: String) -> Result<AnalyzeReport, String> {
+pub fn analyze_root(root_id: String, store: &ManagedRootStore) -> Result<AnalyzeReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
     analyze_root_impl(root)
 }
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn propose_file_changes(
-    root: String,
+    root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<ProposalReport, String> {
-    ensure_registered_root(&store, &root)?;
+    let root = resolve_root_id(&store, &root_id)?;
     propose_file_changes_impl(root)
 }
 
 #[cfg(not(feature = "tauri-commands"))]
-pub fn propose_file_changes(root: String) -> Result<ProposalReport, String> {
+pub fn propose_file_changes(
+    root_id: String,
+    store: &ManagedRootStore,
+) -> Result<ProposalReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
     propose_file_changes_impl(root)
 }
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn precheck_file_changes(
-    root: String,
+    root_id: String,
     proposal: ProposalReport,
     decisions: Vec<DecisionEntry>,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<PrecheckReport, String> {
-    ensure_registered_root(&store, &root)?;
+    let root = resolve_root_id(&store, &root_id)?;
     precheck_file_changes_impl(root, proposal, decisions)
 }
 
 #[cfg(not(feature = "tauri-commands"))]
 pub fn precheck_file_changes(
-    root: String,
+    root_id: String,
     proposal: ProposalReport,
     decisions: Vec<DecisionEntry>,
+    store: &ManagedRootStore,
 ) -> Result<PrecheckReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
     precheck_file_changes_impl(root, proposal, decisions)
 }
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn execute_file_changes(
-    root: String,
+    root_id: String,
     proposal: ProposalReport,
     decisions: Vec<DecisionEntry>,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<ExecuteReport, String> {
-    ensure_registered_root(&store, &root)?;
+    let root = resolve_root_id(&store, &root_id)?;
     execute_file_changes_impl(root, proposal, decisions)
 }
 
 #[cfg(not(feature = "tauri-commands"))]
 pub fn execute_file_changes(
-    root: String,
+    root_id: String,
     proposal: ProposalReport,
     decisions: Vec<DecisionEntry>,
+    store: &ManagedRootStore,
 ) -> Result<ExecuteReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
     execute_file_changes_impl(root, proposal, decisions)
 }
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn undo_last_file_operation(
-    root: String,
+    root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<UndoReport, String> {
-    ensure_registered_root(&store, &root)?;
+    let root = resolve_root_id(&store, &root_id)?;
     undo_last_file_operation_impl(root)
 }
 
 #[cfg(not(feature = "tauri-commands"))]
-pub fn undo_last_file_operation(root: String) -> Result<UndoReport, String> {
+pub fn undo_last_file_operation(
+    root_id: String,
+    store: &ManagedRootStore,
+) -> Result<UndoReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
     undo_last_file_operation_impl(root)
 }
 
@@ -196,13 +209,8 @@ fn command_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-#[cfg(feature = "tauri-commands")]
-fn ensure_registered_root(store: &ManagedRootStore, root: &str) -> Result<(), String> {
-    if store.contains_root(root)? {
-        Ok(())
-    } else {
-        Err("managed root is not registered".to_string())
-    }
+fn resolve_root_id(store: &ManagedRootStore, root_id: &str) -> Result<String, String> {
+    Ok(store.get(root_id)?.root)
 }
 
 fn managed_root_id(root: &str) -> String {
@@ -287,9 +295,11 @@ mod tests {
         fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
         fs::write(root.join("inbox").join("photo.png"), "png").expect("write photo");
 
-        let managed =
-            register_managed_root(root.display().to_string()).expect("register managed root");
-        let proposal = propose_file_changes(managed.root.clone()).expect("propose file changes");
+        let store = ManagedRootStore::default();
+        let managed = register_managed_root_in_store(root.display().to_string(), &store)
+            .expect("register managed root");
+        let proposal =
+            propose_file_changes(managed.root_id.clone(), &store).expect("propose file changes");
         let note_id = proposal
             .proposals
             .iter()
@@ -303,19 +313,33 @@ mod tests {
             reason: None,
         }];
 
-        let precheck =
-            precheck_file_changes(managed.root.clone(), proposal.clone(), decisions.clone())
-                .expect("precheck file changes");
+        let precheck = precheck_file_changes(
+            managed.root_id.clone(),
+            proposal.clone(),
+            decisions.clone(),
+            &store,
+        )
+        .expect("precheck file changes");
         assert_eq!(precheck.checks.len(), 1);
 
-        let execute =
-            execute_file_changes(managed.root.clone(), proposal, decisions).expect("execute");
+        let execute = execute_file_changes(managed.root_id.clone(), proposal, decisions, &store)
+            .expect("execute");
         assert_eq!(execute.executed_count, 1);
         assert!(root.join("documents").join("note.md").exists());
         assert!(root.join("inbox").join("photo.png").exists());
 
-        let undo = undo_last_file_operation(managed.root).expect("undo");
+        let undo = undo_last_file_operation(managed.root_id, &store).expect("undo");
         assert_eq!(undo.undone_count, 1);
         assert!(root.join("inbox").join("note.md").exists());
+    }
+
+    #[test]
+    fn file_commands_reject_unknown_root_id() {
+        let store = ManagedRootStore::default();
+
+        let error = propose_file_changes("root:missing".to_string(), &store)
+            .expect_err("reject unknown root id");
+
+        assert!(error.contains("not registered"));
     }
 }
