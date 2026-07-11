@@ -1,3 +1,6 @@
+use std::fs;
+use std::path::Path;
+
 use file_engine_cli::analyzer::{analyze_root as analyze_file_root, AnalyzeReport};
 use file_engine_cli::browse::{browse_root, BrowseReport};
 use file_engine_cli::decision::{apply_decisions, DecisionApplication, DecisionEntry};
@@ -18,7 +21,9 @@ use file_engine_cli::undo::{
     undo_operation as undo_file_operation, undo_root as undo_file_root, UndoReport,
 };
 
-use crate::storage::managed_roots::{ManagedRoot, ManagedRootStore};
+use crate::storage::managed_roots::{ManagedRoot, ManagedRootStatePatch, ManagedRootStore};
+
+const DEMO_ROOT_DIR_NAME: &str = "housemouse-ui-demo";
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
@@ -45,6 +50,36 @@ pub fn list_managed_roots(
 #[cfg(not(feature = "tauri-commands"))]
 pub fn list_managed_roots(store: &ManagedRootStore) -> Result<Vec<ManagedRoot>, String> {
     store.list()
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn update_managed_root_state(
+    root_id: String,
+    patch: ManagedRootStatePatch,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<ManagedRoot, String> {
+    store.update_state(&root_id, patch)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn update_managed_root_state(
+    root_id: String,
+    patch: ManagedRootStatePatch,
+    store: &ManagedRootStore,
+) -> Result<ManagedRoot, String> {
+    store.update_state(&root_id, patch)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn prepare_demo_root() -> Result<String, String> {
+    prepare_demo_root_impl()
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn prepare_demo_root() -> Result<String, String> {
+    prepare_demo_root_impl()
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -336,15 +371,14 @@ fn register_managed_root_without_store(path: String) -> Result<ManagedRoot, Stri
     let guard = PathGuard::new(path).map_err(command_error)?;
     let root = guard.root();
 
-    Ok(ManagedRoot {
-        root_id: managed_root_id(&root.display().to_string()),
-        root: root.display().to_string(),
-        display_name: root
-            .file_name()
+    Ok(ManagedRoot::new(
+        managed_root_id(&root.display().to_string()),
+        root.display().to_string(),
+        root.file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("managed root")
             .to_string(),
-    })
+    ))
 }
 
 #[cfg(any(feature = "tauri-commands", test))]
@@ -354,6 +388,64 @@ fn register_managed_root_in_store(
 ) -> Result<ManagedRoot, String> {
     let managed = register_managed_root_without_store(path)?;
     store.upsert(managed)
+}
+
+fn prepare_demo_root_impl() -> Result<String, String> {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("test-fixtures")
+        .join("file-trees")
+        .join("ui-demo")
+        .canonicalize()
+        .map_err(|error| format!("cannot locate ui-demo fixture: {error}"))?;
+    let target = std::env::temp_dir().join(DEMO_ROOT_DIR_NAME);
+
+    if target.exists() {
+        fs::remove_dir_all(&target)
+            .map_err(|error| format!("cannot reset demo root {}: {error}", target.display()))?;
+    }
+
+    copy_demo_tree(&source, &target)?;
+
+    Ok(target.display().to_string())
+}
+
+fn copy_demo_tree(source: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target)
+        .map_err(|error| format!("cannot create demo root {}: {error}", target.display()))?;
+
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("cannot read demo fixture {}: {error}", source.display()))?
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+
+        if matches!(name_str, ".housemouse" | ".housemouse_trash") {
+            continue;
+        }
+
+        let destination = target.join(&name);
+        let metadata = entry.metadata().map_err(|error| error.to_string())?;
+        if metadata.is_dir() {
+            copy_demo_tree(&path, &destination)?;
+        } else if metadata.is_file() {
+            fs::copy(&path, &destination).map_err(|error| {
+                format!(
+                    "cannot copy demo file {} to {}: {error}",
+                    path.display(),
+                    destination.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 fn analyze_root_impl(root: String) -> Result<AnalyzeReport, String> {
@@ -480,9 +572,9 @@ mod tests {
 
     use super::{
         browse_root_tree, create_file, execute_file_changes, list_managed_roots,
-        list_operation_history, precheck_file_changes, propose_file_changes, recover_journal,
-        register_managed_root, register_managed_root_in_store, reindex_managed_root, rename_file,
-        search_managed_root, trash_file, undo_operation,
+        list_operation_history, precheck_file_changes, prepare_demo_root, propose_file_changes,
+        recover_journal, register_managed_root, register_managed_root_in_store,
+        reindex_managed_root, rename_file, search_managed_root, trash_file, undo_operation,
     };
 
     #[test]
@@ -544,6 +636,17 @@ mod tests {
             .expect_err("reject child root");
 
         assert!(error.contains("parent root"));
+    }
+
+    #[test]
+    fn prepare_demo_root_uses_temp_copy_without_runtime_state() {
+        let path = prepare_demo_root().expect("prepare demo");
+        let root = std::path::PathBuf::from(path);
+
+        assert!(root.starts_with(std::env::temp_dir()));
+        assert!(root.join("documents").join("note.md").exists());
+        assert!(!root.join(".housemouse").exists());
+        assert!(!root.join(".housemouse_trash").exists());
     }
 
     #[test]

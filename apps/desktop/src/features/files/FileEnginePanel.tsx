@@ -15,6 +15,7 @@ import {
   ManagedRoot,
   OperationHistoryEntry,
   precheckFileChanges,
+  prepareDemoRoot,
   Proposal,
   ProposalReport,
   proposeFileChanges,
@@ -26,6 +27,7 @@ import {
   startWatchingRoot,
   stopWatchingRoot,
   trashFile,
+  updateManagedRootState,
   undoLastFileOperation,
   undoOperation,
   UndoReport
@@ -34,8 +36,7 @@ import {
 type DecisionState = Record<string, "approved" | "rejected" | "pending">;
 type RejectionReasons = Record<string, string>;
 
-const demoRootPath =
-  "C:\\Users\\user\\2026-project\\kaist_madcamp\\week2\\test-fixtures\\file-trees\\ui-demo";
+const demoRootHint = "Creates a temporary copy of test-fixtures/file-trees/ui-demo";
 
 export function FileEnginePanel() {
   const [pathInput, setPathInput] = useState("");
@@ -157,6 +158,19 @@ export function FileEnginePanel() {
     }
   }
 
+  async function prepareDemoRootPath() {
+    setError(null);
+    setStatus("Preparing demo root");
+    try {
+      const path = await prepareDemoRoot();
+      setPathInput(path);
+      setStatus("Demo root prepared");
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Demo setup failed");
+    }
+  }
+
   async function refreshHistory(rootId = selectedRootId) {
     if (!rootId) {
       setHistory([]);
@@ -209,6 +223,23 @@ export function FileEnginePanel() {
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Register failed");
+    }
+  }
+
+  async function updateSelectedRootState(patch: { enabled?: boolean; watch_on_startup?: boolean }) {
+    if (!selectedRootId) return;
+
+    setError(null);
+    setStatus("Updating root state");
+    try {
+      const updated = await updateManagedRootState(selectedRootId, patch);
+      setRoots((current) =>
+        current.map((root) => (root.root_id === updated.root_id ? updated : root))
+      );
+      setStatus("Root state updated");
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Root state update failed");
     }
   }
 
@@ -524,12 +555,12 @@ export function FileEnginePanel() {
             id="root-path"
             value={pathInput}
             onChange={(event) => setPathInput(event.target.value)}
-            placeholder={demoRootPath}
+            placeholder={demoRootHint}
           />
           <button type="button" onClick={browseForRoot}>
             Browse
           </button>
-          <button type="button" onClick={() => setPathInput(demoRootPath)}>
+          <button type="button" onClick={() => void prepareDemoRootPath()}>
             Demo
           </button>
           <button type="button" onClick={registerRoot} disabled={!pathInput.trim()}>
@@ -558,6 +589,31 @@ export function FileEnginePanel() {
             ))}
           </select>
           {selectedRoot ? <p className="path-text">{selectedRoot.root}</p> : null}
+          {selectedRoot ? (
+            <div className="root-state-grid">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={selectedRoot.enabled}
+                  onChange={(event) =>
+                    void updateSelectedRootState({ enabled: event.target.checked })
+                  }
+                />
+                Enabled
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={selectedRoot.watch_on_startup}
+                  onChange={(event) =>
+                    void updateSelectedRootState({ watch_on_startup: event.target.checked })
+                  }
+                />
+                Watch on startup
+              </label>
+              <small>{selectedRoot.last_seen_status}</small>
+            </div>
+          ) : null}
 
           <div className="button-grid">
             <button type="button" onClick={analyzeSelectedRoot} disabled={!selectedRootId}>

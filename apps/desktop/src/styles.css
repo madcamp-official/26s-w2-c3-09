@@ -45,6 +45,12 @@ select {
   padding: 0 10px;
 }
 
+input[type="checkbox"] {
+  min-height: 0;
+  width: auto;
+  padding: 0;
+}
+
 h1,
 h2,
 p {
@@ -118,6 +124,23 @@ pre {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.root-state-grid {
+  display: grid;
+  grid-template-columns: repeat(2, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.root-state-grid label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.root-state-grid small {
+  color: #5f6972;
 }
 
 .proposal-list {

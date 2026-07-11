@@ -13,6 +13,8 @@ apps/desktop/src-tauri/gen/
 *.db-wal
 .housemouse/
 **/.housemouse/
+.housemouse_trash/
+**/.housemouse_trash/
 apps/mobile/android/local.properties
 apps/mobile/ios/Flutter/ephemeral/
 

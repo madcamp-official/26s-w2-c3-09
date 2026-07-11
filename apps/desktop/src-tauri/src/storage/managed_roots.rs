@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::db::{block_on, open_pool_at};
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,28 @@ pub struct ManagedRoot {
     pub root_id: String,
     pub root: String,
     pub display_name: String,
+    pub enabled: bool,
+    pub watch_on_startup: bool,
+    pub last_seen_status: ManagedRootStatus,
+    pub last_error: Option<String>,
+    pub registered_unix_ms: i64,
+    pub updated_unix_ms: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedRootStatus {
+    Ready,
+    Missing,
+    Error,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ManagedRootStatePatch {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub watch_on_startup: Option<bool>,
 }
 
 /// In-memory registry of managed roots, durably backed by an app-level SQLite database once
@@ -66,6 +89,34 @@ impl ManagedRootStore {
 
         self.persist(&root)?;
         Ok(root)
+    }
+
+    pub fn update_state(
+        &self,
+        root_id: &str,
+        patch: ManagedRootStatePatch,
+    ) -> Result<ManagedRoot, String> {
+        let updated = {
+            let mut roots = self
+                .roots
+                .lock()
+                .map_err(|_| "managed root store lock poisoned".to_string())?;
+            let root = roots
+                .get_mut(root_id)
+                .ok_or_else(|| format!("managed root is not registered: {root_id}"))?;
+
+            if let Some(enabled) = patch.enabled {
+                root.enabled = enabled;
+            }
+            if let Some(watch_on_startup) = patch.watch_on_startup {
+                root.watch_on_startup = watch_on_startup;
+            }
+            root.updated_unix_ms = unix_ms();
+            root.clone()
+        };
+
+        self.persist(&updated)?;
+        Ok(updated)
     }
 
     pub fn list(&self) -> Result<Vec<ManagedRoot>, String> {
@@ -186,14 +237,55 @@ async fn migrate(pool: &SqlitePool) -> Result<(), String> {
     .await
     .map_err(|error| format!("cannot create managed_roots table: {error}"))?;
 
+    add_column_if_missing(
+        pool,
+        "enabled",
+        "ALTER TABLE managed_roots ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "watch_on_startup",
+        "ALTER TABLE managed_roots ADD COLUMN watch_on_startup INTEGER NOT NULL DEFAULT 1",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "last_seen_status",
+        "ALTER TABLE managed_roots ADD COLUMN last_seen_status TEXT NOT NULL DEFAULT 'ready'",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "last_error",
+        "ALTER TABLE managed_roots ADD COLUMN last_error TEXT",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "registered_unix_ms",
+        "ALTER TABLE managed_roots ADD COLUMN registered_unix_ms INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "updated_unix_ms",
+        "ALTER TABLE managed_roots ADD COLUMN updated_unix_ms INTEGER NOT NULL DEFAULT 0",
+    )
+    .await?;
+
     Ok(())
 }
 
 async fn read_roots(pool: &SqlitePool) -> Result<Vec<ManagedRoot>, String> {
-    let rows = sqlx::query("SELECT root_id, canonical_path, display_name FROM managed_roots")
-        .fetch_all(pool)
-        .await
-        .map_err(|error| format!("cannot read managed roots: {error}"))?;
+    let rows = sqlx::query(
+        "SELECT root_id, canonical_path, display_name, enabled, watch_on_startup,
+                last_seen_status, last_error, registered_unix_ms, updated_unix_ms
+         FROM managed_roots",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|error| format!("cannot read managed roots: {error}"))?;
 
     let mut roots = Vec::with_capacity(rows.len());
     for row in rows {
@@ -207,6 +299,16 @@ async fn read_roots(pool: &SqlitePool) -> Result<Vec<ManagedRoot>, String> {
             display_name: row
                 .try_get("display_name")
                 .map_err(|error| format!("cannot read managed root name: {error}"))?,
+            enabled: int_bool(row.try_get("enabled").unwrap_or(1)),
+            watch_on_startup: int_bool(row.try_get("watch_on_startup").unwrap_or(1)),
+            last_seen_status: ManagedRootStatus::from_db_str(
+                row.try_get::<String, _>("last_seen_status")
+                    .unwrap_or_else(|_| "ready".to_string())
+                    .as_str(),
+            ),
+            last_error: row.try_get("last_error").unwrap_or(None),
+            registered_unix_ms: row.try_get("registered_unix_ms").unwrap_or(0),
+            updated_unix_ms: row.try_get("updated_unix_ms").unwrap_or(0),
         });
     }
 
@@ -215,44 +317,133 @@ async fn read_roots(pool: &SqlitePool) -> Result<Vec<ManagedRoot>, String> {
 
 async fn upsert_root(pool: &SqlitePool, root: &ManagedRoot) -> Result<(), String> {
     sqlx::query(
-        "INSERT INTO managed_roots (root_id, canonical_path, display_name)
-         VALUES (?, ?, ?)
+        "INSERT INTO managed_roots (
+             root_id, canonical_path, display_name, enabled, watch_on_startup,
+             last_seen_status, last_error, registered_unix_ms, updated_unix_ms
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(root_id) DO UPDATE SET
              canonical_path = excluded.canonical_path,
-             display_name = excluded.display_name",
+             display_name = excluded.display_name,
+             enabled = excluded.enabled,
+             watch_on_startup = excluded.watch_on_startup,
+             last_seen_status = excluded.last_seen_status,
+             last_error = excluded.last_error,
+             registered_unix_ms = excluded.registered_unix_ms,
+             updated_unix_ms = excluded.updated_unix_ms",
     )
     .bind(&root.root_id)
     .bind(&root.root)
     .bind(&root.display_name)
+    .bind(bool_int(root.enabled))
+    .bind(bool_int(root.watch_on_startup))
+    .bind(root.last_seen_status.as_db_str())
+    .bind(&root.last_error)
+    .bind(root.registered_unix_ms)
+    .bind(root.updated_unix_ms)
     .execute(pool)
     .await
     .map(|_| ())
     .map_err(|error| format!("cannot persist managed root: {error}"))
 }
 
+async fn add_column_if_missing(
+    pool: &SqlitePool,
+    column: &str,
+    alter_sql: &'static str,
+) -> Result<(), String> {
+    let rows = sqlx::query("PRAGMA table_info(managed_roots)")
+        .fetch_all(pool)
+        .await
+        .map_err(|error| format!("cannot inspect managed_roots table: {error}"))?;
+    let exists = rows.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .is_ok_and(|name| name == column)
+    });
+
+    if !exists {
+        sqlx::query(alter_sql)
+            .execute(pool)
+            .await
+            .map_err(|error| format!("cannot add managed_roots.{column}: {error}"))?;
+    }
+
+    Ok(())
+}
+
+impl ManagedRoot {
+    pub fn new(root_id: String, root: String, display_name: String) -> Self {
+        let now = unix_ms();
+        Self {
+            root_id,
+            root,
+            display_name,
+            enabled: true,
+            watch_on_startup: true,
+            last_seen_status: ManagedRootStatus::Ready,
+            last_error: None,
+            registered_unix_ms: now,
+            updated_unix_ms: now,
+        }
+    }
+}
+
+impl ManagedRootStatus {
+    fn as_db_str(&self) -> &'static str {
+        match self {
+            ManagedRootStatus::Ready => "ready",
+            ManagedRootStatus::Missing => "missing",
+            ManagedRootStatus::Error => "error",
+        }
+    }
+
+    fn from_db_str(value: &str) -> Self {
+        match value {
+            "missing" => ManagedRootStatus::Missing,
+            "error" => ManagedRootStatus::Error,
+            _ => ManagedRootStatus::Ready,
+        }
+    }
+}
+
+fn bool_int(value: bool) -> i64 {
+    if value {
+        1
+    } else {
+        0
+    }
+}
+
+fn int_bool(value: i64) -> bool {
+    value != 0
+}
+
+fn unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::tempdir;
 
-    use super::{ManagedRoot, ManagedRootStore};
+    use super::{ManagedRoot, ManagedRootStatePatch, ManagedRootStore};
+
+    fn root(id: &str, path: &str, name: &str) -> ManagedRoot {
+        ManagedRoot::new(id.to_string(), path.to_string(), name.to_string())
+    }
 
     #[test]
     fn upsert_keeps_one_entry_per_root_id() {
         let store = ManagedRootStore::default();
 
         store
-            .upsert(ManagedRoot {
-                root_id: "root:cafe".to_string(),
-                root: "C:/work".to_string(),
-                display_name: "work".to_string(),
-            })
+            .upsert(root("root:cafe", "C:/work", "work"))
             .expect("insert root");
         store
-            .upsert(ManagedRoot {
-                root_id: "root:cafe".to_string(),
-                root: "C:/work".to_string(),
-                display_name: "renamed".to_string(),
-            })
+            .upsert(root("root:cafe", "C:/work", "renamed"))
             .expect("update root");
 
         let roots = store.list().expect("list roots");
@@ -269,11 +460,7 @@ mod tests {
 
         store.load_from_db(&path).expect("configure database");
         store
-            .upsert(ManagedRoot {
-                root_id: "root:cafe".to_string(),
-                root: "C:/work".to_string(),
-                display_name: "work".to_string(),
-            })
+            .upsert(root("root:cafe", "C:/work", "work"))
             .expect("insert root");
 
         // A fresh store loading the same database sees the persisted root.
@@ -283,6 +470,8 @@ mod tests {
 
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].root, "C:/work");
+        assert!(roots[0].enabled);
+        assert!(roots[0].watch_on_startup);
     }
 
     #[test]
@@ -293,11 +482,7 @@ mod tests {
         let store = ManagedRootStore::default();
         store.load_from_db(&path).expect("configure database");
         store
-            .upsert(ManagedRoot {
-                root_id: "root:cafe".to_string(),
-                root: "C:/work".to_string(),
-                display_name: "work".to_string(),
-            })
+            .upsert(root("root:cafe", "C:/work", "work"))
             .expect("insert root");
 
         let reloaded = ManagedRootStore::default();
@@ -311,23 +496,45 @@ mod tests {
     }
 
     #[test]
+    fn update_state_persists_runtime_flags() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("managed-roots.db");
+        let store = ManagedRootStore::default();
+        store.load_from_db(&path).expect("configure database");
+        store
+            .upsert(root("root:cafe", "C:/work", "work"))
+            .expect("insert root");
+
+        let updated = store
+            .update_state(
+                "root:cafe",
+                ManagedRootStatePatch {
+                    enabled: Some(false),
+                    watch_on_startup: Some(false),
+                },
+            )
+            .expect("update state");
+
+        assert!(!updated.enabled);
+        assert!(!updated.watch_on_startup);
+
+        let reloaded = ManagedRootStore::default();
+        reloaded.load_from_db(&path).expect("reload database");
+        let root = reloaded.get("root:cafe").expect("get root");
+        assert!(!root.enabled);
+        assert!(!root.watch_on_startup);
+    }
+
+    #[test]
     fn upsert_rejects_child_root_overlap() {
         let store = ManagedRootStore::default();
 
         store
-            .upsert(ManagedRoot {
-                root_id: "root:parent".to_string(),
-                root: "C:/work".to_string(),
-                display_name: "work".to_string(),
-            })
+            .upsert(root("root:parent", "C:/work", "work"))
             .expect("insert parent root");
 
         let error = store
-            .upsert(ManagedRoot {
-                root_id: "root:child".to_string(),
-                root: "C:/work/project".to_string(),
-                display_name: "project".to_string(),
-            })
+            .upsert(root("root:child", "C:/work/project", "project"))
             .expect_err("reject child root");
 
         assert!(error.contains("parent root"));
@@ -338,19 +545,11 @@ mod tests {
         let store = ManagedRootStore::default();
 
         store
-            .upsert(ManagedRoot {
-                root_id: "root:child".to_string(),
-                root: "C:/work/project".to_string(),
-                display_name: "project".to_string(),
-            })
+            .upsert(root("root:child", "C:/work/project", "project"))
             .expect("insert child root");
 
         let error = store
-            .upsert(ManagedRoot {
-                root_id: "root:parent".to_string(),
-                root: "C:/work".to_string(),
-                display_name: "work".to_string(),
-            })
+            .upsert(root("root:parent", "C:/work", "work"))
             .expect_err("reject parent root");
 
         assert!(error.contains("child root"));
@@ -363,11 +562,7 @@ mod tests {
         let store = ManagedRootStore::default();
         store.load_from_db(&path).expect("configure database");
         store
-            .upsert(ManagedRoot {
-                root_id: "root:parent".to_string(),
-                root: "C:/work".to_string(),
-                display_name: "work".to_string(),
-            })
+            .upsert(root("root:parent", "C:/work", "work"))
             .expect("insert parent root");
 
         let pool = file_engine_cli::db::open_pool_at(&path).expect("open db");

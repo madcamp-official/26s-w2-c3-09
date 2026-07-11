@@ -31,6 +31,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::file_engine::register_managed_root,
             commands::file_engine::list_managed_roots,
+            commands::file_engine::update_managed_root_state,
+            commands::file_engine::prepare_demo_root,
             commands::file_engine::analyze_root,
             commands::file_engine::browse_root_tree,
             commands::file_engine::reindex_managed_root,

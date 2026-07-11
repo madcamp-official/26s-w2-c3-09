@@ -12,6 +12,17 @@ export type ManagedRoot = {
   root_id: string;
   root: string;
   display_name: string;
+  enabled: boolean;
+  watch_on_startup: boolean;
+  last_seen_status: "ready" | "missing" | "error";
+  last_error: string | null;
+  registered_unix_ms: number;
+  updated_unix_ms: number;
+};
+
+export type ManagedRootStatePatch = {
+  enabled?: boolean;
+  watch_on_startup?: boolean;
 };
 
 export type FileEntry = {
@@ -184,6 +195,14 @@ export function registerManagedRoot(path: string) {
 
 export function listManagedRoots() {
   return invokeCommand<ManagedRoot[]>("list_managed_roots");
+}
+
+export function updateManagedRootState(rootId: string, patch: ManagedRootStatePatch) {
+  return invokeCommand<ManagedRoot>("update_managed_root_state", { rootId, patch });
+}
+
+export function prepareDemoRoot() {
+  return invokeCommand<string>("prepare_demo_root");
 }
 
 export function analyzeRoot(rootId: string) {
