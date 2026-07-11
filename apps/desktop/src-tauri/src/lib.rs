@@ -3,6 +3,7 @@ pub mod commands;
 pub mod overlay;
 pub mod storage;
 pub mod watcher;
+pub mod watcher_lifecycle;
 
 #[cfg(feature = "tauri-commands")]
 pub fn run() {
@@ -25,6 +26,20 @@ pub fn run() {
             store
                 .load_from_db(storage_path)
                 .map_err(|error| format!("cannot load managed roots: {error}"))?;
+            let watchers = app.state::<storage::watchers::WatcherStore>();
+            let restore_results = watcher_lifecycle::restore_startup_watchers(
+                app.handle().clone(),
+                &store,
+                &watchers,
+            )?;
+            for result in restore_results {
+                if let Some(error) = result.error {
+                    eprintln!(
+                        "failed to restore watcher for {} on startup: {}",
+                        result.root_id, error
+                    );
+                }
+            }
 
             Ok(())
         })

@@ -22,6 +22,7 @@ use file_engine_cli::undo::{
 };
 
 use crate::storage::managed_roots::{ManagedRoot, ManagedRootStatePatch, ManagedRootStore};
+use crate::storage::watchers::WatcherStore;
 
 const DEMO_ROOT_DIR_NAME: &str = "housemouse-ui-demo";
 
@@ -58,8 +59,9 @@ pub fn update_managed_root_state(
     root_id: String,
     patch: ManagedRootStatePatch,
     store: tauri::State<'_, ManagedRootStore>,
+    watchers: tauri::State<'_, WatcherStore>,
 ) -> Result<ManagedRoot, String> {
-    store.update_state(&root_id, patch)
+    update_managed_root_state_impl(root_id, patch, &store, Some(&watchers))
 }
 
 #[cfg(not(feature = "tauri-commands"))]
@@ -68,7 +70,7 @@ pub fn update_managed_root_state(
     patch: ManagedRootStatePatch,
     store: &ManagedRootStore,
 ) -> Result<ManagedRoot, String> {
-    store.update_state(&root_id, patch)
+    update_managed_root_state_impl(root_id, patch, store, None)
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -388,6 +390,23 @@ fn register_managed_root_in_store(
 ) -> Result<ManagedRoot, String> {
     let managed = register_managed_root_without_store(path)?;
     store.upsert(managed)
+}
+
+fn update_managed_root_state_impl(
+    root_id: String,
+    patch: ManagedRootStatePatch,
+    store: &ManagedRootStore,
+    watchers: Option<&WatcherStore>,
+) -> Result<ManagedRoot, String> {
+    let should_stop_watcher = patch.enabled == Some(false);
+    let updated = store.update_state(&root_id, patch)?;
+    if should_stop_watcher {
+        if let Some(watchers) = watchers {
+            let _ = watchers.stop(&root_id)?;
+        }
+    }
+
+    Ok(updated)
 }
 
 fn prepare_demo_root_impl() -> Result<String, String> {

@@ -119,6 +119,31 @@ impl ManagedRootStore {
         Ok(updated)
     }
 
+    pub fn update_health(
+        &self,
+        root_id: &str,
+        status: ManagedRootStatus,
+        last_error: Option<String>,
+    ) -> Result<ManagedRoot, String> {
+        let updated = {
+            let mut roots = self
+                .roots
+                .lock()
+                .map_err(|_| "managed root store lock poisoned".to_string())?;
+            let root = roots
+                .get_mut(root_id)
+                .ok_or_else(|| format!("managed root is not registered: {root_id}"))?;
+
+            root.last_seen_status = status;
+            root.last_error = last_error;
+            root.updated_unix_ms = unix_ms();
+            root.clone()
+        };
+
+        self.persist(&updated)?;
+        Ok(updated)
+    }
+
     pub fn list(&self) -> Result<Vec<ManagedRoot>, String> {
         let roots = self
             .roots
@@ -523,6 +548,31 @@ mod tests {
         let root = reloaded.get("root:cafe").expect("get root");
         assert!(!root.enabled);
         assert!(!root.watch_on_startup);
+    }
+
+    #[test]
+    fn update_health_persists_last_status_and_error() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("managed-roots.db");
+        let store = ManagedRootStore::default();
+        store.load_from_db(&path).expect("configure database");
+        store
+            .upsert(root("root:cafe", "C:/work", "work"))
+            .expect("insert root");
+
+        store
+            .update_health(
+                "root:cafe",
+                super::ManagedRootStatus::Error,
+                Some("watcher failed".to_string()),
+            )
+            .expect("update health");
+
+        let reloaded = ManagedRootStore::default();
+        reloaded.load_from_db(&path).expect("reload database");
+        let root = reloaded.get("root:cafe").expect("get root");
+        assert_eq!(root.last_seen_status, super::ManagedRootStatus::Error);
+        assert_eq!(root.last_error, Some("watcher failed".to_string()));
     }
 
     #[test]
