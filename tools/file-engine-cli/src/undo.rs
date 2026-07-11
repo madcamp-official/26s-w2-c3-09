@@ -63,10 +63,27 @@ pub enum UndoError {
         to: PathBuf,
         message: String,
     },
+    OperationNotUndoable {
+        operation_id: String,
+    },
     Serialize(String),
 }
 
 pub fn undo_root(root: impl AsRef<Path>) -> Result<UndoReport, UndoError> {
+    undo_with_filter(root, None)
+}
+
+pub fn undo_operation(
+    root: impl AsRef<Path>,
+    operation_id: impl AsRef<str>,
+) -> Result<UndoReport, UndoError> {
+    undo_with_filter(root, Some(operation_id.as_ref()))
+}
+
+fn undo_with_filter(
+    root: impl AsRef<Path>,
+    only_operation_id: Option<&str>,
+) -> Result<UndoReport, UndoError> {
     let guard = PathGuard::new(root).map_err(UndoError::Guard)?;
     let journal_path = guard.root().join(STATE_DIR).join(JOURNAL_FILE);
     let entries = read_journal(&journal_path)?;
@@ -82,6 +99,10 @@ pub fn undo_root(root: impl AsRef<Path>) -> Result<UndoReport, UndoError> {
     let mut results = Vec::new();
 
     for entry in entries.iter().rev() {
+        if only_operation_id.is_some_and(|operation_id| operation_id != entry.operation_id) {
+            continue;
+        }
+
         if entry.status != JournalStatus::Executed
             || entry.action != JournalAction::Move
             || undone_operation_ids.contains(&entry.operation_id)
@@ -161,6 +182,14 @@ pub fn undo_root(root: impl AsRef<Path>) -> Result<UndoReport, UndoError> {
             status: UndoStatus::Undone,
             reason: None,
         });
+    }
+
+    if let Some(operation_id) = only_operation_id {
+        if results.is_empty() {
+            return Err(UndoError::OperationNotUndoable {
+                operation_id: operation_id.to_string(),
+            });
+        }
     }
 
     Ok(UndoReport {
@@ -283,6 +312,9 @@ impl fmt::Display for UndoError {
                     from.display(),
                     to.display()
                 )
+            }
+            UndoError::OperationNotUndoable { operation_id } => {
+                write!(formatter, "operation is not undoable: {operation_id}")
             }
             UndoError::Serialize(message) => {
                 write!(formatter, "cannot serialize undo journal: {message}")

@@ -157,6 +157,23 @@ pre {
   gap: 12px;
 }
 
+.recovery-banner {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #f0b429;
+  border-radius: 6px;
+  background: #fff8e6;
+  padding: 12px;
+}
+
+.recovery-banner p {
+  color: #7a4a00;
+}
+
+.recovery-banner button {
+  justify-self: start;
+}
+
 .history-list {
   display: grid;
   gap: 8px;
@@ -172,6 +189,55 @@ pre {
 
 .history-row span,
 .history-row small {
+  color: #5f6972;
+}
+
+.history-row .reason-text {
+  color: #b42318;
+}
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.breadcrumb button {
+  min-height: 28px;
+  border: none;
+  background: none;
+  padding: 0 4px;
+  color: #1a56db;
+}
+
+.breadcrumb button:disabled {
+  color: #5f6972;
+}
+
+.browse-list {
+  display: grid;
+  gap: 6px;
+}
+
+.browse-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  justify-content: start;
+  text-align: left;
+  border: 1px solid #e1e5e8;
+  border-radius: 6px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.browse-row strong {
+  overflow-wrap: anywhere;
+}
+
+.browse-row small {
   color: #5f6972;
 }
 

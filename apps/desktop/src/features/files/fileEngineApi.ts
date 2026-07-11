@@ -24,6 +24,20 @@ export type AnalyzeReport = {
   files: FileEntry[];
 };
 
+export type BrowseEntry = {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size_bytes: number | null;
+  modified_unix_ms: number | null;
+};
+
+export type BrowseReport = {
+  root: string;
+  path: string;
+  entries: BrowseEntry[];
+};
+
 export type ProposalStatus = "ready" | "destination_exists";
 
 export type Proposal = {
@@ -98,6 +112,35 @@ export type UndoReport = {
   }>;
 };
 
+export type OperationHistoryEntry = {
+  operation_id: string;
+  action: "move";
+  from: string;
+  to: string;
+  latest_status: "planned" | "executed" | "undo_planned" | "undone";
+  created_unix_ms: number;
+  can_undo: boolean;
+  undo_blocked_reason: string | null;
+};
+
+export type JournalCorruption = {
+  line: number;
+  message: string;
+};
+
+export type OperationHistoryReport = {
+  root: string;
+  journal_path: string;
+  operations: OperationHistoryEntry[];
+  corruption: JournalCorruption | null;
+};
+
+export type JournalRecoveryReport = {
+  root: string;
+  journal_path: string;
+  quarantined_path: string;
+};
+
 export function registerManagedRoot(path: string) {
   return invokeCommand<ManagedRoot>("register_managed_root", { path });
 }
@@ -108,6 +151,10 @@ export function listManagedRoots() {
 
 export function analyzeRoot(rootId: string) {
   return invokeCommand<AnalyzeReport>("analyze_root", { rootId });
+}
+
+export function browseRootTree(rootId: string, path?: string) {
+  return invokeCommand<BrowseReport>("browse_root_tree", { rootId, path: path || null });
 }
 
 export function proposeFileChanges(rootId: string) {
@@ -140,6 +187,18 @@ export function executeFileChanges(
 
 export function undoLastFileOperation(rootId: string) {
   return invokeCommand<UndoReport>("undo_last_file_operation", { rootId });
+}
+
+export function undoOperation(rootId: string, operationId: string) {
+  return invokeCommand<UndoReport>("undo_operation", { rootId, operationId });
+}
+
+export function listOperationHistory(rootId: string) {
+  return invokeCommand<OperationHistoryReport>("list_operation_history", { rootId });
+}
+
+export function recoverJournal(rootId: string) {
+  return invokeCommand<JournalRecoveryReport>("recover_journal", { rootId });
 }
 
 export async function selectManagedRootDirectory() {

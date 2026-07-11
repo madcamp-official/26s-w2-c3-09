@@ -1,4 +1,5 @@
 pub mod analyzer;
+pub mod browse;
 pub mod decision;
 pub mod execute;
 pub mod journal;

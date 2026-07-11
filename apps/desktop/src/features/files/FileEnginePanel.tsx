@@ -2,37 +2,33 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   analyzeRoot,
+  BrowseEntry,
+  browseRootTree,
   DecisionEntry,
   executeFileChanges,
   ExecuteReport,
+  JournalCorruption,
+  listOperationHistory,
   listManagedRoots,
   ManagedRoot,
+  OperationHistoryEntry,
   precheckFileChanges,
   Proposal,
   ProposalReport,
   proposeFileChanges,
+  recoverJournal,
   registerManagedRoot,
   selectManagedRootDirectory,
   undoLastFileOperation,
+  undoOperation,
   UndoReport
 } from "./fileEngineApi";
 
 type DecisionState = Record<string, "approved" | "rejected" | "pending">;
 type RejectionReasons = Record<string, string>;
 
-type HistoryEntry = {
-  id: string;
-  kind: "execute" | "undo";
-  rootId: string;
-  rootName: string;
-  createdAt: string;
-  summary: string;
-  lines: string[];
-};
-
 const demoRootPath =
   "C:\\Users\\user\\2026-project\\kaist_madcamp\\week2\\test-fixtures\\file-trees\\ui-demo";
-const historyKey = "housemouse.fileEngine.history";
 
 export function FileEnginePanel() {
   const [pathInput, setPathInput] = useState("");
@@ -41,7 +37,10 @@ export function FileEnginePanel() {
   const [proposal, setProposal] = useState<ProposalReport | null>(null);
   const [decisions, setDecisions] = useState<DecisionState>({});
   const [rejectionReasons, setRejectionReasons] = useState<RejectionReasons>({});
-  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory());
+  const [history, setHistory] = useState<OperationHistoryEntry[]>([]);
+  const [journalCorruption, setJournalCorruption] = useState<JournalCorruption | null>(null);
+  const [browsePath, setBrowsePath] = useState("");
+  const [browseEntries, setBrowseEntries] = useState<BrowseEntry[]>([]);
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
   const [resultLines, setResultLines] = useState<string[]>([]);
@@ -59,8 +58,20 @@ export function FileEnginePanel() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(historyKey, JSON.stringify(history));
-  }, [history]);
+    if (selectedRootId) {
+      void refreshHistory(selectedRootId);
+    } else {
+      setHistory([]);
+    }
+  }, [selectedRootId]);
+
+  useEffect(() => {
+    if (selectedRootId) {
+      void refreshBrowse(selectedRootId, browsePath);
+    } else {
+      setBrowseEntries([]);
+    }
+  }, [selectedRootId, browsePath]);
 
   async function refreshRoots() {
     setError(null);
@@ -82,6 +93,46 @@ export function FileEnginePanel() {
       }
     } catch (caught) {
       setError(errorMessage(caught));
+    }
+  }
+
+  async function refreshHistory(rootId = selectedRootId) {
+    if (!rootId) {
+      setHistory([]);
+      setJournalCorruption(null);
+      return;
+    }
+
+    try {
+      const report = await listOperationHistory(rootId);
+      setHistory(report.operations);
+      setJournalCorruption(report.corruption);
+    } catch (caught) {
+      setHistory([]);
+      setJournalCorruption(null);
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function recoverJournalForSelectedRoot() {
+    if (!selectedRootId || !journalCorruption) return;
+
+    const confirmed = window.confirm(
+      "This quarantines the broken journal file and starts a fresh one. " +
+        "Operations recorded before the corrupted line will no longer be undoable through the app. Continue?"
+    );
+    if (!confirmed) return;
+
+    setError(null);
+    setStatus("Recovering journal");
+    try {
+      const report = await recoverJournal(selectedRootId);
+      setResultLines([`Quarantined corrupted journal to ${report.quarantined_path}`]);
+      setStatus("Journal recovered");
+      await refreshHistory(selectedRootId);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Recovery failed");
     }
   }
 
@@ -198,7 +249,7 @@ export function FileEnginePanel() {
       setStatus(
         `Executed ${report.executed_count}, skipped ${report.skipped_count}, rejected ${report.rejected_count}`
       );
-      recordHistory("execute", `Executed ${report.executed_count}, skipped ${report.skipped_count}`, lines);
+      await refreshHistory(selectedRootId);
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Execute failed");
@@ -218,11 +269,57 @@ export function FileEnginePanel() {
       const lines = formatUndoLines(report);
       setResultLines(lines);
       setStatus(`Undone ${report.undone_count}, skipped ${report.skipped_count}`);
-      recordHistory("undo", `Undone ${report.undone_count}, skipped ${report.skipped_count}`, lines);
+      await refreshHistory(selectedRootId);
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Undo failed");
     }
+  }
+
+  async function undoSelectedOperation(operation: OperationHistoryEntry) {
+    if (!selectedRootId || !operation.can_undo) return;
+
+    const confirmed = window.confirm(`Undo ${operation.from} -> ${operation.to}?`);
+    if (!confirmed) return;
+
+    setError(null);
+    setStatus("Undoing selected operation");
+    try {
+      const report = await undoOperation(selectedRootId, operation.operation_id);
+      const lines = formatUndoLines(report);
+      setResultLines(lines);
+      setStatus(`Undone ${report.undone_count}, skipped ${report.skipped_count}`);
+      await refreshHistory(selectedRootId);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Undo failed");
+    }
+  }
+
+  async function refreshBrowse(rootId = selectedRootId, path = browsePath) {
+    if (!rootId) {
+      setBrowseEntries([]);
+      return;
+    }
+
+    try {
+      const report = await browseRootTree(rootId, path);
+      setBrowseEntries(report.entries);
+    } catch (caught) {
+      setBrowseEntries([]);
+      setError(errorMessage(caught));
+    }
+  }
+
+  function openBrowseEntry(entry: BrowseEntry) {
+    if (entry.is_dir) {
+      setBrowsePath(entry.path);
+    }
+  }
+
+  function openBrowseSegment(index: number) {
+    const segments = browsePath.split("/").filter(Boolean);
+    setBrowsePath(segments.slice(0, index + 1).join("/"));
   }
 
   function selectRoot(rootId: string) {
@@ -231,6 +328,7 @@ export function FileEnginePanel() {
     setDecisions({});
     setRejectionReasons({});
     setResultLines([]);
+    setBrowsePath("");
   }
 
   function setDecision(item: Proposal, decision: DecisionState[string]) {
@@ -259,24 +357,6 @@ export function FileEnginePanel() {
     }
 
     return commandDecisions;
-  }
-
-  function recordHistory(kind: HistoryEntry["kind"], summary: string, lines: string[]) {
-    const entry: HistoryEntry = {
-      id: `${Date.now()}-${kind}`,
-      kind,
-      rootId: selectedRootId,
-      rootName: selectedRoot?.display_name || selectedRootId,
-      createdAt: new Date().toLocaleString(),
-      summary,
-      lines
-    };
-
-    setHistory((current) => [entry, ...current].slice(0, 20));
-  }
-
-  function clearHistory() {
-    setHistory([]);
   }
 
   return (
@@ -350,11 +430,15 @@ export function FileEnginePanel() {
             <button
               type="button"
               onClick={executeSelectedRoot}
-              disabled={!selectedRootId || !proposal || approvedCount === 0}
+              disabled={!selectedRootId || !proposal || approvedCount === 0 || !!journalCorruption}
             >
               Execute
             </button>
-            <button type="button" onClick={undoSelectedRoot} disabled={!selectedRootId}>
+            <button
+              type="button"
+              onClick={undoSelectedRoot}
+              disabled={!selectedRootId || !!journalCorruption}
+            >
               Undo
             </button>
           </div>
@@ -362,6 +446,9 @@ export function FileEnginePanel() {
             <p className="path-text">
               {readyProposalCount} ready, {approvedCount} approved
             </p>
+          ) : null}
+          {journalCorruption ? (
+            <p className="error-text">Journal needs recovery before execute/undo will run.</p>
           ) : null}
         </div>
 
@@ -401,6 +488,48 @@ export function FileEnginePanel() {
       </section>
 
       <section className="panel">
+        <div className="section-header">
+          <h2>Browse</h2>
+          <button type="button" onClick={() => void refreshBrowse()} disabled={!selectedRootId}>
+            Refresh
+          </button>
+        </div>
+        <nav className="breadcrumb">
+          <button type="button" onClick={() => setBrowsePath("")} disabled={!selectedRootId}>
+            {selectedRoot?.display_name || "root"}
+          </button>
+          {browsePath
+            .split("/")
+            .filter(Boolean)
+            .map((segment, index) => (
+              <span key={`${segment}-${index}`}>
+                {" / "}
+                <button type="button" onClick={() => openBrowseSegment(index)}>
+                  {segment}
+                </button>
+              </span>
+            ))}
+        </nav>
+        <div className="browse-list">
+          {browseEntries.map((entry) => (
+            <button
+              type="button"
+              key={entry.path}
+              className="browse-row"
+              onClick={() => openBrowseEntry(entry)}
+              disabled={!entry.is_dir}
+            >
+              <span>{entry.is_dir ? "📁" : "📄"}</span>
+              <strong>{entry.name}</strong>
+              {!entry.is_dir ? <small>{formatBrowseSize(entry.size_bytes)}</small> : null}
+            </button>
+          ))}
+          {selectedRootId && browseEntries.length === 0 ? <p>This folder is empty.</p> : null}
+          {!selectedRootId ? <p>Select a root to browse its files.</p> : null}
+        </div>
+      </section>
+
+      <section className="panel">
         <h2>Output</h2>
         {error ? <p className="error-text">{error}</p> : null}
         <pre>{resultLines.join("\n") || "No output yet."}</pre>
@@ -409,21 +538,45 @@ export function FileEnginePanel() {
       <section className="panel">
         <div className="section-header">
           <h2>History</h2>
-          <button type="button" onClick={clearHistory} disabled={history.length === 0}>
-            Clear
+          <button type="button" onClick={() => void refreshHistory()} disabled={!selectedRootId}>
+            Refresh
           </button>
         </div>
+        {journalCorruption ? (
+          <div className="recovery-banner">
+            <p>
+              <strong>Recovery needed.</strong> Journal is unreadable starting at line{" "}
+              {journalCorruption.line}: {journalCorruption.message}
+            </p>
+            <p>
+              History above this point is still shown, but new executes and undos are blocked
+              until the broken journal is quarantined. Operations recorded before the break will
+              no longer be undoable through the app after recovery.
+            </p>
+            <button type="button" onClick={() => void recoverJournalForSelectedRoot()}>
+              Recover journal
+            </button>
+          </div>
+        ) : null}
         <div className="history-list">
-          {history.map((entry) => (
-            <article key={entry.id} className="history-row">
-              <strong>
-                {entry.kind} | {entry.rootName}
-              </strong>
-              <span>{entry.summary}</span>
-              <small>{entry.createdAt}</small>
+          {history.map((operation) => (
+            <article key={operation.operation_id} className="history-row">
+              <strong>{operation.latest_status}</strong>
+              <span>{`${operation.from} -> ${operation.to}`}</span>
+              <small>{new Date(operation.created_unix_ms).toLocaleString()}</small>
+              {!operation.can_undo && operation.undo_blocked_reason ? (
+                <small className="reason-text">Can't undo: {operation.undo_blocked_reason}</small>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => void undoSelectedOperation(operation)}
+                disabled={!operation.can_undo || !!journalCorruption}
+              >
+                Undo
+              </button>
             </article>
           ))}
-          {history.length === 0 ? <p>No history yet.</p> : null}
+          {history.length === 0 ? <p>No journal history yet.</p> : null}
         </div>
       </section>
     </main>
@@ -450,6 +603,12 @@ function buildDecisionEntries(decisions: DecisionState, rejectionReasons: Reject
     });
 }
 
+function formatBrowseSize(sizeBytes: number | null) {
+  if (sizeBytes === null) return "";
+  if (sizeBytes < 1024) return `${sizeBytes} B`;
+  return `${(sizeBytes / 1024).toFixed(1)} KB`;
+}
+
 function formatProposal(item: Proposal) {
   return `${item.status} | ${item.from} -> ${item.to} | ${item.reason}`;
 }
@@ -464,15 +623,6 @@ function formatUndoLines(report: UndoReport) {
   return report.results.map((result) =>
     [result.status, `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
   );
-}
-
-function loadHistory() {
-  try {
-    const value = localStorage.getItem(historyKey);
-    return value ? (JSON.parse(value) as HistoryEntry[]) : [];
-  } catch {
-    return [];
-  }
 }
 
 function errorMessage(caught: unknown) {

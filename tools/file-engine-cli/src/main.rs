@@ -2,9 +2,10 @@ use std::env;
 use std::process;
 
 use file_engine_cli::analyzer::{self, analyze_root};
+use file_engine_cli::browse::{self, browse_root};
 use file_engine_cli::decision::{self, apply_decisions, read_decision_file, DecisionApplication};
 use file_engine_cli::execute::{self, execute_decision_application, execute_root};
-use file_engine_cli::journal::{self, write_planned_journal};
+use file_engine_cli::journal::{self, recover_journal, write_planned_journal};
 use file_engine_cli::path_guard::PathGuard;
 use file_engine_cli::precondition::{self, precheck_proposals, precheck_root};
 use file_engine_cli::proposal::{self, propose_for_root, read_proposal_file};
@@ -42,6 +43,23 @@ fn main() {
                 Ok(json) => println!("{json}"),
                 Err(error) => {
                     eprintln!("analyze failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Some("browse") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+            let path = parse_path_option(args);
+
+            match browse_root(root, path.as_deref()).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| browse::BrowseError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("browse failed: {error}");
                     process::exit(1);
                 }
             }
@@ -102,6 +120,22 @@ fn main() {
                 Ok(json) => println!("{json}"),
                 Err(error) => {
                     eprintln!("journal failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Some("recover-journal") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match recover_journal(root).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| journal::JournalError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("recover-journal failed: {error}");
                     process::exit(1);
                 }
             }
@@ -170,6 +204,20 @@ fn apply_optional_decisions(
     }
 }
 
+fn parse_path_option(args: impl Iterator<Item = String>) -> Option<String> {
+    let mut args = args;
+    let mut path = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--path" => path = args.next(),
+            _ => print_usage_and_exit(),
+        }
+    }
+
+    path
+}
+
 #[derive(Debug, Default)]
 struct CommandOptions {
     proposal: Option<String>,
@@ -199,11 +247,13 @@ fn print_usage_and_exit() -> ! {
     eprintln!("usage:");
     eprintln!("  file-engine-cli guard <managed-root> <relative-path>");
     eprintln!("  file-engine-cli analyze <managed-root>");
+    eprintln!("  file-engine-cli browse <managed-root> [--path <relative-path>]");
     eprintln!("  file-engine-cli propose <managed-root>");
     eprintln!(
         "  file-engine-cli precheck <managed-root> [--proposal <proposal.json> [--decision <decision.jsonl>]]"
     );
     eprintln!("  file-engine-cli journal <managed-root>");
+    eprintln!("  file-engine-cli recover-journal <managed-root>");
     eprintln!(
         "  file-engine-cli execute <managed-root> [--proposal <proposal.json> [--decision <decision.jsonl>]]"
     );

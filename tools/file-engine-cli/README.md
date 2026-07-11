@@ -10,10 +10,12 @@ Run from `tools/file-engine-cli`:
 
 ```powershell
 cargo run --quiet -- analyze <managed-root>
+cargo run --quiet -- browse <managed-root> [--path <relative-path>]
 cargo run --quiet -- propose <managed-root>
 cargo run --quiet -- precheck <managed-root> --proposal <proposal.json> --decision <decision.jsonl>
 cargo run --quiet -- execute <managed-root> --proposal <proposal.json> --decision <decision.jsonl>
 cargo run --quiet -- undo <managed-root>
+cargo run --quiet -- recover-journal <managed-root>
 ```
 
 On this machine, if PowerShell cannot find Cargo:
@@ -25,11 +27,13 @@ $env:Path = "C:\Users\user\.cargo\bin;$env:Path"
 ## Flow
 
 1. `analyze` lists files inside the managed root.
-2. `propose` creates deterministic file-move proposals without changing files.
-3. The user or app writes `decision.jsonl`.
-4. `precheck` validates the saved proposal against the current filesystem state.
-5. `execute` journals first, then performs no-overwrite moves.
-6. `undo` uses `.housemouse/journal.jsonl` to restore executed moves.
+2. `browse` lists one directory level (folders then files) so a UI can navigate the tree without a full recursive scan.
+3. `propose` creates deterministic file-move proposals without changing files.
+4. The user or app writes `decision.jsonl`.
+5. `precheck` validates the saved proposal against the current filesystem state.
+6. `execute` journals first, then performs no-overwrite moves.
+7. `undo` uses `.housemouse/journal.jsonl` to restore executed moves.
+8. If a journal line is unparseable, history reporting stays available (it reports everything before the bad line plus where it broke) but `execute`/`undo` refuse to run until `recover-journal` quarantines the broken file and starts a fresh one.
 
 ## Decision JSONL
 
@@ -70,6 +74,33 @@ Rules:
   ]
 }
 ```
+
+### BrowseReport
+
+```json
+{
+  "root": "C:\\managed-root",
+  "path": "inbox",
+  "entries": [
+    {
+      "name": "attachments",
+      "path": "inbox/attachments",
+      "is_dir": true,
+      "size_bytes": null,
+      "modified_unix_ms": null
+    },
+    {
+      "name": "note.md",
+      "path": "inbox/note.md",
+      "is_dir": false,
+      "size_bytes": 12,
+      "modified_unix_ms": 1783672855045
+    }
+  ]
+}
+```
+
+Omit `--path` (or pass an empty string) to browse the managed root itself. `entries` is sorted directories-first, then alphabetically. Directory entries always carry `size_bytes: null`.
 
 ### ProposalReport
 
@@ -162,6 +193,18 @@ Possible result `status` values:
 }
 ```
 
+### JournalRecoveryReport
+
+```json
+{
+  "root": "C:\\managed-root",
+  "journal_path": "C:\\managed-root\\.housemouse\\journal.jsonl",
+  "quarantined_path": "C:\\managed-root\\.housemouse\\journal.jsonl.corrupted-1783672855045"
+}
+```
+
+`recover-journal` refuses with an error if the journal has no unparseable line, so it cannot be used to silently discard a healthy history. Operations recorded before the corrupt line are no longer undoable through the app once the file is quarantined; the quarantined file itself is kept on disk, not deleted.
+
 ## Safety Invariants
 
 - Only paths inside the managed root are accepted.
@@ -170,6 +213,7 @@ Possible result `status` values:
 - Execution writes journal entries before file mutation.
 - Crash recovery can reconcile completed moves with missing journal completion records.
 - Undo refuses to overwrite an existing original path.
+- A journal with an unparseable line blocks `execute`/`undo` until `recover-journal` quarantines it; history reporting still shows everything recorded before the bad line.
 
 ## E2E Fixture
 

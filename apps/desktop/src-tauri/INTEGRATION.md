@@ -32,10 +32,13 @@ Implemented commands:
 register_managed_root(path: String) -> Result<ManagedRoot, String>
 list_managed_roots() -> Result<Vec<ManagedRoot>, String>
 analyze_root(root_id: String) -> Result<AnalyzeReport, String>
+browse_root_tree(root_id: String, path: Option<String>) -> Result<BrowseReport, String>
 propose_file_changes(root_id: String) -> Result<ProposalReport, String>
 precheck_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<PrecheckReport, String>
 execute_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> Result<ExecuteReport, String>
 undo_last_file_operation(root_id: String) -> Result<UndoReport, String>
+undo_operation(root_id: String, operation_id: String) -> Result<UndoReport, String>
+list_operation_history(root_id: String) -> Result<OperationHistoryReport, String>
 ```
 
 `register_managed_root` returns a `root_id`, the canonical managed-root path, and a display name. The frontend should pass the returned `root_id` into later file-engine commands instead of carrying the raw path.
@@ -58,7 +61,10 @@ Current frontend behavior:
 - `Demo` fills the local UI fixture path for fast manual testing.
 - rejected proposals require a non-empty reason before precheck or execute.
 - execute runs precheck first, blocks non-ready items, and asks for final confirmation.
-- execute and undo results are saved in browser `localStorage` and shown in the History panel.
+- History is loaded from the root's `.housemouse/journal.jsonl` through `list_operation_history`.
+- each undoable History row can call `undo_operation(root_id, operation_id)` for a selected journal operation.
+- each History row also carries `undo_blocked_reason` (null when `can_undo` is true) so the UI can explain why a row cannot be undone yet instead of only disabling the button.
+- a Browse panel calls `browse_root_tree(root_id, path)` to list one directory level at a time (breadcrumb navigation, directories before files).
 
 ## Proposed Tauri Commands
 
@@ -68,10 +74,13 @@ These command names are the app-facing bridge contract. They should return JSON-
 register_managed_root(path: String) -> ManagedRoot
 list_managed_roots() -> Vec<ManagedRoot>
 analyze_root(root_id: String) -> AnalyzeReport
+browse_root_tree(root_id: String, path: Option<String>) -> BrowseReport
 propose_file_changes(root_id: String) -> ProposalReport
 precheck_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> PrecheckReport
 execute_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<DecisionEntry>) -> ExecuteReport
 undo_last_file_operation(root_id: String) -> UndoReport
+undo_operation(root_id: String, operation_id: String) -> UndoReport
+list_operation_history(root_id: String) -> OperationHistoryReport
 ```
 
 ## Recommended Desktop Flow
@@ -86,13 +95,15 @@ undo_last_file_operation(root_id: String) -> UndoReport
 8. If every approved item is `ready`, UI asks for final confirmation.
 9. UI calls `execute_file_changes(root_id, proposal, decisions)`.
 10. UI displays `executed`, `skipped`, and `rejected` results separately.
-11. History screen calls `undo_last_file_operation(root_id)` when the user asks to undo.
+11. History screen calls `list_operation_history(root_id)` to read journal-backed operation history.
+12. History screen calls `undo_operation(root_id, operation_id)` when the user asks to undo a specific operation.
 
 ## Data Mapping
 
 Use these existing CLI structs as the initial app DTOs:
 
 - `AnalyzeReport`
+- `BrowseReport`
 - `ProposalReport`
 - `DecisionEntry`
 - `PrecheckReport`

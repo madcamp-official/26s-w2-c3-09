@@ -1,10 +1,17 @@
 use file_engine_cli::analyzer::{analyze_root as analyze_file_root, AnalyzeReport};
+use file_engine_cli::browse::{browse_root, BrowseReport};
 use file_engine_cli::decision::{apply_decisions, DecisionApplication, DecisionEntry};
 use file_engine_cli::execute::{execute_decision_application, ExecuteReport};
+use file_engine_cli::journal::{
+    read_operation_history, recover_journal as recover_journal_file, JournalRecoveryReport,
+    OperationHistoryReport,
+};
 use file_engine_cli::path_guard::PathGuard;
 use file_engine_cli::precondition::{precheck_proposals, PrecheckReport};
 use file_engine_cli::proposal::{propose_for_root, ProposalReport};
-use file_engine_cli::undo::{undo_root as undo_file_root, UndoReport};
+use file_engine_cli::undo::{
+    undo_operation as undo_file_operation, undo_root as undo_file_root, UndoReport,
+};
 
 use crate::storage::managed_roots::{ManagedRoot, ManagedRootStore};
 
@@ -53,6 +60,27 @@ pub fn analyze_root(root_id: String, store: &ManagedRootStore) -> Result<Analyze
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub fn browse_root_tree(
+    root_id: String,
+    path: Option<String>,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<BrowseReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    browse_root_tree_impl(root, path)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn browse_root_tree(
+    root_id: String,
+    path: Option<String>,
+    store: &ManagedRootStore,
+) -> Result<BrowseReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    browse_root_tree_impl(root, path)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub fn propose_file_changes(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
@@ -133,6 +161,65 @@ pub fn undo_last_file_operation(
 ) -> Result<UndoReport, String> {
     let root = resolve_root_id(store, &root_id)?;
     undo_last_file_operation_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn undo_operation(
+    root_id: String,
+    operation_id: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<UndoReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    undo_operation_impl(root, operation_id)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn undo_operation(
+    root_id: String,
+    operation_id: String,
+    store: &ManagedRootStore,
+) -> Result<UndoReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    undo_operation_impl(root, operation_id)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn list_operation_history(
+    root_id: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<OperationHistoryReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    list_operation_history_impl(root)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn list_operation_history(
+    root_id: String,
+    store: &ManagedRootStore,
+) -> Result<OperationHistoryReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    list_operation_history_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn recover_journal(
+    root_id: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<JournalRecoveryReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    recover_journal_impl(root)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn recover_journal(
+    root_id: String,
+    store: &ManagedRootStore,
+) -> Result<JournalRecoveryReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    recover_journal_impl(root)
 }
 
 fn register_managed_root_without_store(path: String) -> Result<ManagedRoot, String> {
@@ -163,6 +250,10 @@ fn analyze_root_impl(root: String) -> Result<AnalyzeReport, String> {
     analyze_file_root(root).map_err(command_error)
 }
 
+fn browse_root_tree_impl(root: String, path: Option<String>) -> Result<BrowseReport, String> {
+    browse_root(root, path.as_deref()).map_err(command_error)
+}
+
 fn propose_file_changes_impl(root: String) -> Result<ProposalReport, String> {
     propose_for_root(root).map_err(command_error)
 }
@@ -189,6 +280,18 @@ fn execute_file_changes_impl(
 
 fn undo_last_file_operation_impl(root: String) -> Result<UndoReport, String> {
     undo_file_root(root).map_err(command_error)
+}
+
+fn undo_operation_impl(root: String, operation_id: String) -> Result<UndoReport, String> {
+    undo_file_operation(root, operation_id).map_err(command_error)
+}
+
+fn list_operation_history_impl(root: String) -> Result<OperationHistoryReport, String> {
+    read_operation_history(root).map_err(command_error)
+}
+
+fn recover_journal_impl(root: String) -> Result<JournalRecoveryReport, String> {
+    recover_journal_file(root).map_err(command_error)
 }
 
 fn apply_decisions_for_command(
@@ -238,8 +341,9 @@ mod tests {
     use crate::storage::managed_roots::ManagedRootStore;
 
     use super::{
-        execute_file_changes, list_managed_roots, precheck_file_changes, propose_file_changes,
-        register_managed_root, register_managed_root_in_store, undo_last_file_operation,
+        browse_root_tree, execute_file_changes, list_managed_roots, list_operation_history,
+        precheck_file_changes, propose_file_changes, recover_journal, register_managed_root,
+        register_managed_root_in_store, undo_operation,
     };
 
     #[test]
@@ -328,9 +432,83 @@ mod tests {
         assert!(root.join("documents").join("note.md").exists());
         assert!(root.join("inbox").join("photo.png").exists());
 
-        let undo = undo_last_file_operation(managed.root_id, &store).expect("undo");
+        let history = list_operation_history(managed.root_id.clone(), &store).expect("history");
+        assert_eq!(history.operations.len(), 1);
+        assert!(history.operations[0].can_undo);
+
+        let undo = undo_operation(
+            managed.root_id.clone(),
+            history.operations[0].operation_id.clone(),
+            &store,
+        )
+        .expect("undo selected operation");
         assert_eq!(undo.undone_count, 1);
         assert!(root.join("inbox").join("note.md").exists());
+
+        let history = list_operation_history(managed.root_id, &store).expect("history");
+        assert!(!history.operations[0].can_undo);
+    }
+
+    #[test]
+    fn browse_root_tree_lists_directory_level_relative_to_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+
+        let store = ManagedRootStore::default();
+        let managed = register_managed_root_in_store(root.display().to_string(), &store)
+            .expect("register managed root");
+
+        let top_level =
+            browse_root_tree(managed.root_id.clone(), None, &store).expect("browse root");
+        assert_eq!(top_level.entries.len(), 1);
+        assert_eq!(top_level.entries[0].name, "inbox");
+        assert!(top_level.entries[0].is_dir);
+
+        let inbox = browse_root_tree(managed.root_id, Some("inbox".to_string()), &store)
+            .expect("browse inbox");
+        assert_eq!(inbox.entries.len(), 1);
+        assert_eq!(inbox.entries[0].path, "inbox/note.md");
+        assert!(!inbox.entries[0].is_dir);
+    }
+
+    #[test]
+    fn history_reports_corruption_and_recover_journal_clears_it() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+
+        let store = ManagedRootStore::default();
+        let managed = register_managed_root_in_store(root.display().to_string(), &store)
+            .expect("register managed root");
+        let proposal =
+            propose_file_changes(managed.root_id.clone(), &store).expect("propose file changes");
+        let decisions = vec![DecisionEntry {
+            proposal_id: proposal.proposals[0].proposal_id.clone(),
+            decision: Decision::Approved,
+            reason: None,
+        }];
+        execute_file_changes(managed.root_id.clone(), proposal, decisions, &store)
+            .expect("execute");
+
+        let journal_path = root.join(".housemouse").join("journal.jsonl");
+        let mut journal = fs::read_to_string(&journal_path).expect("read journal");
+        journal.push_str("{not valid json\n");
+        fs::write(&journal_path, journal).expect("corrupt journal");
+
+        let history = list_operation_history(managed.root_id.clone(), &store)
+            .expect("history tolerates corruption");
+        assert!(history.corruption.is_some());
+        assert_eq!(history.operations.len(), 1);
+
+        recover_journal(managed.root_id.clone(), &store).expect("recover journal");
+
+        let history =
+            list_operation_history(managed.root_id, &store).expect("history after recovery");
+        assert!(history.corruption.is_none());
+        assert!(history.operations.is_empty());
     }
 
     #[test]
