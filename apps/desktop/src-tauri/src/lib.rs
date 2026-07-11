@@ -1,11 +1,13 @@
 pub mod commands;
 pub mod storage;
+pub mod watcher;
 
 #[cfg(feature = "tauri-commands")]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(storage::managed_roots::ManagedRootStore::default())
+        .manage(storage::watchers::WatcherStore::default())
         .setup(|app| {
             use tauri::Manager;
 
@@ -34,6 +36,9 @@ pub fn run() {
             commands::file_engine::undo_operation,
             commands::file_engine::list_operation_history,
             commands::file_engine::recover_journal,
+            commands::watcher::start_watching_root,
+            commands::watcher::stop_watching_root,
+            commands::watcher::is_watching_root,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Tauri desktop app");

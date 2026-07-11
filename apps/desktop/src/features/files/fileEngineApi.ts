@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 declare global {
@@ -199,6 +200,26 @@ export function listOperationHistory(rootId: string) {
 
 export function recoverJournal(rootId: string) {
   return invokeCommand<JournalRecoveryReport>("recover_journal", { rootId });
+}
+
+export const ROOT_CHANGED_EVENT = "managed-root-changed";
+
+export function startWatchingRoot(rootId: string) {
+  return invokeCommand<void>("start_watching_root", { rootId });
+}
+
+export function stopWatchingRoot(rootId: string) {
+  return invokeCommand<boolean>("stop_watching_root", { rootId });
+}
+
+export function isWatchingRoot(rootId: string) {
+  return invokeCommand<boolean>("is_watching_root", { rootId });
+}
+
+export function listenForRootChanges(handler: (rootId: string) => void) {
+  ensureTauriRuntime();
+
+  return listen<string>(ROOT_CHANGED_EVENT, (event) => handler(event.payload));
 }
 
 export async function selectManagedRootDirectory() {

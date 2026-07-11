@@ -39,7 +39,18 @@ execute_file_changes(root_id: String, proposal: ProposalReport, decisions: Vec<D
 undo_last_file_operation(root_id: String) -> Result<UndoReport, String>
 undo_operation(root_id: String, operation_id: String) -> Result<UndoReport, String>
 list_operation_history(root_id: String) -> Result<OperationHistoryReport, String>
+recover_journal(root_id: String) -> Result<JournalRecoveryReport, String>
 ```
+
+A second command module, `apps/desktop/src-tauri/src/commands/watcher.rs`, wraps the filesystem watcher in `src/watcher.rs`:
+
+```rust
+start_watching_root(root_id: String) -> Result<(), String>
+stop_watching_root(root_id: String) -> Result<bool, String>
+is_watching_root(root_id: String) -> Result<bool, String>
+```
+
+`start_watching_root` registers a `notify`-based recursive watcher on the managed root, debounced 500ms so a burst of filesystem events collapses into one notification. On a debounced change it emits a `managed-root-changed` event (payload: `root_id`) that the frontend listens for to refresh Browse/History without a manual click. Changes confined to `.housemouse` (journal writes, our own bookkeeping) are filtered out so the app does not react to its own mutations. `WatcherStore` (in `src/storage/watchers.rs`) holds one active watcher per `root_id`; starting a new watcher for the same root replaces (and stops) the previous one, and stopping/dropping an entry stops the underlying OS watch via `RootWatcher`'s `Drop` impl. Unlike the file-engine commands, this module has no non-`tauri-commands` variant — it only exists to bridge real filesystem events to a running app, so it is gated out entirely under the default feature and tested at the `watch_root`/`WatcherStore` level instead.
 
 `register_managed_root` returns a `root_id`, the canonical managed-root path, and a display name. The frontend should pass the returned `root_id` into later file-engine commands instead of carrying the raw path.
 
@@ -65,6 +76,7 @@ Current frontend behavior:
 - each undoable History row can call `undo_operation(root_id, operation_id)` for a selected journal operation.
 - each History row also carries `undo_blocked_reason` (null when `can_undo` is true) so the UI can explain why a row cannot be undone yet instead of only disabling the button.
 - a Browse panel calls `browse_root_tree(root_id, path)` to list one directory level at a time (breadcrumb navigation, directories before files).
+- a "Watch for changes" toggle per root calls `start_watching_root`/`stop_watching_root`; while active, Browse and History refresh automatically when the `managed-root-changed` event fires for the currently selected root.
 
 ## Proposed Tauri Commands
 

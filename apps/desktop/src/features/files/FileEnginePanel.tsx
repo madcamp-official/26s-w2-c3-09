@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   analyzeRoot,
@@ -8,6 +8,7 @@ import {
   executeFileChanges,
   ExecuteReport,
   JournalCorruption,
+  listenForRootChanges,
   listOperationHistory,
   listManagedRoots,
   ManagedRoot,
@@ -19,6 +20,8 @@ import {
   recoverJournal,
   registerManagedRoot,
   selectManagedRootDirectory,
+  startWatchingRoot,
+  stopWatchingRoot,
   undoLastFileOperation,
   undoOperation,
   UndoReport
@@ -41,11 +44,16 @@ export function FileEnginePanel() {
   const [journalCorruption, setJournalCorruption] = useState<JournalCorruption | null>(null);
   const [browsePath, setBrowsePath] = useState("");
   const [browseEntries, setBrowseEntries] = useState<BrowseEntry[]>([]);
+  const [watchingRootIds, setWatchingRootIds] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
   const [resultLines, setResultLines] = useState<string[]>([]);
 
+  const selectedRootIdRef = useRef(selectedRootId);
+  const browsePathRef = useRef(browsePath);
+
   const selectedRoot = roots.find((root) => root.root_id === selectedRootId);
+  const isWatchingSelectedRoot = selectedRootId ? watchingRootIds.has(selectedRootId) : false;
   const readyProposalCount = proposal?.proposals.filter((item) => item.status === "ready").length ?? 0;
   const commandDecisions = useMemo(
     () => buildDecisionEntries(decisions, rejectionReasons),
@@ -72,6 +80,38 @@ export function FileEnginePanel() {
       setBrowseEntries([]);
     }
   }, [selectedRootId, browsePath]);
+
+  useEffect(() => {
+    selectedRootIdRef.current = selectedRootId;
+  }, [selectedRootId]);
+
+  useEffect(() => {
+    browsePathRef.current = browsePath;
+  }, [browsePath]);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    listenForRootChanges((rootId) => {
+      if (rootId !== selectedRootIdRef.current) return;
+      void refreshBrowse(rootId, browsePathRef.current);
+      void refreshHistory(rootId);
+    }).then((stop) => {
+      if (cancelled) {
+        stop();
+      } else {
+        unlisten = stop;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   async function refreshRoots() {
     setError(null);
@@ -296,6 +336,30 @@ export function FileEnginePanel() {
     }
   }
 
+  async function toggleWatchSelectedRoot() {
+    if (!selectedRootId) return;
+
+    setError(null);
+    try {
+      if (isWatchingSelectedRoot) {
+        await stopWatchingRoot(selectedRootId);
+        setWatchingRootIds((current) => {
+          const next = new Set(current);
+          next.delete(selectedRootId);
+          return next;
+        });
+        setStatus("Stopped watching for changes");
+      } else {
+        await startWatchingRoot(selectedRootId);
+        setWatchingRootIds((current) => new Set(current).add(selectedRootId));
+        setStatus("Watching for changes");
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Watch toggle failed");
+    }
+  }
+
   async function refreshBrowse(rootId = selectedRootId, path = browsePath) {
     if (!rootId) {
       setBrowseEntries([]);
@@ -441,6 +505,13 @@ export function FileEnginePanel() {
             >
               Undo
             </button>
+            <button
+              type="button"
+              onClick={() => void toggleWatchSelectedRoot()}
+              disabled={!selectedRootId}
+            >
+              {isWatchingSelectedRoot ? "Stop watching" : "Watch for changes"}
+            </button>
           </div>
           {proposal ? (
             <p className="path-text">
@@ -449,6 +520,9 @@ export function FileEnginePanel() {
           ) : null}
           {journalCorruption ? (
             <p className="error-text">Journal needs recovery before execute/undo will run.</p>
+          ) : null}
+          {isWatchingSelectedRoot ? (
+            <p className="path-text">Watching for changes — Browse and History refresh automatically.</p>
           ) : null}
         </div>
 
