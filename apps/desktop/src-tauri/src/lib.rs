@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod commands;
+pub mod overlay;
 pub mod storage;
 pub mod watcher;
 
@@ -8,6 +9,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(agent::AgentRuntime::default())
+        .manage(overlay::OverlayRuntime::default())
         .manage(storage::managed_roots::ManagedRootStore::default())
         .manage(storage::watchers::WatcherStore::default())
         .setup(|app| {
@@ -43,6 +45,8 @@ pub fn run() {
             commands::agent::get_agent_connection_status,
             commands::agent::poll_agent_commands,
             commands::agent::send_agent_event,
+            commands::overlay::get_overlay_status,
+            commands::overlay::emit_character_event,
             commands::watcher::start_watching_root,
             commands::watcher::stop_watching_root,
             commands::watcher::is_watching_root,
