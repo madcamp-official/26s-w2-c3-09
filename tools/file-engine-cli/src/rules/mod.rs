@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::analyzer::FileEntry;
-use crate::journal::STATE_DIR;
+use crate::journal::{STATE_DIR, TRASH_DIR};
 use crate::proposal::{proposal_id, Proposal, ProposalAction, ProposalStatus};
 
 pub use definition::{Action, Condition, Rule, RuleError, RuleSet, CURRENT_RULES_VERSION};
@@ -44,8 +44,21 @@ fn proposal_from_rule(rule: &Rule, file: &FileEntry, context: &RuleContext) -> O
         return None;
     }
 
+    match (&rule.then.move_to, rule.then.trash) {
+        (Some(move_to), false) => move_proposal_from_rule(rule, file, context, move_to),
+        (None, true) => trash_proposal_from_rule(rule, file),
+        _ => None,
+    }
+}
+
+fn move_proposal_from_rule(
+    rule: &Rule,
+    file: &FileEntry,
+    context: &RuleContext,
+    move_to: &str,
+) -> Option<Proposal> {
     let file_name = Path::new(&file.path).file_name()?.to_string_lossy();
-    let target = format!("{}/{}", rule.then.move_to, file_name);
+    let target = format!("{move_to}/{file_name}");
     let normalized_target = normalize_relative_path(&target);
 
     // The file is already where the rule would move it; nothing to propose.
@@ -70,6 +83,22 @@ fn proposal_from_rule(rule: &Rule, file: &FileEntry, context: &RuleContext) -> O
         source_modified_unix_ms: file.modified_unix_ms,
         reason: reason_for(rule, file),
         status,
+    })
+}
+
+fn trash_proposal_from_rule(rule: &Rule, file: &FileEntry) -> Option<Proposal> {
+    let action = ProposalAction::Trash;
+    let target = TRASH_DIR.to_string();
+
+    Some(Proposal {
+        proposal_id: proposal_id(&action, &file.path, &target),
+        action,
+        from: file.path.clone(),
+        to: target,
+        source_size_bytes: file.size_bytes,
+        source_modified_unix_ms: file.modified_unix_ms,
+        reason: reason_for(rule, file),
+        status: ProposalStatus::Ready,
     })
 }
 
@@ -110,7 +139,11 @@ fn rule_matches(rule: &Rule, file: &FileEntry, context: &RuleContext) -> bool {
 }
 
 fn reason_for(rule: &Rule, file: &FileEntry) -> String {
-    let move_to = &rule.then.move_to;
+    if rule.then.trash {
+        return format!("rule '{}' moves this into recoverable trash", rule.id);
+    }
+
+    let move_to = rule.then.move_to.as_deref().unwrap_or("destination");
     match (rule.when.extension_in.is_some(), extension_of(&file.path)) {
         (true, Some(extension)) => format!(".{extension} files belong in {move_to}/"),
         _ => format!("rule '{}' moves this into {move_to}/", rule.id),
@@ -137,7 +170,8 @@ pub fn default_rule_set() -> RuleSet {
                 ..Condition::default()
             },
             then: Action {
-                move_to: move_to.to_string(),
+                move_to: Some(move_to.to_string()),
+                trash: false,
             },
         }
     }
@@ -222,6 +256,32 @@ mod tests {
     }
 
     #[test]
+    fn trash_rule_proposes_recoverable_trash_action() {
+        let rules = RuleSet {
+            version: CURRENT_RULES_VERSION,
+            rules: vec![Rule {
+                id: "old-temp".to_string(),
+                priority: 0,
+                when: Condition {
+                    name_matches: Some("*.tmp".to_string()),
+                    ..Condition::default()
+                },
+                then: Action {
+                    move_to: None,
+                    trash: true,
+                },
+            }],
+        };
+        let proposal = rules
+            .propose(&file("inbox/cache.tmp", None), &context(0))
+            .expect("proposal");
+
+        assert_eq!(proposal.action, crate::proposal::ProposalAction::Trash);
+        assert_eq!(proposal.to, crate::journal::TRASH_DIR);
+        assert!(proposal.proposal_id.starts_with("trash:"));
+    }
+
+    #[test]
     fn older_than_days_only_matches_sufficiently_old_files() {
         let now = 100 * DAY_MS;
         let rules = RuleSet {
@@ -234,7 +294,8 @@ mod tests {
                     ..Condition::default()
                 },
                 then: Action {
-                    move_to: "old".to_string(),
+                    move_to: Some("old".to_string()),
+                    trash: false,
                 },
             }],
         };
@@ -259,7 +320,8 @@ mod tests {
                     ..Condition::default()
                 },
                 then: Action {
-                    move_to: "billing".to_string(),
+                    move_to: Some("billing".to_string()),
+                    trash: false,
                 },
             }],
         };
@@ -288,7 +350,8 @@ mod tests {
                     ..Condition::default()
                 },
                 then: Action {
-                    move_to: "archive".to_string(),
+                    move_to: Some("archive".to_string()),
+                    trash: false,
                 },
             }],
         };
@@ -314,7 +377,8 @@ mod tests {
                         ..Condition::default()
                     },
                     then: Action {
-                        move_to: "vault".to_string(),
+                        move_to: Some("vault".to_string()),
+                        trash: false,
                     },
                 },
                 Rule {
@@ -325,7 +389,8 @@ mod tests {
                         ..Condition::default()
                     },
                     then: Action {
-                        move_to: "documents".to_string(),
+                        move_to: Some("documents".to_string()),
+                        trash: false,
                     },
                 },
             ],
@@ -361,7 +426,7 @@ mod tests {
 
         let rules = load_rule_set_for_root(root).expect("load custom rules");
         assert_eq!(rules.rules.len(), 1);
-        assert_eq!(rules.rules[0].then.move_to, "pictures");
+        assert_eq!(rules.rules[0].then.move_to.as_deref(), Some("pictures"));
     }
 
     #[test]

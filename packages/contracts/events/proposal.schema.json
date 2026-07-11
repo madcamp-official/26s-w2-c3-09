@@ -80,7 +80,7 @@
       ],
       "properties": {
         "proposalId": { "$ref": "#/$defs/ProposalId" },
-        "action": { "type": "string", "enum": ["move"] },
+        "action": { "type": "string", "enum": ["move", "trash"] },
         "from": { "$ref": "#/$defs/SafeRelativePath" },
         "to": { "$ref": "#/$defs/SafeRelativePath" },
         "sourceSizeBytes": { "type": "integer", "minimum": 0 },

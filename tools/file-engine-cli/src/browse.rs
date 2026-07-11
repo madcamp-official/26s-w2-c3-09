@@ -70,7 +70,7 @@ pub fn browse_root(
             message: error.to_string(),
         })?;
         let entry_path = entry.path();
-        if is_housemouse_state_dir(&entry_path) {
+        if is_housemouse_internal_dir(&entry_path) {
             continue;
         }
 
@@ -144,10 +144,10 @@ fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
         .map(|duration| duration.as_millis())
 }
 
-fn is_housemouse_state_dir(path: &Path) -> bool {
+fn is_housemouse_internal_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == crate::journal::STATE_DIR)
+        .is_some_and(|name| name == crate::journal::STATE_DIR || name == crate::journal::TRASH_DIR)
 }
 
 impl fmt::Display for BrowseError {
@@ -258,6 +258,19 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         fs::create_dir_all(root.join(".housemouse")).expect("create state dir");
+        fs::write(root.join("readme.txt"), "hi").expect("write readme");
+
+        let report = browse_root(&root, None).expect("browse");
+
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].name, "readme.txt");
+    }
+
+    #[test]
+    fn ignores_housemouse_trash_dir() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join(crate::journal::TRASH_DIR)).expect("create trash dir");
         fs::write(root.join("readme.txt"), "hi").expect("write readme");
 
         let report = browse_root(&root, None).expect("browse");

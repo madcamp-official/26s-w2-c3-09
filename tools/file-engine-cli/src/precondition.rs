@@ -8,7 +8,9 @@ use serde::Serialize;
 
 use crate::decision::DecisionError;
 use crate::path_guard::{PathGuard, PathGuardError};
-use crate::proposal::{propose_for_root, Proposal, ProposalError, ProposalReport, ProposalStatus};
+use crate::proposal::{
+    propose_for_root, Proposal, ProposalAction, ProposalError, ProposalReport, ProposalStatus,
+};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PrecheckReport {
@@ -18,6 +20,7 @@ pub struct PrecheckReport {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct PrecheckResult {
+    pub action: ProposalAction,
     pub from: String,
     pub to: String,
     pub status: PrecheckStatus,
@@ -139,6 +142,7 @@ fn precheck_proposal(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
 
 fn result(proposal: &Proposal, status: PrecheckStatus, reason: Option<String>) -> PrecheckResult {
     PrecheckResult {
+        action: proposal.action.clone(),
         from: proposal.from.clone(),
         to: proposal.to.clone(),
         status,

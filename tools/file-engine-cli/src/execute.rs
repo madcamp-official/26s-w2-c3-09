@@ -13,7 +13,8 @@ use crate::precondition::{
     precheck_proposals, precheck_root, PrecheckError, PrecheckReport, PrecheckResult,
     PrecheckStatus,
 };
-use crate::proposal::{ProposalError, ProposalReport};
+use crate::proposal::{ProposalAction, ProposalError, ProposalReport};
+use crate::trash::{trash_file, TrashError};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct ExecuteReport {
@@ -27,6 +28,7 @@ pub struct ExecuteReport {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct ExecuteResult {
+    pub action: ProposalAction,
     pub from: String,
     pub to: String,
     pub status: ExecuteStatus,
@@ -57,6 +59,7 @@ pub enum ExecuteError {
         to: PathBuf,
         message: String,
     },
+    Trash(TrashError),
     Serialize(String),
 }
 
@@ -119,57 +122,29 @@ fn execute_prechecked(
             continue;
         }
 
-        let operation_id = format!("op-{}-{index}", unix_ms());
-        store
-            .append(&planned_entry(&operation_id, check))
-            .map_err(ExecuteError::Journal)?;
-
-        let source = match guard.resolve_existing(&check.from) {
-            Ok(source) => source,
-            Err(error) => {
-                skipped_count += 1;
-                results.push(skipped_result(check, Some(error.to_string())));
-                continue;
+        match check.action {
+            ProposalAction::Move => match execute_move(&guard, &store, check, index)? {
+                Ok(result) => {
+                    executed_count += 1;
+                    results.push(result);
+                }
+                Err(reason) => {
+                    skipped_count += 1;
+                    results.push(skipped_result(check, Some(reason)));
+                }
+            },
+            ProposalAction::Trash => {
+                let report = trash_file(guard.root(), &check.from).map_err(ExecuteError::Trash)?;
+                executed_count += 1;
+                results.push(ExecuteResult {
+                    action: check.action.clone(),
+                    from: check.from.clone(),
+                    to: report.trashed_path,
+                    status: ExecuteStatus::Executed,
+                    reason: None,
+                });
             }
-        };
-
-        let destination = guard.root().join(&check.to);
-        let parent = destination
-            .parent()
-            .ok_or_else(|| ExecuteError::Guard(PathGuardError::MissingPath(destination.clone())))?;
-        fs::create_dir_all(parent).map_err(|error| ExecuteError::CreateParentDir {
-            path: parent.to_path_buf(),
-            message: error.to_string(),
-        })?;
-
-        let destination = guard
-            .resolve_for_create(&check.to)
-            .map_err(ExecuteError::Guard)?;
-        if destination.exists() {
-            skipped_count += 1;
-            results.push(skipped_result(
-                check,
-                Some("destination appeared before move; refusing to overwrite".to_string()),
-            ));
-            continue;
         }
-
-        fs::rename(&source, &destination).map_err(|error| ExecuteError::Move {
-            from: source,
-            to: destination,
-            message: error.to_string(),
-        })?;
-
-        store
-            .append(&executed_entry(&operation_id, check))
-            .map_err(ExecuteError::Journal)?;
-        executed_count += 1;
-        results.push(ExecuteResult {
-            from: check.from.clone(),
-            to: check.to.clone(),
-            status: ExecuteStatus::Executed,
-            reason: None,
-        });
     }
 
     Ok(ExecuteReport {
@@ -180,6 +155,59 @@ fn execute_prechecked(
         rejected_count: 0,
         results,
     })
+}
+
+fn execute_move(
+    guard: &PathGuard,
+    store: &JournalStore,
+    check: &PrecheckResult,
+    index: usize,
+) -> Result<Result<ExecuteResult, String>, ExecuteError> {
+    let operation_id = format!("op-{}-{index}", unix_ms());
+    store
+        .append(&planned_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    let source = match guard.resolve_existing(&check.from) {
+        Ok(source) => source,
+        Err(error) => return Ok(Err(error.to_string())),
+    };
+
+    let destination = guard.root().join(&check.to);
+    let parent = destination
+        .parent()
+        .ok_or_else(|| ExecuteError::Guard(PathGuardError::MissingPath(destination.clone())))?;
+    fs::create_dir_all(parent).map_err(|error| ExecuteError::CreateParentDir {
+        path: parent.to_path_buf(),
+        message: error.to_string(),
+    })?;
+
+    let destination = guard
+        .resolve_for_create(&check.to)
+        .map_err(ExecuteError::Guard)?;
+    if destination.exists() {
+        return Ok(Err(
+            "destination appeared before move; refusing to overwrite".to_string(),
+        ));
+    }
+
+    fs::rename(&source, &destination).map_err(|error| ExecuteError::Move {
+        from: source,
+        to: destination,
+        message: error.to_string(),
+    })?;
+
+    store
+        .append(&executed_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    Ok(Ok(ExecuteResult {
+        action: check.action.clone(),
+        from: check.from.clone(),
+        to: check.to.clone(),
+        status: ExecuteStatus::Executed,
+        reason: None,
+    }))
 }
 
 fn recover_planned_move(
@@ -206,6 +234,7 @@ fn recover_planned_move(
         .map_err(ExecuteError::Journal)?;
 
     Ok(Some(ExecuteResult {
+        action: check.action.clone(),
         from: check.from.clone(),
         to: check.to.clone(),
         status: ExecuteStatus::Executed,
@@ -256,7 +285,10 @@ fn journal_entry(
     JournalEntry {
         operation_id: operation_id.to_string(),
         status,
-        action: JournalAction::Move,
+        action: match check.action {
+            ProposalAction::Move => JournalAction::Move,
+            ProposalAction::Trash => JournalAction::Trash,
+        },
         from: check.from.clone(),
         to: check.to.clone(),
         created_unix_ms: unix_ms(),
@@ -265,6 +297,7 @@ fn journal_entry(
 
 fn skipped_result(check: &PrecheckResult, reason: Option<String>) -> ExecuteResult {
     ExecuteResult {
+        action: check.action.clone(),
         from: check.from.clone(),
         to: check.to.clone(),
         status: ExecuteStatus::Skipped,
@@ -274,6 +307,7 @@ fn skipped_result(check: &PrecheckResult, reason: Option<String>) -> ExecuteResu
 
 fn rejected_result(rejected: RejectedProposal) -> ExecuteResult {
     ExecuteResult {
+        action: rejected.proposal.action,
         from: rejected.proposal.from,
         to: rejected.proposal.to,
         status: ExecuteStatus::Rejected,
@@ -311,6 +345,7 @@ impl fmt::Display for ExecuteError {
                     to.display()
                 )
             }
+            ExecuteError::Trash(error) => write!(formatter, "{error}"),
             ExecuteError::Serialize(message) => {
                 write!(formatter, "cannot serialize execute journal: {message}")
             }
@@ -386,6 +421,33 @@ mod tests {
         assert_eq!(report.rejected_count, 0);
         assert!(!root.join("inbox").join("note.md").exists());
         assert!(root.join("documents").join("note.md").exists());
+    }
+
+    #[test]
+    fn executes_approved_trash_proposal() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::create_dir_all(root.join(".housemouse")).expect("create state dir");
+        fs::write(root.join("inbox").join("cache.tmp"), "noise").expect("write temp");
+        fs::write(
+            root.join(".housemouse").join("rules.json"),
+            r#"{"version":1,"rules":[{"id":"temp-trash","when":{"name_matches":"*.tmp"},"then":{"trash":true}}]}"#,
+        )
+        .expect("write rules");
+
+        let report = execute_root(&root).expect("execute");
+        let history = crate::journal::read_operation_history(&root).expect("history");
+
+        assert_eq!(report.executed_count, 1);
+        assert_eq!(
+            report.results[0].action,
+            crate::proposal::ProposalAction::Trash
+        );
+        assert!(!root.join("inbox").join("cache.tmp").exists());
+        assert!(root.join(&report.results[0].to).exists());
+        assert_eq!(history.operations[0].action, JournalAction::Trash);
+        assert!(history.operations[0].can_undo);
     }
 
     #[test]

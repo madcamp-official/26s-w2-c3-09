@@ -6,11 +6,13 @@ use file_engine_cli::browse::{self, browse_root};
 use file_engine_cli::decision::{self, apply_decisions, read_decision_file, DecisionApplication};
 use file_engine_cli::execute::{self, execute_decision_application, execute_root};
 use file_engine_cli::file_index::{list_index, reindex_root, search_index};
+use file_engine_cli::file_ops::{self, create_empty_file, rename_file};
 use file_engine_cli::journal::{self, recover_journal, write_planned_journal};
 use file_engine_cli::path_guard::PathGuard;
 use file_engine_cli::precondition::{self, precheck_proposals, precheck_root};
 use file_engine_cli::proposal::{self, propose_for_root, read_proposal_file};
 use file_engine_cli::rules::{self, load_rule_set_for_root};
+use file_engine_cli::trash::{self, trash_file};
 use file_engine_cli::undo::{self, undo_root};
 
 fn main() {
@@ -221,6 +223,66 @@ fn main() {
                 }
             }
         }
+        Some("trash") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+            let Some(relative_path) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match trash_file(root, relative_path).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| trash::TrashError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("trash failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Some("create-file") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+            let Some(relative_path) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match create_empty_file(root, relative_path).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| file_ops::FileOpError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("create-file failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
+        Some("rename-file") => {
+            let Some(root) = args.next() else {
+                print_usage_and_exit();
+            };
+            let Some(relative_path) = args.next() else {
+                print_usage_and_exit();
+            };
+            let Some(new_name) = args.next() else {
+                print_usage_and_exit();
+            };
+
+            match rename_file(root, relative_path, new_name).and_then(|report| {
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| file_ops::FileOpError::Serialize(error.to_string()))
+            }) {
+                Ok(json) => println!("{json}"),
+                Err(error) => {
+                    eprintln!("rename-file failed: {error}");
+                    process::exit(1);
+                }
+            }
+        }
         Some("undo") => {
             let Some(root) = args.next() else {
                 print_usage_and_exit();
@@ -323,6 +385,9 @@ fn print_usage_and_exit() -> ! {
     eprintln!(
         "  file-engine-cli execute <managed-root> [--proposal <proposal.json> [--decision <decision.jsonl>]]"
     );
+    eprintln!("  file-engine-cli trash <managed-root> <relative-path>");
+    eprintln!("  file-engine-cli create-file <managed-root> <relative-path>");
+    eprintln!("  file-engine-cli rename-file <managed-root> <relative-path> <new-file-name>");
     eprintln!("  file-engine-cli undo <managed-root>");
     process::exit(2);
 }

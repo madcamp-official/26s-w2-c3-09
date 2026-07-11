@@ -3,6 +3,9 @@ use file_engine_cli::browse::{browse_root, BrowseReport};
 use file_engine_cli::decision::{apply_decisions, DecisionApplication, DecisionEntry};
 use file_engine_cli::execute::{execute_decision_application, ExecuteReport};
 use file_engine_cli::file_index::{list_index, reindex_root, search_index, FileIndexReport};
+use file_engine_cli::file_ops::{
+    create_empty_file, rename_file as rename_file_in_root, CreateFileReport, RenameFileReport,
+};
 use file_engine_cli::journal::{
     read_operation_history, recover_journal as recover_journal_file, JournalRecoveryReport,
     OperationHistoryReport,
@@ -10,6 +13,7 @@ use file_engine_cli::journal::{
 use file_engine_cli::path_guard::PathGuard;
 use file_engine_cli::precondition::{precheck_proposals, PrecheckReport};
 use file_engine_cli::proposal::{propose_for_root, ProposalReport};
+use file_engine_cli::trash::{trash_file as trash_file_in_root, TrashReport};
 use file_engine_cli::undo::{
     undo_operation as undo_file_operation, undo_root as undo_file_root, UndoReport,
 };
@@ -187,6 +191,71 @@ pub fn execute_file_changes(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub fn trash_file(
+    root_id: String,
+    path: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<TrashReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    trash_file_impl(root, path)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn trash_file(
+    root_id: String,
+    path: String,
+    store: &ManagedRootStore,
+) -> Result<TrashReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    trash_file_impl(root, path)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn create_file(
+    root_id: String,
+    path: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<CreateFileReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    create_file_impl(root, path)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn create_file(
+    root_id: String,
+    path: String,
+    store: &ManagedRootStore,
+) -> Result<CreateFileReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    create_file_impl(root, path)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn rename_file(
+    root_id: String,
+    path: String,
+    new_name: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<RenameFileReport, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    rename_file_impl(root, path, new_name)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn rename_file(
+    root_id: String,
+    path: String,
+    new_name: String,
+    store: &ManagedRootStore,
+) -> Result<RenameFileReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    rename_file_impl(root, path, new_name)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub fn undo_last_file_operation(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
@@ -331,6 +400,22 @@ fn execute_file_changes_impl(
     })
 }
 
+fn trash_file_impl(root: String, path: String) -> Result<TrashReport, String> {
+    trash_file_in_root(root, path).map_err(command_error)
+}
+
+fn create_file_impl(root: String, path: String) -> Result<CreateFileReport, String> {
+    create_empty_file(root, path).map_err(command_error)
+}
+
+fn rename_file_impl(
+    root: String,
+    path: String,
+    new_name: String,
+) -> Result<RenameFileReport, String> {
+    rename_file_in_root(root, path, new_name).map_err(command_error)
+}
+
 fn undo_last_file_operation_impl(root: String) -> Result<UndoReport, String> {
     undo_file_root(root).map_err(command_error)
 }
@@ -394,9 +479,10 @@ mod tests {
     use crate::storage::managed_roots::ManagedRootStore;
 
     use super::{
-        browse_root_tree, execute_file_changes, list_managed_roots, list_operation_history,
-        precheck_file_changes, propose_file_changes, recover_journal, register_managed_root,
-        register_managed_root_in_store, reindex_managed_root, search_managed_root, undo_operation,
+        browse_root_tree, create_file, execute_file_changes, list_managed_roots,
+        list_operation_history, precheck_file_changes, propose_file_changes, recover_journal,
+        register_managed_root, register_managed_root_in_store, reindex_managed_root, rename_file,
+        search_managed_root, trash_file, undo_operation,
     };
 
     #[test]
@@ -540,6 +626,69 @@ mod tests {
         assert_eq!(inbox.entries.len(), 1);
         assert_eq!(inbox.entries[0].path, "inbox/note.md");
         assert!(!inbox.entries[0].is_dir);
+    }
+
+    #[test]
+    fn trash_file_command_moves_file_to_recoverable_trash() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("noise.tmp"), "noise").expect("write temp");
+
+        let store = ManagedRootStore::default();
+        let managed = register_managed_root_in_store(root.display().to_string(), &store)
+            .expect("register managed root");
+
+        let report = trash_file(
+            managed.root_id.clone(),
+            "inbox/noise.tmp".to_string(),
+            &store,
+        )
+        .expect("trash file");
+        let history = list_operation_history(managed.root_id, &store).expect("history");
+
+        assert!(!root.join("inbox").join("noise.tmp").exists());
+        assert!(root.join(&report.trashed_path).exists());
+        assert_eq!(history.operations.len(), 1);
+        assert_eq!(
+            history.operations[0].action,
+            file_engine_cli::journal::JournalAction::Trash
+        );
+    }
+
+    #[test]
+    fn create_and_rename_file_commands_stay_inside_root() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("notes")).expect("create notes");
+
+        let store = ManagedRootStore::default();
+        let managed = register_managed_root_in_store(root.display().to_string(), &store)
+            .expect("register managed root");
+
+        let created = create_file(
+            managed.root_id.clone(),
+            "notes/draft.txt".to_string(),
+            &store,
+        )
+        .expect("create file");
+        let renamed = rename_file(
+            managed.root_id.clone(),
+            "notes/draft.txt".to_string(),
+            "final.txt".to_string(),
+            &store,
+        )
+        .expect("rename file");
+        let history = list_operation_history(managed.root_id, &store).expect("history");
+
+        assert_eq!(created.created_path, "notes/draft.txt");
+        assert_eq!(renamed.to, "notes/final.txt");
+        assert!(!root.join("notes").join("draft.txt").exists());
+        assert!(root.join("notes").join("final.txt").exists());
+        assert_eq!(
+            history.operations[0].action,
+            file_engine_cli::journal::JournalAction::Move
+        );
     }
 
     #[test]

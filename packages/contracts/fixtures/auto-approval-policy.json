@@ -1,0 +1,8 @@
+{
+  "rootId": "root:0123456789abcdef",
+  "enabled": true,
+  "allowedActions": ["trash"],
+  "maxFilesPerRun": 20,
+  "createdAt": "2026-07-11T09:02:00Z",
+  "expiresAt": null
+}

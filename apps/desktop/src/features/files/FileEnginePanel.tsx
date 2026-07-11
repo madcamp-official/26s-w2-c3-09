@@ -25,6 +25,7 @@ import {
   selectManagedRootDirectory,
   startWatchingRoot,
   stopWatchingRoot,
+  trashFile,
   undoLastFileOperation,
   undoOperation,
   UndoReport
@@ -427,6 +428,33 @@ export function FileEnginePanel() {
     }
   }
 
+  async function trashBrowseEntry(entry: BrowseEntry) {
+    if (!selectedRootId || entry.is_dir) return;
+
+    const confirmed = window.confirm(`Move ${entry.path} into recoverable trash?`);
+    if (!confirmed) return;
+
+    setError(null);
+    setStatus("Moving file to trash");
+    try {
+      const report = await trashFile(selectedRootId, entry.path);
+      setResultLines([
+        `trashed | ${report.original_path} -> ${report.trashed_path}`,
+        `metadata | ${report.metadata_path}`,
+        `operation | ${report.operation_id}`
+      ]);
+      setStatus("File moved to recoverable trash");
+      await refreshBrowse(selectedRootId, browsePath);
+      await refreshHistory(selectedRootId);
+      if (searchResults !== null) {
+        await runSearch(selectedRootId, searchQuery);
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Trash failed");
+    }
+  }
+
   function openBrowseEntry(entry: BrowseEntry) {
     if (entry.is_dir) {
       setBrowsePath(entry.path);
@@ -680,17 +708,31 @@ export function FileEnginePanel() {
         </nav>
         <div className="browse-list">
           {browseEntries.map((entry) => (
-            <button
-              type="button"
-              key={entry.path}
-              className="browse-row"
-              onClick={() => openBrowseEntry(entry)}
-              disabled={!entry.is_dir}
-            >
+            <article key={entry.path} className="browse-row">
               <span>{entry.is_dir ? "📁" : "📄"}</span>
-              <strong>{entry.name}</strong>
+              {entry.is_dir ? (
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => openBrowseEntry(entry)}
+                >
+                  {entry.name}
+                </button>
+              ) : (
+                <strong>{entry.name}</strong>
+              )}
               {!entry.is_dir ? <small>{formatBrowseSize(entry.size_bytes)}</small> : null}
-            </button>
+              {!entry.is_dir ? (
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => void trashBrowseEntry(entry)}
+                  disabled={!!journalCorruption}
+                >
+                  Trash
+                </button>
+              ) : null}
+            </article>
           ))}
           {selectedRootId && browseEntries.length === 0 ? <p>This folder is empty.</p> : null}
           {!selectedRootId ? <p>Select a root to browse its files.</p> : null}

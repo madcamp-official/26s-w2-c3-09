@@ -55,7 +55,7 @@ export type ProposalStatus = "ready" | "destination_exists";
 
 export type Proposal = {
   proposal_id: string;
-  action: "move";
+  action: "move" | "trash";
   from: string;
   to: string;
   source_size_bytes: number;
@@ -83,6 +83,7 @@ export type PrecheckStatus =
   | "rejected_path";
 
 export type PrecheckResult = {
+  action: "move" | "trash";
   from: string;
   to: string;
   status: PrecheckStatus;
@@ -97,6 +98,7 @@ export type PrecheckReport = {
 export type ExecuteStatus = "executed" | "skipped" | "rejected";
 
 export type ExecuteResult = {
+  action: "move" | "trash";
   from: string;
   to: string;
   status: ExecuteStatus;
@@ -127,13 +129,35 @@ export type UndoReport = {
 
 export type OperationHistoryEntry = {
   operation_id: string;
-  action: "move";
+  action: "move" | "trash";
   from: string;
   to: string;
   latest_status: "planned" | "executed" | "undo_planned" | "undone";
   created_unix_ms: number;
   can_undo: boolean;
   undo_blocked_reason: string | null;
+};
+
+export type TrashReport = {
+  root: string;
+  journal_path: string;
+  operation_id: string;
+  original_path: string;
+  trashed_path: string;
+  metadata_path: string;
+};
+
+export type CreateFileReport = {
+  root: string;
+  created_path: string;
+};
+
+export type RenameFileReport = {
+  root: string;
+  journal_path: string;
+  operation_id: string;
+  from: string;
+  to: string;
 };
 
 export type JournalCorruption = {
@@ -204,6 +228,18 @@ export function executeFileChanges(
     proposal,
     decisions
   });
+}
+
+export function trashFile(rootId: string, path: string) {
+  return invokeCommand<TrashReport>("trash_file", { rootId, path });
+}
+
+export function createFile(rootId: string, path: string) {
+  return invokeCommand<CreateFileReport>("create_file", { rootId, path });
+}
+
+export function renameFile(rootId: string, path: string, newName: string) {
+  return invokeCommand<RenameFileReport>("rename_file", { rootId, path, newName });
 }
 
 export function undoLastFileOperation(rootId: string) {

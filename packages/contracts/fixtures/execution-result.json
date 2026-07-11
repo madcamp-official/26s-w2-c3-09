@@ -14,11 +14,13 @@
   "rejectedCount": 1,
   "results": [
     {
+      "action": "move",
       "from": "inbox/note.md",
       "to": "documents/note.md",
       "status": "executed"
     },
     {
+      "action": "move",
       "from": "inbox/photo.png",
       "to": "images/photo.png",
       "status": "rejected",

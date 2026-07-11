@@ -49,7 +49,11 @@ pub struct Condition {
 pub struct Action {
     /// Destination directory relative to the managed root. Validated to stay inside the root
     /// (no absolute paths, no `..`) because this value can come from an untrusted source.
-    pub move_to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub move_to: Option<String>,
+    /// Moves a matched file into HouseMouse's recoverable root-local trash.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trash: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -134,11 +138,30 @@ impl Rule {
             }
         }
 
-        validate_relative_dir(&self.then.move_to).map_err(|message| RuleError::InvalidTarget {
-            rule: self.id.clone(),
-            target: self.then.move_to.clone(),
-            message,
-        })?;
+        match (&self.then.move_to, self.then.trash) {
+            (Some(target), false) => {
+                validate_relative_dir(target).map_err(|message| RuleError::InvalidTarget {
+                    rule: self.id.clone(),
+                    target: target.clone(),
+                    message,
+                })?;
+            }
+            (None, true) => {}
+            (Some(_), true) => {
+                return Err(RuleError::InvalidTarget {
+                    rule: self.id.clone(),
+                    target: "move_to + trash".to_string(),
+                    message: "choose exactly one action".to_string(),
+                });
+            }
+            (None, false) => {
+                return Err(RuleError::InvalidTarget {
+                    rule: self.id.clone(),
+                    target: "".to_string(),
+                    message: "action must set move_to or trash".to_string(),
+                });
+            }
+        }
 
         Ok(())
     }
@@ -172,6 +195,10 @@ fn validate_relative_dir(target: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl fmt::Display for RuleError {
@@ -235,7 +262,8 @@ mod tests {
             priority: 0,
             when,
             then: Action {
-                move_to: move_to.to_string(),
+                move_to: Some(move_to.to_string()),
+                trash: false,
             },
         }
     }
@@ -346,5 +374,44 @@ mod tests {
             parsed.is_err(),
             "unknown condition field should be rejected"
         );
+    }
+
+    #[test]
+    fn accepts_trash_action() {
+        let set = RuleSet {
+            version: CURRENT_RULES_VERSION,
+            rules: vec![Rule {
+                id: "old-downloads".to_string(),
+                priority: 0,
+                when: ext_condition(&["tmp"]),
+                then: Action {
+                    move_to: None,
+                    trash: true,
+                },
+            }],
+        };
+
+        assert!(set.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_rule_with_multiple_actions() {
+        let set = RuleSet {
+            version: CURRENT_RULES_VERSION,
+            rules: vec![Rule {
+                id: "ambiguous".to_string(),
+                priority: 0,
+                when: ext_condition(&["tmp"]),
+                then: Action {
+                    move_to: Some("documents".to_string()),
+                    trash: true,
+                },
+            }],
+        };
+
+        assert!(matches!(
+            set.validate(),
+            Err(RuleError::InvalidTarget { .. })
+        ));
     }
 }

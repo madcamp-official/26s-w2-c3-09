@@ -87,7 +87,7 @@ fn undo_with_filter(
         }
 
         if entry.status != JournalStatus::Executed
-            || entry.action != JournalAction::Move
+            || !matches!(entry.action, JournalAction::Move | JournalAction::Trash)
             || undone_operation_ids.contains(&entry.operation_id)
         {
             continue;
@@ -182,7 +182,7 @@ fn undo_entry(entry: &JournalEntry, status: JournalStatus) -> JournalEntry {
     JournalEntry {
         operation_id: entry.operation_id.clone(),
         status,
-        action: JournalAction::Move,
+        action: entry.action.clone(),
         from: entry.to.clone(),
         to: entry.from.clone(),
         created_unix_ms: unix_ms(),

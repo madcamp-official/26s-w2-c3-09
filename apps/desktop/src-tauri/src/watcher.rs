@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
-use file_engine_cli::journal::STATE_DIR;
+use file_engine_cli::journal::{STATE_DIR, TRASH_DIR};
 
 const DEBOUNCE: Duration = Duration::from_millis(500);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -93,13 +93,14 @@ pub fn watch_root_changes(
     })
 }
 
-/// Ignores events where every touched path is inside `.housemouse`: journal writes and
-/// managed-root bookkeeping should not themselves look like a user file change.
+/// Ignores events where every touched path is inside HouseMouse bookkeeping folders:
+/// journal writes and trash metadata should not themselves look like user file changes.
 fn is_relevant(event: &Event) -> bool {
     event.paths.iter().any(|path| {
-        !path
-            .components()
-            .any(|component| component.as_os_str() == STATE_DIR)
+        !path.components().any(|component| {
+            let name = component.as_os_str();
+            name == STATE_DIR || name == TRASH_DIR
+        })
     })
 }
 
@@ -190,7 +191,7 @@ mod tests {
     use notify::{Event, EventKind};
     use tempfile::tempdir;
 
-    use super::{classify_change, watch_root, WatchChange};
+    use super::{classify_change, is_relevant, watch_root, WatchChange};
 
     fn wait_until(condition: impl Fn() -> bool, timeout: Duration) -> bool {
         let start = Instant::now();
@@ -250,6 +251,18 @@ mod tests {
             !saw_change,
             "state-dir-only changes should not trigger on_change"
         );
+    }
+
+    #[test]
+    fn ignores_events_confined_to_the_housemouse_trash_dir() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let event = Event::new(EventKind::Modify(ModifyKind::Data(
+            notify::event::DataChange::Content,
+        )))
+        .add_path(root.join(".housemouse_trash").join("trash-1").join("file"));
+
+        assert!(!is_relevant(&event));
     }
 
     #[test]

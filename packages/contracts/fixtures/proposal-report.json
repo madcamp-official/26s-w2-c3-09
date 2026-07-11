@@ -26,6 +26,16 @@
       "sourceModifiedUnixMs": 1783760400000,
       "reason": "rule 'images' moves this into images/",
       "status": "destination_exists"
+    },
+    {
+      "proposalId": "trash:aaaaaaaaaaaaaaaa",
+      "action": "trash",
+      "from": "inbox/noise.tmp",
+      "to": ".housemouse_trash",
+      "sourceSizeBytes": 128,
+      "sourceModifiedUnixMs": 1783760400000,
+      "reason": "rule 'old-temp' moves this into recoverable trash",
+      "status": "ready"
     }
   ]
 }

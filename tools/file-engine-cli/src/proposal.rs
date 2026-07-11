@@ -27,10 +27,11 @@ pub struct Proposal {
     pub status: ProposalStatus,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ProposalAction {
     Move,
+    Trash,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -112,6 +113,7 @@ impl ProposalAction {
     pub fn as_str(&self) -> &'static str {
         match self {
             ProposalAction::Move => "move",
+            ProposalAction::Trash => "trash",
         }
     }
 }

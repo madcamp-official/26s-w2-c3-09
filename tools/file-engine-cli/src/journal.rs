@@ -13,6 +13,7 @@ use crate::path_guard::{PathGuard, PathGuardError};
 use crate::precondition::{precheck_root, PrecheckError, PrecheckStatus};
 
 pub const STATE_DIR: &str = ".housemouse";
+pub const TRASH_DIR: &str = ".housemouse_trash";
 pub const JOURNAL_FILE: &str = "journal.jsonl";
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -100,18 +101,21 @@ impl JournalStatus {
 #[serde(rename_all = "snake_case")]
 pub enum JournalAction {
     Move,
+    Trash,
 }
 
 impl JournalAction {
     fn as_db_str(&self) -> &'static str {
         match self {
             JournalAction::Move => "move",
+            JournalAction::Trash => "trash",
         }
     }
 
     fn from_db_str(value: &str) -> Option<Self> {
         match value {
             "move" => Some(JournalAction::Move),
+            "trash" => Some(JournalAction::Trash),
             _ => None,
         }
     }
@@ -376,7 +380,7 @@ fn undo_blocked_reason_from_filesystem(
     root: &Path,
     operation: &OperationHistoryEntry,
 ) -> Option<String> {
-    if operation.action != JournalAction::Move {
+    if !matches!(operation.action, JournalAction::Move | JournalAction::Trash) {
         return None;
     }
 

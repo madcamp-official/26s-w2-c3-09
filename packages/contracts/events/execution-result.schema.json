@@ -80,8 +80,9 @@
     "ExecutionItemResult": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["from", "to", "status"],
+      "required": ["action", "from", "to", "status"],
       "properties": {
+        "action": { "type": "string", "enum": ["move", "trash"] },
         "from": { "$ref": "#/$defs/SafeRelativePath" },
         "to": { "$ref": "#/$defs/SafeRelativePath" },
         "status": {

@@ -60,7 +60,7 @@ fn collect_files(
             message: error.to_string(),
         })?;
         let path = entry.path();
-        if is_housemouse_state_dir(&path) {
+        if is_housemouse_internal_dir(&path) {
             continue;
         }
 
@@ -114,10 +114,10 @@ fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
         .map(|duration| duration.as_millis())
 }
 
-fn is_housemouse_state_dir(path: &Path) -> bool {
+fn is_housemouse_internal_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name == ".housemouse")
+        .is_some_and(|name| name == crate::journal::STATE_DIR || name == crate::journal::TRASH_DIR)
 }
 
 impl fmt::Display for AnalyzeError {
@@ -199,6 +199,28 @@ mod tests {
 
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].path, "real.txt");
+    }
+
+    #[test]
+    fn ignores_housemouse_trash_dir() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join(crate::journal::TRASH_DIR)).expect("create trash dir");
+        fs::write(root.join("real.txt"), "real").expect("write real");
+        fs::write(
+            root.join(crate::journal::TRASH_DIR).join("hidden.txt"),
+            "hidden",
+        )
+        .expect("write trash file");
+
+        let report = analyze_root(&root).expect("analyze");
+
+        let paths = report
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, vec!["real.txt"]);
     }
 
     #[cfg(windows)]
