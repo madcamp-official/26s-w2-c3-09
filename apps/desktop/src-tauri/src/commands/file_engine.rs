@@ -445,6 +445,22 @@ mod tests {
     }
 
     #[test]
+    fn register_managed_root_rejects_parent_child_overlap() {
+        let temp = tempdir().expect("tempdir");
+        let parent = temp.path().join("parent");
+        let child = parent.join("child");
+        fs::create_dir_all(&child).expect("create nested roots");
+        let store = ManagedRootStore::default();
+
+        register_managed_root_in_store(parent.display().to_string(), &store)
+            .expect("register parent");
+        let error = register_managed_root_in_store(child.display().to_string(), &store)
+            .expect_err("reject child root");
+
+        assert!(error.contains("parent root"));
+    }
+
+    #[test]
     fn command_flow_moves_only_approved_items_and_undoes_them() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");

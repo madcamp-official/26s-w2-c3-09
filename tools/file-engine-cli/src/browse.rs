@@ -7,6 +7,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
+use crate::fs_safety::is_link_or_reparse_point;
 use crate::path_guard::{PathGuard, PathGuardError};
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -80,7 +81,7 @@ pub fn browse_root(
             })?;
         let file_type = metadata.file_type();
 
-        if file_type.is_symlink() {
+        if is_link_or_reparse_point(&metadata, file_type) {
             continue;
         }
 
@@ -279,6 +280,29 @@ mod tests {
         #[cfg(windows)]
         std::os::windows::fs::symlink_file(root.join("real.txt"), root.join("link.txt"))
             .expect("create symlink");
+
+        let report = browse_root(&root, None).expect("browse");
+
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].name, "real.txt");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ignores_windows_reparse_directory_entries() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("create root");
+        fs::create_dir_all(&outside).expect("create outside");
+        fs::write(root.join("real.txt"), "real").expect("write real");
+        fs::write(outside.join("secret.txt"), "secret").expect("write outside");
+
+        let link = root.join("outside-link");
+        if let Err(error) = std::os::windows::fs::symlink_dir(&outside, &link) {
+            eprintln!("skipping reparse browse test; cannot create directory symlink: {error}");
+            return;
+        }
 
         let report = browse_root(&root, None).expect("browse");
 

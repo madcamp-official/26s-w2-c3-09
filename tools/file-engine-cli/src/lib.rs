@@ -4,6 +4,7 @@ pub mod db;
 pub mod decision;
 pub mod execute;
 pub mod file_index;
+pub mod fs_safety;
 pub mod journal;
 pub mod path_guard;
 pub mod precondition;

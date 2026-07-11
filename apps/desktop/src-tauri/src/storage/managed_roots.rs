@@ -32,6 +32,7 @@ impl ManagedRootStore {
             migrate(&pool).await?;
             read_roots(&pool).await
         })?;
+        validate_no_overlaps(&loaded)?;
 
         {
             let mut stored_pool = self
@@ -59,6 +60,7 @@ impl ManagedRootStore {
                 .roots
                 .lock()
                 .map_err(|_| "managed root store lock poisoned".to_string())?;
+            ensure_not_overlapping(&roots, &root)?;
             roots.insert(root.root_id.clone(), root.clone());
         }
 
@@ -109,6 +111,65 @@ impl ManagedRootStore {
 
         Ok(())
     }
+}
+
+fn validate_no_overlaps(roots: &[ManagedRoot]) -> Result<(), String> {
+    for (index, candidate) in roots.iter().enumerate() {
+        let existing = roots
+            .iter()
+            .enumerate()
+            .filter(|(other_index, _)| *other_index != index)
+            .map(|(_, root)| root);
+        ensure_not_overlapping_iter(existing, candidate)?;
+    }
+
+    Ok(())
+}
+
+fn ensure_not_overlapping(
+    roots: &BTreeMap<String, ManagedRoot>,
+    candidate: &ManagedRoot,
+) -> Result<(), String> {
+    ensure_not_overlapping_iter(roots.values(), candidate)
+}
+
+fn ensure_not_overlapping_iter<'a>(
+    roots: impl Iterator<Item = &'a ManagedRoot>,
+    candidate: &ManagedRoot,
+) -> Result<(), String> {
+    let candidate_path = Path::new(&candidate.root);
+
+    for existing in roots {
+        if existing.root_id == candidate.root_id {
+            continue;
+        }
+
+        let existing_path = Path::new(&existing.root);
+        if existing_path == candidate_path {
+            return Err(format!(
+                "managed root is already registered: {}",
+                candidate_path.display()
+            ));
+        }
+
+        if existing_path.starts_with(candidate_path) {
+            return Err(format!(
+                "managed root overlaps an existing registered child root: candidate={}, existing={}",
+                candidate_path.display(),
+                existing_path.display()
+            ));
+        }
+
+        if candidate_path.starts_with(existing_path) {
+            return Err(format!(
+                "managed root overlaps an existing registered parent root: candidate={}, existing={}",
+                candidate_path.display(),
+                existing_path.display()
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 async fn migrate(pool: &SqlitePool) -> Result<(), String> {
@@ -247,5 +308,84 @@ mod tests {
             reloaded.get("root:cafe").expect("get root").display_name,
             "work"
         );
+    }
+
+    #[test]
+    fn upsert_rejects_child_root_overlap() {
+        let store = ManagedRootStore::default();
+
+        store
+            .upsert(ManagedRoot {
+                root_id: "root:parent".to_string(),
+                root: "C:/work".to_string(),
+                display_name: "work".to_string(),
+            })
+            .expect("insert parent root");
+
+        let error = store
+            .upsert(ManagedRoot {
+                root_id: "root:child".to_string(),
+                root: "C:/work/project".to_string(),
+                display_name: "project".to_string(),
+            })
+            .expect_err("reject child root");
+
+        assert!(error.contains("parent root"));
+    }
+
+    #[test]
+    fn upsert_rejects_parent_root_overlap() {
+        let store = ManagedRootStore::default();
+
+        store
+            .upsert(ManagedRoot {
+                root_id: "root:child".to_string(),
+                root: "C:/work/project".to_string(),
+                display_name: "project".to_string(),
+            })
+            .expect("insert child root");
+
+        let error = store
+            .upsert(ManagedRoot {
+                root_id: "root:parent".to_string(),
+                root: "C:/work".to_string(),
+                display_name: "work".to_string(),
+            })
+            .expect_err("reject parent root");
+
+        assert!(error.contains("child root"));
+    }
+
+    #[test]
+    fn load_from_database_rejects_overlapping_roots() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("managed-roots.db");
+        let store = ManagedRootStore::default();
+        store.load_from_db(&path).expect("configure database");
+        store
+            .upsert(ManagedRoot {
+                root_id: "root:parent".to_string(),
+                root: "C:/work".to_string(),
+                display_name: "work".to_string(),
+            })
+            .expect("insert parent root");
+
+        let pool = file_engine_cli::db::open_pool_at(&path).expect("open db");
+        file_engine_cli::db::block_on(async {
+            sqlx::query(
+                "INSERT INTO managed_roots (root_id, canonical_path, display_name)
+                 VALUES ('root:child', 'C:/work/project', 'project')",
+            )
+            .execute(&pool)
+            .await
+            .expect("insert overlapping row");
+        });
+
+        let reloaded = ManagedRootStore::default();
+        let error = reloaded
+            .load_from_db(&path)
+            .expect_err("reject overlapping database state");
+
+        assert!(error.contains("overlaps"));
     }
 }
