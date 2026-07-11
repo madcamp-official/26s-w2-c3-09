@@ -10,3 +10,6 @@ components:
       type: http
       scheme: bearer
       bearerFormat: Firebase ID token
+  schemas:
+    Command:
+      $ref: ./events/command.schema.json
