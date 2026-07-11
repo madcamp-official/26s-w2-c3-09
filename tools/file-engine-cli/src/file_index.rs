@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
@@ -28,6 +30,8 @@ pub enum FileIndexError {
     Guard(PathGuardError),
     Analyze(AnalyzeError),
     Db(DbError),
+    Metadata { path: PathBuf, message: String },
+    NotAFile { path: PathBuf },
 }
 
 /// Rebuilds the SQLite `file_index` for a root from a fresh scan. Runs in one transaction so
@@ -81,6 +85,34 @@ pub fn reindex_root(root: impl AsRef<Path>) -> Result<FileIndexReport, FileIndex
     })
 }
 
+/// Reads one existing file under the managed root and writes its current metadata into the
+/// index. Directory events should fall back to a full reindex because one directory change may
+/// represent many child file changes.
+pub fn upsert_existing_file(
+    root: impl AsRef<Path>,
+    relative_path: &str,
+) -> Result<(), FileIndexError> {
+    let guard = PathGuard::new(root).map_err(FileIndexError::Guard)?;
+    let path = guard
+        .resolve_existing(relative_path)
+        .map_err(FileIndexError::Guard)?;
+    let metadata = fs::symlink_metadata(&path).map_err(|error| FileIndexError::Metadata {
+        path: path.clone(),
+        message: error.to_string(),
+    })?;
+
+    if !metadata.is_file() {
+        return Err(FileIndexError::NotAFile { path });
+    }
+
+    upsert_file(
+        guard.root(),
+        relative_path,
+        metadata.len(),
+        modified_unix_ms(&metadata),
+    )
+}
+
 /// Inserts or updates a single file. This is the hook a watcher uses on a create/modify event
 /// so a change touches one row instead of forcing a full rescan.
 pub fn upsert_file(
@@ -115,16 +147,28 @@ pub fn upsert_file(
 
 /// Removes a single file from the index, e.g. on a watcher delete event.
 pub fn remove_file(root: impl AsRef<Path>, relative_path: &str) -> Result<(), FileIndexError> {
+    remove_path(root, relative_path)
+}
+
+/// Removes either one indexed file or an indexed subtree. The subtree case is needed for
+/// delete/rename events where the removed path may have been a directory and no longer exists
+/// on disk for metadata inspection.
+pub fn remove_path(root: impl AsRef<Path>, relative_path: &str) -> Result<(), FileIndexError> {
     let guard = PathGuard::new(root).map_err(FileIndexError::Guard)?;
     let pool = open_root_db(guard.root()).map_err(FileIndexError::Db)?;
+    let prefix = format!("{}/%", escape_like(relative_path.trim_end_matches('/')));
 
     block_on(async {
-        sqlx::query("DELETE FROM file_index WHERE relative_path = ?")
-            .bind(relative_path)
-            .execute(&pool)
-            .await
-            .map(|_| ())
-            .map_err(query_error)
+        sqlx::query(
+            "DELETE FROM file_index
+             WHERE relative_path = ? OR relative_path LIKE ? ESCAPE '\\'",
+        )
+        .bind(relative_path)
+        .bind(prefix)
+        .execute(&pool)
+        .await
+        .map(|_| ())
+        .map_err(query_error)
     })
     .map_err(FileIndexError::Db)
 }
@@ -217,6 +261,15 @@ fn extension_of(path: &str) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
+fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
+}
+
 fn query_error(error: sqlx::Error) -> DbError {
     DbError::Query {
         message: error.to_string(),
@@ -229,6 +282,16 @@ impl fmt::Display for FileIndexError {
             FileIndexError::Guard(error) => write!(formatter, "{error}"),
             FileIndexError::Analyze(error) => write!(formatter, "{error}"),
             FileIndexError::Db(error) => write!(formatter, "{error}"),
+            FileIndexError::Metadata { path, message } => {
+                write!(
+                    formatter,
+                    "cannot read metadata {}: {message}",
+                    path.display()
+                )
+            }
+            FileIndexError::NotAFile { path } => {
+                write!(formatter, "index entry is not a file: {}", path.display())
+            }
         }
     }
 }
@@ -241,7 +304,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{list_index, reindex_root, remove_file, search_index, upsert_file};
+    use super::{
+        list_index, reindex_root, remove_file, remove_path, search_index, upsert_existing_file,
+        upsert_file,
+    };
 
     fn make_root() -> (tempfile::TempDir, std::path::PathBuf) {
         let temp = tempdir().expect("tempdir");
@@ -312,6 +378,35 @@ mod tests {
             .files
             .iter()
             .any(|file| file.relative_path == "inbox/added.txt"));
+    }
+
+    #[test]
+    fn upsert_existing_file_reads_current_metadata() {
+        let (_temp, root) = make_root();
+        reindex_root(&root).expect("reindex");
+        fs::write(root.join("inbox").join("fresh.txt"), "fresh").expect("write fresh");
+
+        upsert_existing_file(&root, "inbox/fresh.txt").expect("upsert existing");
+
+        let listed = list_index(&root).expect("list");
+        let fresh = listed
+            .files
+            .iter()
+            .find(|file| file.relative_path == "inbox/fresh.txt")
+            .expect("fresh indexed");
+        assert_eq!(fresh.size_bytes, 5);
+        assert_eq!(fresh.extension.as_deref(), Some("txt"));
+    }
+
+    #[test]
+    fn remove_path_clears_indexed_subtrees() {
+        let (_temp, root) = make_root();
+        reindex_root(&root).expect("reindex");
+
+        remove_path(&root, "inbox").expect("remove subtree");
+
+        let listed = list_index(&root).expect("list");
+        assert!(listed.files.is_empty());
     }
 
     #[test]
