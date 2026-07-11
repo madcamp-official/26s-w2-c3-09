@@ -1,0 +1,2 @@
+ALTER TABLE "file_transfers" ADD COLUMN "upload_completion_idempotency_key" varchar(128);--> statement-breakpoint
+CREATE UNIQUE INDEX "transfers_upload_completion_idempotency_idx" ON "file_transfers" USING btree ("requested_by_user_id","upload_completion_idempotency_key");

@@ -1,0 +1,2 @@
+ALTER TABLE "pairing_sessions" ADD COLUMN "claimed_device_id" uuid;--> statement-breakpoint
+ALTER TABLE "pairing_sessions" ADD CONSTRAINT "pairing_sessions_claimed_device_id_devices_id_fk" FOREIGN KEY ("claimed_device_id") REFERENCES "public"."devices"("id") ON DELETE no action ON UPDATE no action;

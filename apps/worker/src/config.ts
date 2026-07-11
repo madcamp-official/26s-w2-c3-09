@@ -1,0 +1,3 @@
+import { z } from 'zod';
+const schema = z.object({ DATABASE_URL: z.url(), OBJECT_STORAGE_ENDPOINT: z.url(), OBJECT_STORAGE_REGION: z.string().min(1), OBJECT_STORAGE_BUCKET: z.string().min(1), OBJECT_STORAGE_ACCESS_KEY_ID: z.string().min(1), OBJECT_STORAGE_SECRET_ACCESS_KEY: z.string().min(1), FILE_TRANSFER_TTL_SECONDS: z.coerce.number().int().min(60).max(3600) });
+export function loadWorkerConfig(source: NodeJS.ProcessEnv = process.env) { const result = schema.safeParse(source); if (!result.success) throw new Error(`UNCONFIGURED: ${result.error.issues.map((i) => i.path.join('.')).join(', ')}`); return result.data; }

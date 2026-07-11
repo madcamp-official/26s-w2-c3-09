@@ -1,0 +1,262 @@
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  createExecutionSchema,
+  updateExecutionSchema,
+} from '@housemouse/contracts';
+import {
+  auditEvents,
+  commands,
+  decisions,
+  devices,
+  executions,
+  proposals,
+  rooms,
+  type Database,
+} from '@housemouse/database';
+import { and, desc, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import { isDeepStrictEqual } from 'node:util';
+import { DATABASE } from '../database/database.module';
+import { SyncService } from '../sync/sync.service';
+import { AffinityService } from '../affinity/affinity.service';
+
+@Injectable()
+export class ExecutionsService {
+  constructor(
+    @Inject(DATABASE) private readonly db: Database,
+    private readonly sync: SyncService,
+    private readonly affinity: AffinityService,
+  ) {}
+  async create(
+    userId: string,
+    key: string,
+    body: z.infer<typeof createExecutionSchema>,
+  ) {
+    return this.db.transaction(async (tx) => {
+      const source = (
+        await tx
+          .select({ proposal: proposals, decision: decisions, device: devices })
+          .from(proposals)
+          .innerJoin(decisions, eq(decisions.proposalId, proposals.id))
+          .innerJoin(commands, eq(commands.id, proposals.commandId))
+          .innerJoin(devices, eq(devices.id, body.desktopDeviceId))
+          .where(
+            and(
+              eq(proposals.id, body.proposalId),
+              eq(decisions.id, body.decisionId),
+              eq(decisions.decisionType, 'APPROVE'),
+              eq(commands.targetDeviceId, body.desktopDeviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('update')
+          .limit(1)
+      )[0];
+      if (!source) throw new ForbiddenException({ code: 'FORBIDDEN' });
+      if (source.proposal.status !== 'APPROVED')
+        throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
+      const inserted = (
+        await tx
+          .insert(executions)
+          .values({ ...body, idempotencyKey: key })
+          .onConflictDoNothing()
+          .returning()
+      )[0];
+      if (!inserted) {
+        const existing = (
+          await tx
+            .select()
+            .from(executions)
+            .where(eq(executions.idempotencyKey, key))
+            .limit(1)
+        )[0];
+        if (!existing) throw new ConflictException({ code: 'CONFLICT' });
+        return this.publicExecution(existing);
+      }
+      const execution = inserted;
+      await tx
+        .update(commands)
+        .set({ status: 'EXECUTING' })
+        .where(eq(commands.id, source.proposal.commandId));
+      await this.sync.append(tx, {
+        userId,
+        deviceId: body.desktopDeviceId,
+        roomId: source.proposal.roomId,
+        eventType: 'execution.updated',
+        aggregateType: 'execution',
+        aggregateId: execution.id,
+        payload: { status: execution.status },
+      });
+      return this.publicExecution(execution);
+    });
+  }
+  async update(
+    userId: string,
+    deviceId: string,
+    executionId: string,
+    idempotencyKey: string,
+    body: z.infer<typeof updateExecutionSchema>,
+  ) {
+    return this.db.transaction(async (tx) => {
+      const replay = (
+        await tx
+          .select({ execution: executions, device: devices })
+          .from(executions)
+          .innerJoin(devices, eq(executions.desktopDeviceId, devices.id))
+          .where(
+            and(
+              eq(executions.resultIdempotencyKey, idempotencyKey),
+              eq(devices.userId, userId),
+              eq(executions.desktopDeviceId, deviceId),
+            ),
+          )
+          .limit(1)
+      )[0]?.execution;
+      if (replay) {
+        if (
+          replay.id !== executionId ||
+          replay.status !== body.status ||
+          !isDeepStrictEqual(replay.resultSummary, body.resultSummary)
+        )
+          throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+        return this.publicExecution(replay);
+      }
+      const source = (
+        await tx
+          .select({
+            execution: executions,
+            proposal: proposals,
+            device: devices,
+          })
+          .from(executions)
+          .innerJoin(proposals, eq(executions.proposalId, proposals.id))
+          .innerJoin(devices, eq(executions.desktopDeviceId, devices.id))
+          .where(
+            and(
+              eq(executions.id, executionId),
+              eq(executions.desktopDeviceId, deviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('update')
+          .limit(1)
+      )[0];
+      if (!source) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (source.execution.resultIdempotencyKey === idempotencyKey) {
+        if (
+          source.execution.status !== body.status ||
+          !isDeepStrictEqual(source.execution.resultSummary, body.resultSummary)
+        )
+          throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+        return this.publicExecution(source.execution);
+      }
+      if (source.execution.status !== 'EXECUTING')
+        throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
+      const updated = (
+        await tx
+          .update(executions)
+          .set({
+            status: body.status,
+            resultSummary: body.resultSummary,
+            resultIdempotencyKey: idempotencyKey,
+            finishedAt: new Date(),
+          })
+          .where(eq(executions.id, executionId))
+          .returning()
+      )[0];
+      if (!updated) throw new ConflictException({ code: 'CONFLICT' });
+      const finalCommandStatus =
+        body.status === 'ROLLED_BACK' ? 'FAILED' : body.status;
+      await tx
+        .update(commands)
+        .set({ status: finalCommandStatus, finishedAt: new Date() })
+        .where(eq(commands.id, source.proposal.commandId));
+      await this.sync.append(tx, {
+        userId,
+        deviceId: source.execution.desktopDeviceId,
+        roomId: source.proposal.roomId,
+        eventType: 'execution.updated',
+        aggregateType: 'execution',
+        aggregateId: executionId,
+        payload: { status: body.status },
+      });
+      await tx.insert(auditEvents).values({
+        userId,
+        deviceId: source.execution.desktopDeviceId,
+        roomId: source.proposal.roomId,
+        eventType: 'execution.completed',
+        aggregateType: 'execution',
+        aggregateId: executionId,
+        metadata: { status: body.status },
+      });
+      if (body.status === 'SUCCEEDED') {
+        await this.affinity.append(tx, {
+          userId,
+          eventType: 'EXECUTION_SUCCEEDED',
+          delta: 2,
+          sourceExecutionId: executionId,
+        });
+      }
+      return this.publicExecution(updated);
+    });
+  }
+
+  async listForRoom(userId: string, roomId: string) {
+    const room = (
+      await this.db
+        .select({ id: rooms.id })
+        .from(rooms)
+        .where(and(eq(rooms.id, roomId), eq(rooms.userId, userId)))
+        .limit(1)
+    )[0];
+    if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const history = await this.db
+      .select({ execution: executions, proposal: proposals })
+      .from(executions)
+      .innerJoin(proposals, eq(executions.proposalId, proposals.id))
+      .where(eq(proposals.roomId, roomId))
+      .orderBy(desc(executions.startedAt));
+    return history.map((item) => ({
+      execution: this.publicExecution(item.execution),
+      proposal: this.publicProposal(item.proposal),
+    }));
+  }
+
+  async get(userId: string, executionId: string) {
+    const result = (
+      await this.db
+        .select({ execution: executions, proposal: proposals })
+        .from(executions)
+        .innerJoin(proposals, eq(executions.proposalId, proposals.id))
+        .innerJoin(
+          rooms,
+          and(eq(proposals.roomId, rooms.id), eq(rooms.userId, userId)),
+        )
+        .where(eq(executions.id, executionId))
+        .limit(1)
+    )[0];
+    if (!result) throw new NotFoundException({ code: 'NOT_FOUND' });
+    return {
+      execution: this.publicExecution(result.execution),
+      proposal: this.publicProposal(result.proposal),
+    };
+  }
+
+  private publicExecution(execution: typeof executions.$inferSelect) {
+    const { idempotencyKey: _, resultIdempotencyKey: __, ...safe } = execution;
+    return safe;
+  }
+
+  private publicProposal(proposal: typeof proposals.$inferSelect) {
+    const { idempotencyKey: _, ...safe } = proposal;
+    return safe;
+  }
+}

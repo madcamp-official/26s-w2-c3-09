@@ -1,0 +1,444 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
+import 'package:dio/dio.dart';
+import '../../core/network/api_client.dart';
+import '../../core/sync/mutation_queue.dart';
+import '../../core/sync/realtime_controller.dart';
+import '../../storage/display_cache.dart';
+import '../proposals/proposal_page.dart';
+import '../files/files_page.dart';
+import '../files/smart_cache_page.dart';
+import '../chat/chat_page.dart';
+import '../rules/rules_page.dart';
+
+class _RoomContent {
+  const _RoomContent({
+    required this.commands,
+    required this.proposals,
+    required this.executions,
+    required this.activity,
+    required this.snapshot,
+    required this.isOffline,
+  });
+  final List<Map<String, dynamic>> commands;
+  final List<Map<String, dynamic>> proposals;
+  final List<Map<String, dynamic>> executions;
+  final List<Map<String, dynamic>> activity;
+  final Map<String, dynamic>? snapshot;
+  final bool isOffline;
+}
+
+class RoomPage extends ConsumerStatefulWidget {
+  const RoomPage({super.key, required this.room});
+  final Map<String, dynamic> room;
+  @override
+  ConsumerState<RoomPage> createState() => _RoomPageState();
+}
+
+class _RoomPageState extends ConsumerState<RoomPage> {
+  late Future<_RoomContent> _content;
+  bool _submitting = false;
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<_RoomContent> _load() async {
+    final api = ref.read(apiClientProvider);
+    final cache = ref.read(displayCacheProvider);
+    final id = widget.room['id'] as String;
+    try {
+      final lists = await Future.wait([
+        api.getList('/v1/rooms/$id/commands'),
+        api.getList('/v1/rooms/$id/proposals/open'),
+        api.getList('/v1/rooms/$id/executions'),
+        api.getList('/v1/rooms/$id/activity?limit=20'),
+      ]);
+      final snapshot = await api.getNullable('/v1/rooms/$id/snapshots/latest');
+      await Future.wait([
+        cache.replaceCommands(id, lists[0]),
+        cache.replaceProposals(id, lists[1]),
+        cache.replaceExecutions(id, lists[2]),
+        cache.saveSnapshot(id, snapshot),
+      ]);
+      return _RoomContent(
+        commands: lists[0],
+        proposals: lists[1],
+        executions: lists[2],
+        activity: lists[3],
+        snapshot: snapshot,
+        isOffline: false,
+      );
+    } on DioException catch (error) {
+      if (!_isOffline(error)) rethrow;
+      final cached = await Future.wait<dynamic>([
+        cache.commands(id),
+        cache.proposals(id),
+        cache.executions(id),
+        cache.snapshot(id),
+      ]);
+      return _RoomContent(
+        commands: cached[0] as List<Map<String, dynamic>>,
+        proposals: cached[1] as List<Map<String, dynamic>>,
+        executions: cached[2] as List<Map<String, dynamic>>,
+        activity: const [],
+        snapshot: cached[3] as Map<String, dynamic>?,
+        isOffline: true,
+      );
+    }
+  }
+
+  bool _isOffline(DioException error) {
+    return switch (error.type) {
+      DioExceptionType.connectionError ||
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.receiveTimeout ||
+      DioExceptionType.sendTimeout => true,
+      _ => false,
+    };
+  }
+
+  void _reload() {
+    _content = _load();
+  }
+
+  Future<void> _createCommand() async {
+    setState(() => _submitting = true);
+    try {
+      final id = widget.room['id'] as String;
+      final result = await ref
+          .read(mutationQueueProvider)
+          .postOrQueue(
+            mutationType: 'CREATE_COMMAND',
+            path: '/v1/rooms/$id/commands',
+            body: {'intent': 'ANALYZE', 'payload': <String, dynamic>{}},
+            idempotencyKey: const Uuid().v4(),
+          );
+      if (result.queued) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('오프라인 요청함에 저장했습니다. 연결되면 자동 전송됩니다.')),
+          );
+        }
+      } else {
+        setState(_reload);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('명령 생성 실패: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen(realtimeRevisionProvider, (previous, next) {
+      if (previous != null && mounted) setState(_reload);
+    });
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.room['name'] as String? ?? '방'),
+        actions: [
+          IconButton(
+            tooltip: '정리 규칙',
+            icon: const Icon(Icons.rule_folder_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => RulesPage(roomId: widget.room['id'] as String),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '채팅',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ChatPage(roomId: widget.room['id'] as String),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '스마트 캐시',
+            icon: const Icon(Icons.offline_bolt_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) =>
+                    SmartCachePage(roomId: widget.room['id'] as String),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: '온라인 파일',
+            icon: const Icon(Icons.folder_open),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => FilesPage(roomId: widget.room['id'] as String),
+              ),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _submitting ? null : _createCommand,
+        icon: const Icon(Icons.auto_fix_high),
+        label: const Text('정리 제안 요청'),
+      ),
+      body: FutureBuilder<_RoomContent>(
+        future: _content,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                '방 정보를 불러오지 못했습니다.\n${snapshot.error}',
+                textAlign: TextAlign.center,
+              ),
+            );
+          }
+          final content = snapshot.data!;
+          final commands = content.commands;
+          final proposals = content.proposals;
+          final executions = content.executions;
+          final activity = content.activity;
+          final analyzing = commands.any(
+            (command) => ['DELIVERED', 'ANALYZING'].contains(command['status']),
+          );
+          return RefreshIndicator(
+            onRefresh: () async {
+              setState(_reload);
+              await _content;
+            },
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+              children: [
+                if (content.isOffline) ...[
+                  const Card(
+                    color: Color(0xFFFFF3E0),
+                    child: ListTile(
+                      leading: Icon(Icons.cloud_off_outlined),
+                      title: Text('오프라인 상태'),
+                      subtitle: Text('마지막 동기화 결과를 표시합니다.'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (analyzing) ...[
+                  const Card(
+                    child: ListTile(
+                      leading: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 3),
+                      ),
+                      title: Text('PC가 폴더를 분석 중입니다'),
+                      subtitle: Text('새 제안이 준비되면 자동으로 갱신됩니다.'),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                _CleanlinessCard(snapshot: content.snapshot),
+                const SizedBox(height: 20),
+                Text('승인 대기 제안', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                if (proposals.isEmpty)
+                  const Card(child: ListTile(title: Text('승인 대기 중인 제안이 없습니다')))
+                else
+                  ...proposals.map(
+                    (proposal) => Card(
+                      child: ListTile(
+                        title: const Text('파일 정리 제안'),
+                        subtitle: Text(proposal['status'] as String? ?? ''),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ProposalPage(
+                                proposalId: proposal['id'] as String,
+                              ),
+                            ),
+                          );
+                          if (mounted) setState(_reload);
+                        },
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 20),
+                Text('최근 명령', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                if (commands.isEmpty)
+                  const Card(child: ListTile(title: Text('아직 요청한 명령이 없습니다')))
+                else
+                  ...commands.reversed
+                      .take(20)
+                      .map(
+                        (command) => Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.task_alt),
+                            title: Text(command['intent'] as String? ?? '명령'),
+                            subtitle: Text(
+                              command['status'] as String? ?? '상태 없음',
+                            ),
+                          ),
+                        ),
+                      ),
+                const SizedBox(height: 20),
+                Text('최근 실행 결과', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                if (executions.isEmpty)
+                  const Card(child: ListTile(title: Text('아직 실행 결과가 없습니다')))
+                else
+                  ...executions.take(10).map((item) {
+                    final execution = Map<String, dynamic>.from(
+                      item['execution'] as Map,
+                    );
+                    final status = execution['status'] as String? ?? '상태 없음';
+                    return Card(
+                      child: ListTile(
+                        leading: Icon(
+                          status == 'SUCCEEDED'
+                              ? Icons.check_circle_outline
+                              : status == 'EXECUTING'
+                              ? Icons.pending_outlined
+                              : Icons.error_outline,
+                        ),
+                        title: Text(_executionLabel(status)),
+                        subtitle: Text(
+                          execution['finishedAt'] as String? ??
+                              execution['startedAt'] as String? ??
+                              '',
+                        ),
+                      ),
+                    );
+                  }),
+                const SizedBox(height: 20),
+                Text('활동 기록', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                if (activity.isEmpty)
+                  Card(
+                    child: ListTile(
+                      title: Text(
+                        content.isOffline
+                            ? '활동 기록은 온라인에서 갱신됩니다'
+                            : '아직 기록된 활동이 없습니다',
+                      ),
+                    ),
+                  )
+                else
+                  ...activity
+                      .take(20)
+                      .map(
+                        (event) => ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.history),
+                          title: Text(
+                            _activityLabel(event['eventType'] as String?),
+                          ),
+                          subtitle: Text(event['occurredAt'] as String? ?? ''),
+                        ),
+                      ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  String _executionLabel(String status) {
+    return switch (status) {
+      'SUCCEEDED' => '정리가 완료되었습니다',
+      'PARTIALLY_SUCCEEDED' => '일부 작업만 완료되었습니다',
+      'ROLLED_BACK' => '데스크톱에서 작업을 되돌렸습니다',
+      'STALE' => '승인 후 파일이 변경되어 실행하지 않았습니다',
+      'FAILED' => '작업을 완료하지 못했습니다',
+      _ => '승인된 작업을 실행 중입니다',
+    };
+  }
+
+  String _activityLabel(String? eventType) {
+    return switch (eventType) {
+      'proposal.created' => 'PC가 정리 제안을 만들었습니다',
+      'decision.created' => '제안에 승인 또는 거절 결정을 저장했습니다',
+      'execution.completed' => '승인된 작업 실행이 끝났습니다',
+      _ => 'HOUSEMOUSE 상태가 변경되었습니다',
+    };
+  }
+}
+
+class _CleanlinessCard extends StatelessWidget {
+  const _CleanlinessCard({required this.snapshot});
+  final Map<String, dynamic>? snapshot;
+
+  @override
+  Widget build(BuildContext context) {
+    final score = snapshot?['score'] as int?;
+    final metrics = snapshot?['metrics'];
+    final unorganized = metrics is Map ? metrics['unorganizedFileCount'] : null;
+    if (score == null) {
+      return const Card(
+        child: ListTile(
+          leading: Icon(Icons.auto_graph_outlined),
+          title: Text('청결도 계산 전'),
+          subtitle: Text('PC 에이전트가 폴더를 스캔하면 청결도가 표시됩니다.'),
+        ),
+      );
+    }
+    final color = score >= 80
+        ? Colors.green
+        : score >= 50
+        ? Colors.orange
+        : Colors.red;
+    final grade = score >= 80
+        ? '깨끗함'
+        : score >= 50
+        ? '정리 필요'
+        : '많은 정리 필요';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 68,
+              height: 68,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CircularProgressIndicator(
+                    value: score / 100,
+                    strokeWidth: 7,
+                    color: color,
+                  ),
+                  Text('$score', style: Theme.of(context).textTheme.titleLarge),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(grade, style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text(
+                    unorganized is int
+                        ? '정리되지 않은 파일 $unorganized개'
+                        : '최근 PC 스캔 결과',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

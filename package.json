@@ -3,6 +3,7 @@
   "private": true,
   "packageManager": "pnpm@11.11.0",
   "scripts": {
+    "check:contracts": "node scripts/check-openapi-coverage.mjs",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "build": "pnpm -r --if-present build"

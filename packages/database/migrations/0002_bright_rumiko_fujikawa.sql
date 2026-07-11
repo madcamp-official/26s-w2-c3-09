@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "deletion_jobs_transfer_idx" ON "object_deletion_jobs" USING btree ("transfer_id");

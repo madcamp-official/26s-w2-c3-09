@@ -1,0 +1,1 @@
+ALTER TABLE "cached_files" ADD COLUMN "sha256" varchar(64);

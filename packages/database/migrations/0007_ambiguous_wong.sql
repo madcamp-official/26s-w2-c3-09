@@ -1,0 +1,1 @@
+ALTER TABLE "sync_events" ADD COLUMN "published_at" timestamp with time zone;

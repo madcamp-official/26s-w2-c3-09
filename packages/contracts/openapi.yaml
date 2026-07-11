@@ -1,12 +1,1278 @@
 openapi: 3.1.0
 info:
-  title: Folder Roommate API
+  title: HOUSEMOUSE Control Plane API
   version: 0.1.0
-  description: 구현된 endpoint만 추가하는 contract-first API입니다.
-paths: {}
+  description: PostgreSQL에 먼저 영속되는 HOUSEMOUSE control-plane 공개 계약
+security:
+  - firebaseBearer: []
+paths:
+  /health:
+    get:
+      security: []
+      responses:
+        "200": { description: Process health }
+  /ready:
+    get:
+      security: []
+      responses:
+        "200": { description: PostgreSQL and Valkey are ready }
+        "503": { description: A required dependency is unavailable }
+  /v1/pairing-sessions:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreatePairingSession" } }
+      responses:
+        "201": { description: Short-lived pairing session }
+  /v1/pairing-sessions/claim:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/ClaimPairingSession" } }
+      responses:
+        "201":
+          { description: Pairing session claimed by the authenticated user }
+  /v1/pairing-sessions/{pairingSessionId}/status:
+    parameters:
+      - {
+          in: path,
+          name: pairingSessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+      - {
+          in: query,
+          name: nonce,
+          required: true,
+          schema: { type: string, minLength: 32, maxLength: 128 },
+        }
+    get:
+      security: []
+      responses:
+        "200":
+          {
+            description: Desktop claim state and device token after nonce verification,
+          }
+  /v1/devices:
+    get:
+      responses:
+        "200": { description: Owned devices }
+  /v1/devices/{deviceId}:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    delete:
+      responses:
+        "200":
+          {
+            description: Device revoked and active transfer/cache cleanup scheduled,
+          }
+  /v1/devices/{deviceId}/presence:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Current TTL-derived presence or OFFLINE }
+  /v1/devices/{deviceId}/heartbeat:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/Heartbeat" } }
+      responses:
+        "201": { description: Presence TTL renewed for the exact device }
+  /v1/rooms:
+    get:
+      responses:
+        "200": { description: Owned active rooms }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateRoom" } }
+      responses:
+        "201": { description: Room metadata created }
+  /v1/rooms/{roomId}:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    delete:
+      security: [{ deviceBearer: [] }]
+      responses:
+        "200":
+          {
+            description: Room removed and active transfer/cache object deletion scheduled,
+          }
+        "404":
+          {
+            description: Active room not found for the authenticated desktop device,
+          }
+  /v1/rooms/{roomId}/commands:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Room commands }
+    post:
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateCommand" } }
+      responses:
+        "201": { description: Durable queued command }
+  /v1/devices/{deviceId}/commands/pending:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      security: [{ deviceBearer: [] }]
+      responses:
+        "200":
+          {
+            description: Ordered commands not yet terminal for the exact desktop device,
+          }
+  /v1/devices/{deviceId}/commands/{commandId}/status:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+      - {
+          in: path,
+          name: commandId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    patch:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/UpdateCommandStatus" } }
+      responses:
+        "200": { description: Validated command state transition }
+  /v1/rooms/{roomId}/rules:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Rules ordered by priority }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateRule" } }
+      responses:
+        "201": { description: Versioned deterministic rule }
+  /v1/rules/{ruleId}:
+    parameters:
+      - {
+          in: path,
+          name: ruleId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    patch:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/UpdateRule" } }
+      responses:
+        "200": { description: Updated rule with incremented version }
+        "409": { description: Optimistic version conflict }
+  /v1/rooms/{roomId}/snapshots:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateRoomSnapshot" } }
+      responses:
+        "201": { description: Desktop-computed cleanliness snapshot }
+  /v1/rooms/{roomId}/snapshots/latest:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Latest cleanliness snapshot or null }
+  /v1/proposals/{proposalId}/decisions:
+    post:
+      parameters:
+        - {
+            in: path,
+            name: proposalId,
+            required: true,
+            schema: { type: string, format: uuid },
+          }
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateDecision" } }
+      responses:
+        "201": { description: Approval or rejection persisted }
+  /v1/agent/proposals:
+    post:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateProposal" } }
+      responses:
+        "201": { description: Proposal and items persisted exactly once }
+  /v1/proposals/{proposalId}:
+    parameters:
+      - {
+          in: path,
+          name: proposalId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200":
+          {
+            description: Owned proposal with ordered items and README preview when present,
+          }
+  /v1/rooms/{roomId}/proposals/open:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Open proposals for the owned room }
+  /v1/devices/{deviceId}/decisions/pending:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      security: [{ deviceBearer: [] }]
+      responses:
+        "200":
+          { description: Approved decisions not yet claimed by an execution }
+  /v1/agent/executions:
+    post:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateExecution" } }
+      responses:
+        "201": { description: Execution start persisted }
+  /v1/agent/executions/{executionId}:
+    parameters:
+      - {
+          in: path,
+          name: executionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+      - {
+          in: header,
+          name: Idempotency-Key,
+          required: true,
+          schema: { type: string, minLength: 8, maxLength: 128 },
+        }
+    patch:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/UpdateExecution" } }
+      responses:
+        "200": { description: Terminal execution result persisted }
+  /v1/rooms/{roomId}/executions:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Room execution history, newest first }
+  /v1/executions/{executionId}:
+    parameters:
+      - {
+          in: path,
+          name: executionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Owned execution result }
+  /v1/rooms/{roomId}/activity:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+      - {
+          in: query,
+          name: limit,
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 },
+        }
+    get:
+      responses:
+        "200": { description: Redacted room audit summaries, newest first }
+  /v1/rooms/{roomId}/file-browse-requests:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateFileBrowseRequest" } }
+      responses:
+        "201":
+          { description: Browse request or immediate DEVICE_OFFLINE failure }
+  /v1/file-browse-requests/{requestId}:
+    parameters:
+      - {
+          in: path,
+          name: requestId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Browse request state and completed page }
+  /v1/devices/{deviceId}/file-browse-requests/pending:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      security: [{ deviceBearer: [] }]
+      responses:
+        "200":
+          { description: Pending browse requests for the exact desktop device }
+  /v1/agent/file-browse-requests/{requestId}/result:
+    parameters:
+      - {
+          in: path,
+          name: requestId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CompleteFileBrowse" } }
+      responses:
+        "201": { description: Bounded relative-path browse page persisted }
+  /v1/agent/file-browse-requests/{requestId}/failure:
+    parameters:
+      - {
+          in: path,
+          name: requestId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/FailFileBrowse" } }
+      responses:
+        "201": { description: Explicit browse failure persisted }
+  /v1/rooms/{roomId}/file-transfers:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateFileTransfer" } }
+      responses:
+        "201": { description: Expiring transfer session }
+        "409": { description: Desktop is offline }
+  /v1/agent/file-transfers/{transferId}/complete-upload:
+    parameters:
+      - {
+          in: path,
+          name: transferId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+      - {
+          in: header,
+          name: Idempotency-Key,
+          required: true,
+          schema: { type: string, minLength: 8, maxLength: 128 },
+        }
+    post:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CompleteFileUpload" } }
+      responses:
+        "201": { description: Upload checksum and object size accepted }
+  /v1/devices/{deviceId}/file-transfers/pending:
+    parameters:
+      - {
+          in: path,
+          name: deviceId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      security: [{ deviceBearer: [] }]
+      responses:
+        "200":
+          {
+            description: Pending transfer requests for the exact desktop device,
+          }
+  /v1/agent/file-transfers/{transferId}/upload-target:
+    parameters:
+      - {
+          in: path,
+          name: transferId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/RequestUploadTarget" } }
+      responses:
+        "201":
+          {
+            description: Session-bounded signed upload target after source validation,
+          }
+        "503": { description: Object storage is not configured }
+  /v1/agent/file-transfers/{transferId}/failure:
+    parameters:
+      - {
+          in: path,
+          name: transferId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      security: [{ deviceBearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/FailFileTransfer" } }
+      responses:
+        "201":
+          {
+            description: Source validation failure persisted and partial object cleanup scheduled,
+          }
+  /v1/file-transfers/{transferId}:
+    parameters:
+      - {
+          in: path,
+          name: transferId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Transfer state }
+    delete:
+      responses:
+        "200": { description: Transfer cancelled and object deletion scheduled }
+  /v1/file-transfers/{transferId}/download:
+    parameters:
+      - {
+          in: path,
+          name: transferId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200":
+          { description: At most 60-second and session-bounded download target }
+  /v1/file-transfers/{transferId}/ack:
+    parameters:
+      - {
+          in: path,
+          name: transferId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      responses:
+        "201":
+          {
+            description: Mobile checksum verification acknowledged and deletion scheduled,
+          }
+  /v1/rooms/{roomId}/smart-cache-policy:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200":
+          {
+            description: Room cache policy,
+            disabled by default when no policy is stored,
+          }
+    patch:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/UpdateSmartCachePolicy" } }
+      responses:
+        "200": { description: Updated opt-in cache policy }
+        "503": { description: Smart cache is not configured when enabling }
+  /v1/rooms/{roomId}/cached-files:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200":
+          {
+            description: Available cached files,
+            pending-command warning,
+            and desktop presence,
+          }
+  /v1/agent/cache-candidates:
+    post:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CacheCandidateBatch" } }
+      responses:
+        "201":
+          {
+            description: Idempotent cache upload reservations and rejected count,
+          }
+        "409":
+          {
+            description: Policy rejected,
+            quota exhausted,
+            or idempotency conflict,
+          }
+        "503": { description: Smart cache or object storage is not configured }
+  /v1/agent/cache-uploads/{reservationId}/complete:
+    parameters:
+      - {
+          in: path,
+          name: reservationId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CompleteCacheUpload" } }
+      responses:
+        "201":
+          {
+            description: Uploaded cache object verified and made available exactly once,
+          }
+        "404": { description: Reservation is missing or expired }
+        "409": { description: Upload metadata or idempotency conflict }
+  /v1/agent/cache-uploads/{reservationId}:
+    parameters:
+      - {
+          in: path,
+          name: reservationId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    delete:
+      security: [{ deviceBearer: [] }]
+      responses:
+        "200":
+          { description: Reservation cancelled and object deletion scheduled }
+        "409": { description: Reservation can no longer be cancelled }
+  /v1/cached-files/{cachedFileId}:
+    parameters:
+      - {
+          in: path,
+          name: cachedFileId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    delete:
+      responses:
+        "200":
+          { description: Cached file invalidated and object deletion scheduled }
+  /v1/cached-files/{cachedFileId}/download:
+    parameters:
+      - {
+          in: path,
+          name: cachedFileId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200":
+          {
+            description: Short-lived download target with checksum and freshness metadata,
+          }
+        "409": { description: Stored checksum is unavailable }
+        "503": { description: Object storage is not configured }
+  /v1/character:
+    get:
+      responses:
+        "200":
+          { description: Character profile, affinity, and Rive asset status }
+    patch:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/UpdateCharacter" } }
+      responses:
+        "200": { description: Updated appearance and room theme preferences }
+  /v1/rooms/{roomId}/chat:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      responses:
+        "200": { description: Up to 200 persisted room chat messages }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateChatMessage" } }
+      responses:
+        "201":
+          {
+            description: User message persisted; AI remains UNCONFIGURED without a provider,
+          }
+  /v1/sync/events:
+    get:
+      parameters:
+        - { in: query, name: after, schema: { type: integer, minimum: 0 } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 200 },
+          }
+      responses:
+        "200":
+          description: Ordered replay event envelopes
+          content:
+            application/json:
+              schema:
+                {
+                  type: array,
+                  items: { $ref: "#/components/schemas/EventEnvelope" },
+                }
 components:
   securitySchemes:
     firebaseBearer:
       type: http
       scheme: bearer
       bearerFormat: Firebase ID token
+    deviceBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: hm_device_ JWT
+  schemas:
+    CreatePairingSession:
+      type: object
+      additionalProperties: false
+      required: [deviceName, platform]
+      properties:
+        deviceName: { type: string, minLength: 1, maxLength: 120 }
+        platform: { type: string, enum: [WINDOWS, MACOS] }
+        publicKey: { type: string, minLength: 32, maxLength: 8192 }
+    ClaimPairingSession:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code: { type: string, pattern: "^[0-9]{6}$" }
+    Heartbeat:
+      type: object
+      additionalProperties: false
+      required: [presence]
+      properties:
+        presence:
+          {
+            type: string,
+            enum: [ONLINE_IDLE, ONLINE_SCANNING, ONLINE_EXECUTING, DEGRADED],
+          }
+    CreateRoom:
+      type: object
+      additionalProperties: false
+      required: [desktopDeviceId, name, rootAlias]
+      properties:
+        desktopDeviceId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        rootAlias: { type: string, minLength: 1, maxLength: 120 }
+    CreateCommand:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: SCAN }
+            payload:
+              { type: object, additionalProperties: false, maxProperties: 0 }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: ANALYZE }
+            payload:
+              { type: object, additionalProperties: false, maxProperties: 0 }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: CREATE_RULE }
+            payload:
+              type: object
+              additionalProperties: false
+              required: [rule]
+              properties:
+                rule: { $ref: "#/components/schemas/CreateRule" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: README }
+            payload:
+              type: object
+              additionalProperties: false
+              required: [purpose, audience, tone, sections]
+              properties:
+                purpose: { type: string, minLength: 1, maxLength: 500 }
+                audience: { type: string, minLength: 1, maxLength: 200 }
+                tone: { type: string, enum: [concise, friendly, technical] }
+                sections:
+                  type: array
+                  maxItems: 20
+                  items: { type: string, minLength: 1, maxLength: 120 }
+    UpdateCommandStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [DELIVERED, ANALYZING, FAILED] }
+    CreateDecision:
+      type: object
+      additionalProperties: false
+      required: [decisionType, approvedItemIds]
+      properties:
+        decisionType: { type: string, enum: [APPROVE, REJECT] }
+        approvedItemIds:
+          type: array
+          items: { type: string, format: uuid }
+    ProposalItem:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          itemOrder,
+          actionType,
+          sourceRelativePath,
+          destinationRelativePath,
+          reasonCode,
+          precondition,
+          conflictState,
+        ]
+      properties:
+        itemOrder: { type: integer, minimum: 0 }
+        actionType:
+          { type: string, enum: [MOVE, QUARANTINE, CREATE_DIR, README_WRITE] }
+        sourceRelativePath: { type: [string, "null"], maxLength: 1024 }
+        destinationRelativePath: { type: [string, "null"], maxLength: 1024 }
+        reasonCode: { type: string, minLength: 1, maxLength: 100 }
+        precondition: { type: object }
+        conflictState:
+          { type: string, enum: [NONE, NAME_CONFLICT, UNSUPPORTED] }
+    CreateProposal:
+      type: object
+      additionalProperties: false
+      required: [commandId, roomId, summary, expiresAt, items]
+      properties:
+        commandId: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        summary:
+          type: object
+          properties:
+            itemCount: { type: integer, minimum: 0 }
+            readmeDraft: { type: string, maxLength: 200000 }
+            readmeDiff: { type: string, maxLength: 200000 }
+        expiresAt: { type: [string, "null"], format: date-time }
+        items:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/ProposalItem" }
+    CreateExecution:
+      type: object
+      additionalProperties: false
+      required: [proposalId, decisionId, desktopDeviceId]
+      properties:
+        proposalId: { type: string, format: uuid }
+        decisionId: { type: string, format: uuid }
+        desktopDeviceId: { type: string, format: uuid }
+    UpdateExecution:
+      type: object
+      additionalProperties: false
+      required: [status, resultSummary]
+      properties:
+        status:
+          {
+            type: string,
+            enum: [SUCCEEDED, PARTIALLY_SUCCEEDED, FAILED, STALE, ROLLED_BACK],
+          }
+        resultSummary: { type: object }
+    CreateFileBrowseRequest:
+      type: object
+      additionalProperties: false
+      required: [relativeDirectory, cursor]
+      properties:
+        relativeDirectory: { type: string }
+        cursor: { type: [string, "null"], maxLength: 512 }
+    CompleteFileBrowse:
+      type: object
+      additionalProperties: false
+      required: [entries, nextCursor, desktopGeneration]
+      properties:
+        entries:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, relativePath, type, sizeBytes, modifiedAt, fileId]
+            properties:
+              name: { type: string, minLength: 1, maxLength: 255 }
+              relativePath: { type: string, minLength: 1, maxLength: 1024 }
+              type: { type: string, enum: [FILE, DIRECTORY] }
+              sizeBytes: { type: [integer, "null"], minimum: 0 }
+              modifiedAt: { type: string, format: date-time }
+              fileId: { type: string, minLength: 1, maxLength: 512 }
+        nextCursor: { type: [string, "null"], maxLength: 512 }
+        desktopGeneration: { type: string, minLength: 1, maxLength: 128 }
+    FailFileBrowse:
+      type: object
+      additionalProperties: false
+      required: [failureCode]
+      properties:
+        failureCode:
+          {
+            type: string,
+            enum:
+              [
+                DEVICE_OFFLINE,
+                TIMED_OUT,
+                CURSOR_INVALIDATED,
+                OUTSIDE_MANAGED_ROOT,
+              ],
+          }
+    CreateFileTransfer:
+      type: object
+      additionalProperties: false
+      required: [sourceRelativePath]
+      properties:
+        sourceRelativePath: { type: string, minLength: 1, maxLength: 1024 }
+    CompleteFileUpload:
+      type: object
+      additionalProperties: false
+      required: [sizeBytes, sha256]
+      properties:
+        sizeBytes: { type: integer, minimum: 1 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+    RequestUploadTarget:
+      type: object
+      additionalProperties: false
+      required: [sourceVersion]
+      properties:
+        sourceVersion:
+          type: object
+          additionalProperties: false
+          required: [fileId, sizeBytes, modifiedAt]
+          properties:
+            fileId: { type: string, minLength: 1, maxLength: 512 }
+            sizeBytes: { type: integer, minimum: 1 }
+            modifiedAt: { type: string, format: date-time }
+    FailFileTransfer:
+      type: object
+      additionalProperties: false
+      required: [failureCode]
+      properties:
+        failureCode:
+          {
+            type: string,
+            enum:
+              [
+                SOURCE_NOT_FOUND,
+                SOURCE_CHANGED,
+                OUTSIDE_MANAGED_ROOT,
+                SIZE_LIMIT_EXCEEDED,
+                CHECKSUM_MISMATCH,
+              ],
+          }
+    UpdateSmartCachePolicy:
+      type: object
+      additionalProperties: false
+      required: [enabled, quotaBytes, maxFileBytes, excludedPatterns]
+      properties:
+        enabled: { type: boolean }
+        quotaBytes: { type: integer, minimum: 1 }
+        maxFileBytes: { type: integer, minimum: 1 }
+        excludedPatterns:
+          type: array
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 255 }
+    CacheCandidate:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          sourceRelativePath,
+          sourceVersion,
+          sourceVersionHash,
+          sizeBytes,
+          usageScore,
+          manualPin,
+        ]
+      properties:
+        sourceRelativePath: { type: string, minLength: 1, maxLength: 1024 }
+        sourceVersion: { type: object }
+        sourceVersionHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+        sizeBytes: { type: integer, minimum: 1 }
+        usageScore: { type: integer }
+        manualPin: { type: boolean }
+    CacheCandidateBatch:
+      type: object
+      additionalProperties: false
+      required: [roomId, candidates]
+      properties:
+        roomId: { type: string, format: uuid }
+        candidates:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/CacheCandidate" }
+    CompleteCacheUpload:
+      type: object
+      additionalProperties: false
+      required: [sizeBytes, sha256, usageScore, manualPin]
+      properties:
+        sizeBytes: { type: integer, minimum: 1 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        usageScore: { type: integer }
+        manualPin: { type: boolean }
+    UpdateCharacter:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        appearance:
+          type: object
+          additionalProperties: false
+          minProperties: 1
+          properties:
+            furVariant: { type: string, enum: [brown, cream] }
+            accessory: { type: string, enum: [none, scarf] }
+            animationsEnabled: { type: boolean }
+        roomTheme: { type: [string, "null"], enum: [warm, forest, null] }
+    CreateChatMessage:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content: { type: string, minLength: 1, maxLength: 2000 }
+    EventEnvelope:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          eventId,
+          eventType,
+          schemaVersion,
+          correlationId,
+          aggregateType,
+          aggregateId,
+          deviceId,
+          roomId,
+          sequence,
+          occurredAt,
+          payload,
+        ]
+      properties:
+        eventId: { type: string, format: uuid }
+        eventType: { type: string, minLength: 1, maxLength: 100 }
+        schemaVersion: { type: integer, minimum: 1 }
+        correlationId: { type: string, format: uuid }
+        aggregateType: { type: string, minLength: 1, maxLength: 50 }
+        aggregateId: { type: string, format: uuid }
+        deviceId: { type: [string, "null"], format: uuid }
+        roomId: { type: [string, "null"], format: uuid }
+        sequence: { type: integer, minimum: 0 }
+        occurredAt: { type: string, format: date-time }
+        payload: { type: object }
+    RuleDefinition:
+      type: object
+      additionalProperties: false
+      required: [conditions, action]
+      properties:
+        match: { type: string, enum: [ALL, ANY], default: ALL }
+        conditions:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            oneOf:
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: extension }
+                  operator: { const: IN }
+                  value:
+                    {
+                      type: array,
+                      minItems: 1,
+                      maxItems: 50,
+                      items: { type: string, pattern: '^\\.[a-zA-Z0-9]+$' },
+                    }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: ageDays }
+                  operator: { const: GTE }
+                  value: { type: integer, minimum: 0, maximum: 36500 }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: name }
+                  operator:
+                    { type: string, enum: [CONTAINS, STARTS_WITH, ENDS_WITH] }
+                  value: { type: string, minLength: 1, maxLength: 120 }
+        action:
+          oneOf:
+            - type: object
+              additionalProperties: false
+              required: [type, destinationTemplate]
+              properties:
+                type: { const: MOVE }
+                destinationTemplate: { type: string, minLength: 1 }
+            - type: object
+              additionalProperties: false
+              required: [type]
+              properties:
+                type: { const: QUARANTINE }
+    CreateRule:
+      type: object
+      additionalProperties: false
+      required: [name, definition, priority]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        definition: { $ref: "#/components/schemas/RuleDefinition" }
+        priority: { type: integer, minimum: 0, maximum: 10000 }
+        enabled: { type: boolean, default: true }
+    UpdateRule:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties:
+        version: { type: integer, minimum: 1 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        definition: { $ref: "#/components/schemas/RuleDefinition" }
+        priority: { type: integer, minimum: 0, maximum: 10000 }
+        enabled: { type: boolean }
+    CreateRoomSnapshot:
+      type: object
+      additionalProperties: false
+      required: [score, metrics, calculatedAt]
+      properties:
+        score: { type: integer, minimum: 0, maximum: 100 }
+        calculatedAt: { type: string, format: date-time }
+        metrics:
+          type: object
+          additionalProperties: false
+          required:
+            [totalFileCount, managedFileCount, unorganizedFileCount, deductions]
+          properties:
+            totalFileCount: { type: integer, minimum: 0 }
+            managedFileCount: { type: integer, minimum: 0 }
+            unorganizedFileCount: { type: integer, minimum: 0 }
+            deductions:
+              type: array
+              maxItems: 100
+              items:
+                type: object
+                additionalProperties: false
+                required: [reasonCode, count, points]
+                properties:
+                  reasonCode: { type: string, minLength: 1, maxLength: 100 }
+                  count: { type: integer, minimum: 0 }
+                  points: { type: integer, minimum: 0, maximum: 100 }

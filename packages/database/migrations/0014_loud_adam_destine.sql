@@ -1,0 +1,1 @@
+ALTER TABLE "file_transfers" ADD COLUMN "failure_code" varchar(60);
