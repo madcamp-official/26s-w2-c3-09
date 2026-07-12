@@ -19,6 +19,7 @@ import {
   ManagedRoot,
   OperationHistoryEntry,
   precheckFileChanges,
+  PrecheckReport,
   prepareDemoRoot,
   Proposal,
   ProposalReport,
@@ -41,6 +42,10 @@ import {
 type DecisionState = Record<string, "approved" | "rejected" | "pending">;
 type RejectionReasons = Record<string, string>;
 type RoomSyncState = "syncing" | "synced" | "failed";
+type PrecheckSnapshot = {
+  key: string;
+  report: PrecheckReport;
+};
 
 const demoRootHint = "Creates a temporary copy of test-fixtures/file-trees/ui-demo";
 
@@ -63,6 +68,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   const [error, setError] = useState<string | null>(null);
   const [resultLines, setResultLines] = useState<string[]>([]);
   const [roomSyncStates, setRoomSyncStates] = useState<Record<string, RoomSyncState>>({});
+  const [precheckSnapshot, setPrecheckSnapshot] = useState<PrecheckSnapshot | null>(null);
 
   const selectedRootIdRef = useRef(selectedRootId);
   const browsePathRef = useRef(browsePath);
@@ -77,6 +83,16 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     [decisions, rejectionReasons]
   );
   const approvedCount = commandDecisions.filter((decision) => decision.decision === "approved").length;
+  const proposalDecisionKey = useMemo(
+    () => (proposal ? proposalSnapshotKey(selectedRootId, proposal, commandDecisions) : null),
+    [selectedRootId, proposal, commandDecisions]
+  );
+  const activePrecheck =
+    precheckSnapshot && proposalDecisionKey === precheckSnapshot.key ? precheckSnapshot.report : null;
+  const activePrecheckReady =
+    !!activePrecheck &&
+    activePrecheck.checks.length > 0 &&
+    activePrecheck.checks.every((check) => check.status === "ready");
 
   useEffect(() => {
     void refreshRoots();
@@ -124,6 +140,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
 
     listenForRootChanges((rootId) => {
       if (rootId !== selectedRootIdRef.current) return;
+      setPrecheckSnapshot(null);
       void refreshBrowse(rootId, browsePathRef.current);
       void refreshHistory(rootId);
       // The watcher already refreshed the index on the Rust side; re-run any active search
@@ -346,6 +363,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     try {
       const report = await proposeFileChanges(selectedRootId);
       setProposal(report);
+      setPrecheckSnapshot(null);
       setDecisions(
         Object.fromEntries(
           report.proposals.map((item) => [
@@ -373,12 +391,20 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     setStatus("Prechecking");
     try {
       const report = await precheckFileChanges(selectedRootId, proposal, decisionsToApply);
+      if (proposalDecisionKey) {
+        setPrecheckSnapshot({ key: proposalDecisionKey, report });
+      }
       setResultLines(
         report.checks.map((check) =>
           [check.status, `${check.from} -> ${check.to}`, check.reason].filter(Boolean).join(" | ")
         )
       );
-      setStatus(`Prechecked ${report.checks.length} approved proposals`);
+      const blocked = report.checks.filter((check) => check.status !== "ready");
+      setStatus(
+        blocked.length > 0
+          ? `Precheck blocked ${blocked.length} proposal(s)`
+          : `Prechecked ${report.checks.length} approved proposals`
+      );
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Precheck failed");
@@ -415,24 +441,22 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
 
     const decisionsToApply = validatedDecisionEntries();
     if (!decisionsToApply) return;
+    if (!proposalDecisionKey || !activePrecheck) {
+      setError("Run precheck after the latest proposal or decision change before executing.");
+      setStatus("Precheck required");
+      return;
+    }
+    if (!activePrecheckReady) {
+      setResultLines(formatPrecheckLines(activePrecheck));
+      setStatus("Execute blocked by precheck");
+      return;
+    }
 
     setError(null);
-    setStatus("Prechecking before execute");
+    setStatus("Ready to execute");
     try {
-      const precheck = await precheckFileChanges(selectedRootId, proposal, decisionsToApply);
-      const blocked = precheck.checks.filter((check) => check.status !== "ready");
-      if (blocked.length > 0) {
-        setResultLines(
-          blocked.map((check) =>
-            [check.status, `${check.from} -> ${check.to}`, check.reason].filter(Boolean).join(" | ")
-          )
-        );
-        setStatus("Execute blocked by precheck");
-        return;
-      }
-
       const confirmed = window.confirm(
-        `Move ${precheck.checks.length} approved files for ${selectedRoot?.display_name || "this root"}?`
+        `Move ${activePrecheck.checks.length} approved files for ${selectedRoot?.display_name || "this root"}?`
       );
       if (!confirmed) {
         setStatus("Execute cancelled");
@@ -443,6 +467,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       const report = await executeFileChanges(selectedRootId, proposal, decisionsToApply);
       const lines = formatExecuteLines(report);
       setResultLines(lines);
+      setPrecheckSnapshot(null);
       setStatus(
         `Executed ${report.executed_count}, skipped ${report.skipped_count}, rejected ${report.rejected_count}`
       );
@@ -576,6 +601,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     setError(null);
     setStatus("Moving file to trash");
     try {
+      setPrecheckSnapshot(null);
       const report = await trashFile(selectedRootId, entry.path);
       setResultLines([
         `trashed | ${report.original_path} -> ${report.trashed_path}`,
@@ -608,6 +634,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   function selectRoot(rootId: string) {
     setSelectedRootId(rootId);
     setProposal(null);
+    setPrecheckSnapshot(null);
     setDecisions({});
     setRejectionReasons({});
     setResultLines([]);
@@ -817,7 +844,13 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
             <button
               type="button"
               onClick={executeSelectedRoot}
-              disabled={!selectedRootId || !proposal || approvedCount === 0 || !!journalCorruption}
+              disabled={
+                !selectedRootId ||
+                !proposal ||
+                approvedCount === 0 ||
+                !activePrecheckReady ||
+                !!journalCorruption
+              }
             >
               Execute
             </button>
@@ -838,7 +871,8 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           </div>
           {proposal ? (
             <p className="path-text">
-              {readyProposalCount} ready, {approvedCount} approved
+              {readyProposalCount} ready, {approvedCount} approved, precheck{" "}
+              {activePrecheckReady ? "ready" : activePrecheck ? "blocked" : "required"}
             </p>
           ) : null}
           <p className="mode-note">
@@ -862,6 +896,10 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                   <strong>{item.from}</strong>
                   <span>{item.to}</span>
                   <small>{item.status}</small>
+                  <small>decision: {decisions[item.proposal_id] || "pending"}</small>
+                  {activePrecheck ? (
+                    <small>{formatPrecheckSummary(activePrecheck, item)}</small>
+                  ) : null}
                   {decisions[item.proposal_id] === "rejected" ? (
                     <input
                       value={rejectionReasons[item.proposal_id] || ""}
@@ -1074,15 +1112,41 @@ function formatProposal(item: Proposal) {
 }
 
 function formatExecuteLines(report: ExecuteReport) {
-  return report.results.map((result) =>
-    [result.status, `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
-  );
+  return ["executed", "skipped", "rejected"].flatMap((status) => {
+    const rows = report.results.filter((result) => result.status === status);
+    if (rows.length === 0) return [];
+    return [
+      `[${status}]`,
+      ...rows.map((result) =>
+        [result.status, `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
+      )
+    ];
+  });
 }
 
 function formatUndoLines(report: UndoReport) {
   return report.results.map((result) =>
     [result.status, `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
   );
+}
+
+function formatPrecheckLines(report: PrecheckReport) {
+  return report.checks.map((check) =>
+    [check.status, `${check.from} -> ${check.to}`, check.reason].filter(Boolean).join(" | ")
+  );
+}
+
+function formatPrecheckSummary(report: PrecheckReport, item: Proposal) {
+  const check = report.checks.find((entry) => entry.from === item.from && entry.to === item.to);
+  return check ? `precheck: ${check.status}` : "precheck: not selected";
+}
+
+function proposalSnapshotKey(
+  rootId: string,
+  proposal: ProposalReport,
+  decisions: DecisionEntry[]
+) {
+  return JSON.stringify({ rootId, proposal, decisions });
 }
 
 function formatSkippedEntries(entries: Array<{ path: string; reason: string }>) {
