@@ -87,19 +87,24 @@ Tauri Desktop
 - Rule DSL, proposal, 사용자 decision, 실행 직전 precheck
 - journal-before-write, no-overwrite move, 복구형 trash, create/rename, history, undo, journal recovery
 - React 파일 관리 UI와 Tauri invoke bridge
+- 실제 REST agent transport: pairing 코드 생성·polling, 15초 heartbeat, pending command 조회·상태 전이
+- device token의 OS keychain 저장과 UI·로그 비노출, 잘못된 서버 응답 schema 검증
+- device별 SQLite sync cursor와 `/v1/sync/events` REST replay
+- Desktop Agent 연결·pairing·replay 상태 UI
+- system tray, 사용자가 직접 설정하는 autostart, MSI/NSIS Windows bundle 구성
 - overlay window/event bridge skeleton
 - 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
 
 아직 연결되지 않은 범위:
 
-- 실제 서버 transport: pairing, device token keychain, heartbeat, Socket.IO, REST replay/outbox
+- Socket.IO 알림 client와 durable sync outbox
 - 서버 command → 로컬 proposal → 모바일 decision → execution 결과의 첫 P0 E2E
 - README 생성/diff/write 로컬 적용
 - FileTransfer source version 검증, chunk, SHA-256, 취소와 source-change 처리
-- system tray, autostart, updater, Windows installer
+- updater와 Windows release signing
 - 실제 Rive overlay와 P1 usage event/cache candidate
 
-현재 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. Tauri bundle도 아직 `active: false`다.
+서버 URL 또는 pairing이 없으면 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. pairing 뒤에도 heartbeat나 인증 요청이 성공하기 전에는 `offline`이며, device token은 React 계층으로 전달되지 않는다.
 
 ### B — Product & Cloud
 
@@ -117,14 +122,14 @@ Tauri Desktop
 
 | Phase | 현재 판정 | 남은 완료 조건 |
 |---|---|---|
-| 0 계약·파일 안전 POC | 대부분 구현 | Rust toolchain에서 140개 Rust test와 fixture E2E 재검증 |
-| 1 로그인·페어링·Presence | B 완료, A 미연결 | Desktop pairing/token/heartbeat/realtime transport |
+| 0 계약·파일 안전 POC | 완료 | 146개 Rust test와 fixture E2E 통과 상태 유지 |
+| 1 로그인·페어링·Presence | REST 경로 구현 | 실제 mobile claim E2E와 Socket.IO 알림 client |
 | 2 관리 폴더·스캔·청결도 | 양쪽 코드 구현, 통합 전 | room 등록과 snapshot을 실제 서버로 연결 |
 | 3 규칙·명령·제안 | 양쪽 코드 구현, 통합 전 | 서버 command를 Rust proposal로 변환해 왕복 |
 | 4 실행·Undo·README·파일 전달 | 부분 구현 | README와 A FileTransfer, 실제 storage E2E |
 | 5 캐릭터·채팅 | skeleton/metadata | Rive asset, 실제 overlay window, AI provider 선택 |
-| 6 오프라인·재접속 | B 구현, A 미연결 | Desktop outbox/cursor/replay와 reconnect E2E |
-| 7 하드닝·배포 | 진행 중 | Rust CI, tray/autostart, installer, release signing, 운영 배포 |
+| 6 오프라인·재접속 | Desktop cursor/replay 구현 | durable outbox, Socket.IO 재접속과 reconnect E2E |
+| 7 하드닝·배포 | Rust CI·tray·autostart·installer 구성 | updater, release signing, 운영 배포 |
 | 8 P1 스마트 캐시 | B control plane만 선행 | P0 안정화 뒤 A usage scoring/upload/stale 처리 |
 
 ## 검증 기록 (`2026-07-12`)
@@ -139,19 +144,23 @@ Tauri Desktop
 | desktop-agent-simulator test | 1개 통과 |
 | `flutter analyze` | 오류 0개 |
 | Flutter test | 19개 통과 |
-| Rust test/E2E | 소스에 140개 test가 있으나 이 PC에 Rust toolchain이 없어 재실행하지 못함 |
+| Rust file-engine CLI | unit 92개 + integration 3개, 총 95개 통과 |
+| Rust Desktop/Tauri core | 51개 통과 |
+| Rust fixture E2E | proposal → precheck → execute → undo 통과 |
+| Tauri feature check | `cargo check --features tauri-commands` 통과 |
+| Windows release bundle | 실제 앱 feature를 포함한 MSI 6.82MB, NSIS 4.81MB 생성 성공 |
 
-현재 CI에는 Rust job이 없고 push 대상이 `develop`으로 설정되어 실제 통합 브랜치 `dev` push를 직접 검사하지 않는다. PR 검사는 실행되지만, Phase 7 전에 branch 이름과 Rust job을 바로잡아야 한다.
+CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 Tauri feature check를 실행한다.
 
 ## 다음 구현 순서
 
-1. Rust stable/MSVC toolchain을 설치하고 CLI·Tauri test 및 fixture E2E를 모두 통과시킨다.
-2. Desktop에 실제 pairing/device-token 저장/heartbeat/Socket.IO/replay transport를 구현한다.
+1. 실제 server와 mobile을 함께 켜서 Desktop pairing code claim → keychain 저장 → heartbeat E2E를 확인한다.
+2. Socket.IO는 새 데이터 알림으로만 연결하고, 실패 시 현재 REST cursor replay로 복구한다. 전송 실패 event는 SQLite durable outbox에 적재한다.
 3. 첫 P0 vertical slice(command → proposal → mobile approval → journaled execute → result → undo)를 한 managed root로 연결한다.
 4. A의 FileTransfer validation/chunk/SHA-256/cancel/source-change를 B의 transfer session에 연결한다.
 5. 실제 private S3-compatible bucket에서 PUT/HEAD/GET/delete/TTL lifecycle E2E를 수행한다.
-6. CI의 `dev` trigger와 Rust job을 추가한 뒤 tray/autostart/Windows installer를 만든다.
-7. Rive·FCM·Sentry·release signing을 마무리한다. P1 스마트 캐시는 두 P0 slice가 안정화된 뒤 진행한다.
+6. updater와 Windows release signing을 마무리한다.
+7. Rive·FCM·Sentry를 마무리한다. P1 스마트 캐시는 두 P0 slice가 안정화된 뒤 진행한다.
 
 ## 실행 방법
 
@@ -169,7 +178,11 @@ pnpm --filter @housemouse/database db:migrate
 pnpm --filter @housemouse/server start:dev
 
 # Desktop: Rust stable/MSVC toolchain 필요
+$env:HOUSEMOUSE_SERVER_BASE_URL = "http://127.0.0.1:3000"
 pnpm --filter @housemouse/desktop tauri:dev
+
+# Windows MSI/NSIS 생성
+pnpm --filter @housemouse/desktop tauri:build
 ```
 
 Android 실기기에서 USB로 로컬 서버를 사용할 때:

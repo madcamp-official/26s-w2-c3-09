@@ -108,6 +108,104 @@ pre {
   padding: 16px;
 }
 
+.agent-panel {
+  border-color: #b9c7d3;
+  background: #fafdff;
+}
+
+.agent-actions,
+.command-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.autostart-setting {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: start;
+  color: #374151;
+}
+
+.agent-actions .path-text {
+  margin-right: auto;
+  overflow-wrap: anywhere;
+}
+
+.agent-pairing-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.status-badge {
+  border-radius: 999px;
+  background: #e5e7eb;
+  padding: 5px 10px;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.status-online {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-connecting {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-offline,
+.status-unconfigured {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.pairing-code {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  border: 1px solid #8ab4f8;
+  border-radius: 6px;
+  background: #eef6ff;
+  padding: 12px;
+}
+
+.pairing-code strong {
+  color: #174ea6;
+  font-size: 30px;
+  letter-spacing: 0.18em;
+}
+
+.pairing-code small,
+.command-row small {
+  color: #5f6972;
+}
+
+.command-list {
+  display: grid;
+  gap: 8px;
+}
+
+.command-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #d9e2e8;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 10px;
+}
+
+.command-row > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
 .input-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto;
@@ -336,6 +434,11 @@ pre {
   .auto-approval-panel,
   .proposal-row {
     grid-template-columns: 1fr;
+  }
+
+  .command-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .toolbar {

@@ -42,7 +42,7 @@ type RejectionReasons = Record<string, string>;
 
 const demoRootHint = "Creates a temporary copy of test-fixtures/file-trees/ui-demo";
 
-export function FileEnginePanel() {
+export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {}) {
   const [pathInput, setPathInput] = useState("");
   const [roots, setRoots] = useState<ManagedRoot[]>([]);
   const [selectedRootId, setSelectedRootId] = useState("");
@@ -614,7 +614,7 @@ export function FileEnginePanel() {
   }
 
   return (
-    <main className="app-shell">
+    <div className={embedded ? undefined : "app-shell"}>
       <section className="toolbar">
         <div>
           <h1>Housemouse Files</h1>
@@ -972,7 +972,7 @@ export function FileEnginePanel() {
           {history.length === 0 ? <p>No journal history yet.</p> : null}
         </div>
       </section>
-    </main>
+    </div>
   );
 }
 

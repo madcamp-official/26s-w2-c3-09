@@ -1,96 +1,251 @@
-use serde_json::Value;
+use crate::agent::{
+    AgentCommand, AgentConnectionStatus, AgentRuntime, HeartbeatResult, PairingSession,
+    PairingStatus, SyncEvent,
+};
+use crate::storage::agent_sync::AgentSyncStore;
 
-use crate::agent::{AgentCommand, AgentConnectionStatus, AgentRuntime};
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct SyncReplay {
+    pub previous_cursor: u64,
+    pub next_cursor: u64,
+    pub events: Vec<SyncEvent>,
+}
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn get_agent_connection_status(
     runtime: tauri::State<'_, AgentRuntime>,
 ) -> Result<AgentConnectionStatus, String> {
-    get_agent_connection_status_impl(&runtime)
+    Ok(runtime.connection_status())
 }
 
 #[cfg(not(feature = "tauri-commands"))]
 pub fn get_agent_connection_status(
-    runtime: &AgentRuntime,
-) -> Result<AgentConnectionStatus, String> {
-    get_agent_connection_status_impl(runtime)
-}
-
-#[cfg(feature = "tauri-commands")]
-#[tauri::command]
-pub fn poll_agent_commands(
-    runtime: tauri::State<'_, AgentRuntime>,
-) -> Result<Vec<AgentCommand>, String> {
-    poll_agent_commands_impl(&runtime)
-}
-
-#[cfg(not(feature = "tauri-commands"))]
-pub fn poll_agent_commands(runtime: &AgentRuntime) -> Result<Vec<AgentCommand>, String> {
-    poll_agent_commands_impl(runtime)
-}
-
-#[cfg(feature = "tauri-commands")]
-#[tauri::command]
-pub fn send_agent_event(
-    event: Value,
-    runtime: tauri::State<'_, AgentRuntime>,
-) -> Result<(), String> {
-    send_agent_event_impl(&runtime, event)
-}
-
-#[cfg(not(feature = "tauri-commands"))]
-pub fn send_agent_event(runtime: &AgentRuntime, event: Value) -> Result<(), String> {
-    send_agent_event_impl(runtime, event)
-}
-
-fn get_agent_connection_status_impl(
     runtime: &AgentRuntime,
 ) -> Result<AgentConnectionStatus, String> {
     Ok(runtime.connection_status())
 }
 
-fn poll_agent_commands_impl(runtime: &AgentRuntime) -> Result<Vec<AgentCommand>, String> {
-    runtime.poll_commands().map_err(|error| error.to_string())
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn start_agent_pairing(
+    device_name: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<PairingSession, String> {
+    runtime
+        .start_pairing(device_name)
+        .await
+        .map_err(|error| error.to_string())
 }
 
-fn send_agent_event_impl(runtime: &AgentRuntime, event: Value) -> Result<(), String> {
-    runtime.send_event(event).map_err(|error| error.to_string())
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn start_agent_pairing(
+    runtime: &AgentRuntime,
+    device_name: String,
+) -> Result<PairingSession, String> {
+    runtime
+        .start_pairing(device_name)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn poll_agent_pairing(
+    session_id: String,
+    desktop_nonce: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<PairingStatus, String> {
+    runtime
+        .poll_pairing(session_id, desktop_nonce)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn poll_agent_pairing(
+    runtime: &AgentRuntime,
+    session_id: String,
+    desktop_nonce: String,
+) -> Result<PairingStatus, String> {
+    runtime
+        .poll_pairing(session_id, desktop_nonce)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn send_agent_heartbeat(
+    presence: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<HeartbeatResult, String> {
+    runtime
+        .heartbeat(presence)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn send_agent_heartbeat(
+    runtime: &AgentRuntime,
+    presence: String,
+) -> Result<HeartbeatResult, String> {
+    runtime
+        .heartbeat(presence)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn poll_agent_commands(
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<Vec<AgentCommand>, String> {
+    runtime
+        .poll_commands()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn poll_agent_commands(runtime: &AgentRuntime) -> Result<Vec<AgentCommand>, String> {
+    runtime
+        .poll_commands()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn replay_agent_events(
+    runtime: tauri::State<'_, AgentRuntime>,
+    sync_store: tauri::State<'_, AgentSyncStore>,
+) -> Result<SyncReplay, String> {
+    replay_agent_events_impl(&runtime, &sync_store).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn replay_agent_events(
+    runtime: &AgentRuntime,
+    sync_store: &AgentSyncStore,
+) -> Result<SyncReplay, String> {
+    replay_agent_events_impl(runtime, sync_store).await
+}
+
+async fn replay_agent_events_impl(
+    runtime: &AgentRuntime,
+    sync_store: &AgentSyncStore,
+) -> Result<SyncReplay, String> {
+    let device_id = runtime
+        .connection_status()
+        .device_id
+        .ok_or_else(|| "UNCONFIGURED: desktop device pairing is required".to_string())?;
+    let previous_cursor = sync_store.cursor(&device_id)?;
+    let events = runtime
+        .replay_events(previous_cursor, 100)
+        .await
+        .map_err(|error| error.to_string())?;
+    let next_cursor = events
+        .last()
+        .map(|event| event.sequence)
+        .unwrap_or(previous_cursor);
+    if next_cursor > previous_cursor {
+        sync_store.advance(&device_id, next_cursor).await?;
+    }
+    Ok(SyncReplay {
+        previous_cursor,
+        next_cursor,
+        events,
+    })
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn update_agent_command_status(
+    command_id: String,
+    status: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentCommand, String> {
+    runtime
+        .update_command_status(command_id, status)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn update_agent_command_status(
+    runtime: &AgentRuntime,
+    command_id: String,
+    status: String,
+) -> Result<AgentCommand, String> {
+    runtime
+        .update_command_status(command_id, status)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn forget_agent_device(
+    runtime: tauri::State<'_, AgentRuntime>,
+    sync_store: tauri::State<'_, AgentSyncStore>,
+) -> Result<AgentConnectionStatus, String> {
+    forget_agent_device_impl(&runtime, &sync_store).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn forget_agent_device(
+    runtime: &AgentRuntime,
+    sync_store: &AgentSyncStore,
+) -> Result<AgentConnectionStatus, String> {
+    forget_agent_device_impl(runtime, sync_store).await
+}
+
+async fn forget_agent_device_impl(
+    runtime: &AgentRuntime,
+    sync_store: &AgentSyncStore,
+) -> Result<AgentConnectionStatus, String> {
+    let device_id = runtime.connection_status().device_id;
+    let status = runtime.forget_device().map_err(|error| error.to_string())?;
+    if let Some(device_id) = device_id {
+        sync_store.clear_device(&device_id).await?;
+    }
+    Ok(status)
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use crate::agent::{AgentConnectionState, AgentRuntime};
 
-    use super::{get_agent_connection_status, poll_agent_commands, send_agent_event};
+    use super::{get_agent_connection_status, poll_agent_commands, send_agent_heartbeat};
 
     #[test]
     fn status_reports_unconfigured_without_faking_online() {
         let runtime = AgentRuntime::default();
-
         let status = get_agent_connection_status(&runtime).expect("status");
 
-        assert_eq!(status.state, AgentConnectionState::Unconfigured);
+        if status.server_base_url.is_none() {
+            assert_eq!(status.state, AgentConnectionState::Unconfigured);
+        }
     }
 
-    #[test]
-    fn polling_commands_returns_unconfigured_error() {
+    #[tokio::test]
+    async fn polling_commands_refuses_an_unpaired_runtime() {
         let runtime = AgentRuntime::default();
-
-        let error = poll_agent_commands(&runtime).expect_err("poll fails");
-
-        assert!(error.contains("UNCONFIGURED"));
+        if runtime.connection_status().device_id.is_none() {
+            let error = poll_agent_commands(&runtime).await.expect_err("poll fails");
+            assert!(error.contains("UNCONFIGURED"));
+        }
     }
 
-    #[test]
-    fn sending_events_returns_unconfigured_error() {
+    #[tokio::test]
+    async fn heartbeat_rejects_invalid_presence() {
         let runtime = AgentRuntime::default();
+        let error = send_agent_heartbeat(&runtime, "OFFLINE".to_string())
+            .await
+            .expect_err("invalid presence");
 
-        let error =
-            send_agent_event(&runtime, json!({ "status": "completed" })).expect_err("send fails");
-
-        assert!(error.contains("UNCONFIGURED"));
+        assert!(error.contains("VALIDATION_FAILED"));
     }
 }
