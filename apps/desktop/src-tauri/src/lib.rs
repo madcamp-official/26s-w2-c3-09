@@ -1,7 +1,10 @@
 pub mod agent;
+pub mod background;
 pub mod commands;
 pub mod overlay;
 pub mod storage;
+#[cfg(feature = "tauri-commands")]
+pub mod tray;
 pub mod watcher;
 pub mod watcher_lifecycle;
 
@@ -15,48 +18,13 @@ pub fn run() {
         ))
         .manage(agent::AgentRuntime::default())
         .manage(storage::agent_sync::AgentSyncStore::default())
+        .manage(background::BackgroundRuntime::default())
         .manage(overlay::OverlayRuntime::default())
         .manage(storage::auto_approval::AutoApprovalStore::default())
         .manage(storage::managed_roots::ManagedRootStore::default())
         .manage(storage::watchers::WatcherStore::default())
         .setup(|app| {
-            use tauri::menu::{Menu, MenuItem};
-            use tauri::tray::TrayIconBuilder;
             use tauri::Manager;
-
-            let open = MenuItem::with_id(app, "open", "Open Housemouse", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&open, &quit])?;
-            let tray_icon = app
-                .default_window_icon()
-                .cloned()
-                .ok_or("application icon is required for the system tray")?;
-            TrayIconBuilder::with_id("housemouse-main")
-                .icon(tray_icon)
-                .tooltip("Housemouse Desktop Agent")
-                .menu(&tray_menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .build(app)?;
-
-            if let Some(window) = app.get_webview_window("main") {
-                let window_to_hide = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = window_to_hide.hide();
-                    }
-                });
-            }
 
             let store = app.state::<storage::managed_roots::ManagedRootStore>();
             let storage_path = app
@@ -101,10 +69,17 @@ pub fn run() {
                     );
                 }
             }
+            app.state::<background::BackgroundRuntime>()
+                .start_suspended("desktop agent transport is not configured yet")?;
+            if let Err(error) = tray::install_tray(app) {
+                eprintln!("failed to install tray skeleton: {error}");
+            }
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::background::get_background_runtime_status,
+            commands::background::pause_background_runtime,
             commands::file_engine::register_managed_root,
             commands::file_engine::list_managed_roots,
             commands::file_engine::update_managed_root_state,
@@ -141,6 +116,19 @@ pub fn run() {
             commands::watcher::stop_watching_root,
             commands::watcher::is_watching_root,
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run Tauri desktop app");
+        .build(tauri::generate_context!())
+        .expect("failed to build Tauri desktop app")
+        .run(|app, event| {
+            if let tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } = event
+            {
+                if label == "main" {
+                    api.prevent_close();
+                    tray::hide_main_window(app);
+                }
+            }
+        });
 }

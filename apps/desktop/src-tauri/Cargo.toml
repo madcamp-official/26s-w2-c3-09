@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = []
-tauri-commands = ["dep:tauri", "dep:tauri-plugin-autostart", "dep:tauri-plugin-dialog"]
+tauri-commands = ["dep:tauri", "dep:tauri-plugin-autostart", "dep:tauri-plugin-dialog", "tauri/tray-icon"]
 
 [dependencies]
 file-engine-cli = { path = "../../../tools/file-engine-cli" }
