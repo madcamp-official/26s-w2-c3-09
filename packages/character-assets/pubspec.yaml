@@ -1,0 +1,15 @@
+name: housemouse_character_assets
+description: Shared HouseMouse mascot assets.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  assets:
+    - mascot.svg

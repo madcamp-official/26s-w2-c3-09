@@ -20,7 +20,13 @@ import {
 } from "./agentApi";
 
 const heartbeatIntervalMs = 15_000;
-const pairingPollIntervalMs = 2_000;
+// The server allows ten pairing requests per minute. One create, one mobile claim,
+// and polling must all fit in that shared budget.
+const pairingPollIntervalMs = 10_000;
+const mascotUrl = new URL(
+  "../../../../../packages/character-assets/mascot.svg",
+  import.meta.url
+).href;
 
 export function AgentPanel() {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
@@ -47,8 +53,11 @@ export function AgentPanel() {
       pairingRequestInFlight.current = true;
       try {
         const result = await pollAgentPairing(pairing.session_id, pairing.desktop_nonce);
+        setError(null);
         if (result.status === "CLAIMED") {
           setPairing(null);
+          await refreshConnection();
+        } else {
           await refreshConnection();
         }
       } catch (cause) {
@@ -68,7 +77,7 @@ export function AgentPanel() {
 
     const heartbeat = async () => {
       try {
-        await sendAgentHeartbeat("ONLINE");
+        await sendAgentHeartbeat("ONLINE_IDLE");
         await replayEvents();
         await refreshConnection();
       } catch (cause) {
@@ -187,11 +196,14 @@ export function AgentPanel() {
   return (
     <section className="panel agent-panel">
       <div className="section-header">
-        <div>
-          <h2>Desktop Agent connection</h2>
-          <p className="path-text">
-            {connection?.server_base_url ?? "HOUSEMOUSE_SERVER_BASE_URL is not configured"}
-          </p>
+        <div className="mascot-heading">
+          <img className="mascot-image" src={mascotUrl} alt="HouseMouse mascot" />
+          <div>
+            <h2>Desktop Agent connection</h2>
+            <p className="path-text">
+              {connection?.server_base_url ?? "HOUSEMOUSE_SERVER_BASE_URL is not configured"}
+            </p>
+          </div>
         </div>
         <span className={`status-badge status-${connection?.state ?? "unconfigured"}`}>
           {connection?.state ?? "loading"}
@@ -221,8 +233,11 @@ export function AgentPanel() {
             value={deviceName}
             onChange={(event) => setDeviceName(event.target.value)}
           />
-          <button disabled={busy || !deviceName.trim()} onClick={() => void beginPairing()}>
-            Start pairing
+          <button
+            disabled={busy || pairing !== null || !deviceName.trim()}
+            onClick={() => void beginPairing()}
+          >
+            {pairing ? "Pairing in progress" : "Start pairing"}
           </button>
         </div>
       ) : null}

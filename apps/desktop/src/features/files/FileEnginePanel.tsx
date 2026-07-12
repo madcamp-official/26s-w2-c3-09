@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ensureAgentRoom } from "../agent/agentApi";
 import {
   analyzeRoot,
   AutoApprovalPolicy,
@@ -39,6 +40,7 @@ import {
 
 type DecisionState = Record<string, "approved" | "rejected" | "pending">;
 type RejectionReasons = Record<string, string>;
+type RoomSyncState = "syncing" | "synced" | "failed";
 
 const demoRootHint = "Creates a temporary copy of test-fixtures/file-trees/ui-demo";
 
@@ -60,6 +62,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   const [status, setStatus] = useState("Ready");
   const [error, setError] = useState<string | null>(null);
   const [resultLines, setResultLines] = useState<string[]>([]);
+  const [roomSyncStates, setRoomSyncStates] = useState<Record<string, RoomSyncState>>({});
 
   const selectedRootIdRef = useRef(selectedRootId);
   const browsePathRef = useRef(browsePath);
@@ -148,6 +151,15 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       const storedRoots = await listManagedRoots();
       setRoots(storedRoots);
       setSelectedRootId((current) => current || storedRoots[0]?.root_id || "");
+      const results = await Promise.allSettled(
+        storedRoots.map((root) => syncRootToMobile(root, false))
+      );
+      const failedCount = results.filter((result) => result.status === "rejected").length;
+      if (failedCount > 0) {
+        setStatus(`${storedRoots.length} root(s) loaded; ${failedCount} mobile sync pending`);
+      } else if (storedRoots.length > 0) {
+        setStatus(`${storedRoots.length} root(s) synced to mobile`);
+      }
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -236,15 +248,41 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   async function registerRoot() {
     setError(null);
     setStatus("Registering root");
+    let managed: ManagedRoot;
     try {
-      const managed = await registerManagedRoot(pathInput.trim());
+      managed = await registerManagedRoot(pathInput.trim());
       const storedRoots = await listManagedRoots();
       setRoots(storedRoots);
       selectRoot(managed.root_id);
-      setStatus("Root registered");
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Register failed");
+      return;
+    }
+    try {
+      await syncRootToMobile(managed, true);
+    } catch {
+      // The managed root remains registered locally and the UI exposes an explicit retry.
+    }
+  }
+
+  async function syncRootToMobile(root: ManagedRoot, announce: boolean) {
+    setRoomSyncStates((current) => ({ ...current, [root.root_id]: "syncing" }));
+    try {
+      const room = await ensureAgentRoom(root.root_id, root.display_name);
+      setRoomSyncStates((current) => ({ ...current, [root.root_id]: "synced" }));
+      if (announce) {
+        setError(null);
+        setStatus(room.created ? "Root registered and room created" : "Root synced to mobile");
+      }
+      return room;
+    } catch (caught) {
+      setRoomSyncStates((current) => ({ ...current, [root.root_id]: "failed" }));
+      if (announce) {
+        setError(`Root is safe locally, but mobile room sync failed: ${errorMessage(caught)}`);
+        setStatus("Mobile room sync pending");
+      }
+      throw caught;
     }
   }
 
@@ -689,6 +727,20 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                 Watch on startup
               </label>
               <small>{selectedRoot.last_seen_status}</small>
+            </div>
+          ) : null}
+          {selectedRoot ? (
+            <div className="agent-actions">
+              <span className="path-text">
+                Mobile room: {roomSyncStates[selectedRoot.root_id] ?? "pending"}
+              </span>
+              <button
+                type="button"
+                disabled={roomSyncStates[selectedRoot.root_id] === "syncing"}
+                onClick={() => void syncRootToMobile(selectedRoot, true)}
+              >
+                Sync to mobile
+              </button>
             </div>
           ) : null}
           {selectedRoot && autoApprovalPolicy ? (

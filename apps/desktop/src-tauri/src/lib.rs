@@ -131,6 +131,7 @@ pub fn run() {
             commands::agent::poll_agent_pairing,
             commands::agent::send_agent_heartbeat,
             commands::agent::poll_agent_commands,
+            commands::agent::ensure_agent_room,
             commands::agent::replay_agent_events,
             commands::agent::update_agent_command_status,
             commands::agent::forget_agent_device,

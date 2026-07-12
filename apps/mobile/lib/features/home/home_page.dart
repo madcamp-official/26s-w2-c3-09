@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:housemouse_character_assets/character_assets.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../auth/auth_controller.dart';
 import '../auth/pairing_page.dart';
@@ -102,11 +104,19 @@ class _HomePageState extends ConsumerState<HomePage> {
               if (data.character != null) ...[
                 Card(
                   child: ListTile(
-                    leading: const Icon(Icons.pets_outlined),
+                    leading: SizedBox(
+                      width: 52,
+                      height: 52,
+                      child: SvgPicture.asset(
+                        housemouseMascotAsset,
+                        package: housemouseMascotPackage,
+                        semanticsLabel: 'HouseMouse 마스코트',
+                      ),
+                    ),
                     title: const Text('HOUSEMOUSE 캐릭터'),
                     subtitle: Text(
                       '호감도 ${data.character!['affinityTotal'] ?? 0} · '
-                      '${data.character!['riveAssetStatus'] == 'UNCONFIGURED' ? '캐릭터 에셋 설정 전' : '연결됨'}',
+                      '${data.character!['riveAssetStatus'] == 'UNCONFIGURED' ? '기본 마스코트 · 모션 설정 전' : '모션 연결됨'}',
                     ),
                     trailing: const Icon(Icons.tune),
                     onTap: () async {
@@ -186,7 +196,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       ),
                       title: Text(item['name'] as String? ?? '방'),
                       subtitle: Text(
-                        '${item['rootAlias'] ?? '관리 폴더'}'
+                        '${_rootAliasLabel(item['rootAlias'])}'
                         '${item['cleanlinessScore'] == null ? '' : ' · 청결도 ${item['cleanlinessScore']}'}'
                         '${item['latestExecutionStatus'] == null ? '' : ' · 최근 ${item['latestExecutionStatus']}'}',
                       ),
@@ -211,6 +221,11 @@ class _HomePageState extends ConsumerState<HomePage> {
       'DEGRADED' => 'PC 연결 상태가 불안정함',
       _ => 'PC 연결됨',
     };
+  }
+
+  String _rootAliasLabel(Object? value) {
+    final alias = value is String ? value : '';
+    return alias.startsWith('root:') || alias.isEmpty ? '관리 폴더 연결됨' : alias;
   }
 
   Future<void> _confirmRevoke(String deviceId, String deviceName) async {

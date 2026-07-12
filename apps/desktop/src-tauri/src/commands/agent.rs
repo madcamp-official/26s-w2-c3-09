@@ -1,6 +1,6 @@
 use crate::agent::{
-    AgentCommand, AgentConnectionStatus, AgentRuntime, HeartbeatResult, PairingSession,
-    PairingStatus, SyncEvent,
+    AgentCommand, AgentConnectionStatus, AgentRoomSync, AgentRuntime, HeartbeatResult,
+    PairingSession, PairingStatus, SyncEvent,
 };
 use crate::storage::agent_sync::AgentSyncStore;
 
@@ -112,6 +112,31 @@ pub async fn poll_agent_commands(
 pub async fn poll_agent_commands(runtime: &AgentRuntime) -> Result<Vec<AgentCommand>, String> {
     runtime
         .poll_commands()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn ensure_agent_room(
+    root_id: String,
+    display_name: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentRoomSync, String> {
+    runtime
+        .ensure_room_for_root(root_id, display_name)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn ensure_agent_room(
+    runtime: &AgentRuntime,
+    root_id: String,
+    display_name: String,
+) -> Result<AgentRoomSync, String> {
+    runtime
+        .ensure_room_for_root(root_id, display_name)
         .await
         .map_err(|error| error.to_string())
 }

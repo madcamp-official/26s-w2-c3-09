@@ -113,6 +113,18 @@ pre {
   background: #fafdff;
 }
 
+.mascot-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mascot-image {
+  width: 76px;
+  height: 76px;
+  object-fit: contain;
+}
+
 .agent-actions,
 .command-actions {
   display: flex;

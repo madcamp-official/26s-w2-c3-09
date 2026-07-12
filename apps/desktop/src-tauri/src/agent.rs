@@ -75,6 +75,14 @@ pub struct SyncEvent {
     pub payload: Value,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentRoomSync {
+    pub room_id: String,
+    pub root_id: String,
+    pub name: String,
+    pub created: bool,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AgentErrorCode {
@@ -157,6 +165,7 @@ pub struct AgentRuntime {
     http: Client,
     credentials: Arc<dyn CredentialStore>,
     state: Mutex<AgentState>,
+    room_sync_lock: tokio::sync::Mutex<()>,
 }
 
 impl Default for AgentRuntime {
@@ -225,6 +234,7 @@ impl AgentRuntime {
                 state,
                 last_error,
             }),
+            room_sync_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -331,8 +341,13 @@ impl AgentRuntime {
     }
 
     pub async fn heartbeat(&self, presence: String) -> Result<HeartbeatResult, AgentError> {
-        if !matches!(presence.as_str(), "ONLINE" | "BUSY" | "AWAY") {
-            return Err(validation_error("presence must be ONLINE, BUSY, or AWAY"));
+        if !matches!(
+            presence.as_str(),
+            "ONLINE_IDLE" | "ONLINE_SCANNING" | "ONLINE_EXECUTING" | "DEGRADED"
+        ) {
+            return Err(validation_error(
+                "presence must be ONLINE_IDLE, ONLINE_SCANNING, ONLINE_EXECUTING, or DEGRADED",
+            ));
         }
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
@@ -372,6 +387,85 @@ impl AgentRuntime {
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
         }
         result
+    }
+
+    pub async fn ensure_room_for_root(
+        &self,
+        root_id: String,
+        display_name: String,
+    ) -> Result<AgentRoomSync, AgentError> {
+        validate_root_alias(&root_id)?;
+        let display_name = display_name.trim();
+        if display_name.is_empty() || display_name.chars().count() > 120 {
+            return Err(validation_error(
+                "managed root display name must contain between 1 and 120 characters",
+            ));
+        }
+
+        // React StrictMode and manual retries can overlap. Serializing the GET-then-POST
+        // sequence prevents duplicate rooms inside one desktop process.
+        let _room_sync_guard = self.room_sync_lock.lock().await;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let existing = self
+            .send_json::<Vec<ServerRoom>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|rooms| validate_server_rooms(&credential.device_id, rooms));
+        let existing = match existing {
+            Ok(rooms) => rooms,
+            Err(error) => {
+                self.record_error(error.clone(), AgentConnectionState::Offline);
+                return Err(error);
+            }
+        };
+        if let Some(room) = existing.into_iter().find(|room| room.root_alias == root_id) {
+            self.mark_online();
+            return Ok(AgentRoomSync {
+                room_id: room.id,
+                root_id,
+                name: room.name,
+                created: false,
+            });
+        }
+
+        let created = self
+            .send_json::<ServerRoom>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({
+                        "desktopDeviceId": credential.device_id,
+                        "name": display_name,
+                        "rootAlias": root_id,
+                    })),
+            )
+            .await
+            .and_then(|room| validate_server_room(&credential.device_id, room));
+        match created {
+            Ok(room) if room.root_alias == root_id => {
+                self.mark_online();
+                Ok(AgentRoomSync {
+                    room_id: room.id,
+                    root_id,
+                    name: room.name,
+                    created: true,
+                })
+            }
+            Ok(_) => {
+                let error = invalid_response_error(
+                    "created room response did not match the managed root alias",
+                );
+                self.record_error(error.clone(), AgentConnectionState::Offline);
+                Err(error)
+            }
+            Err(error) => {
+                self.record_error(error.clone(), AgentConnectionState::Offline);
+                Err(error)
+            }
+        }
     }
 
     pub async fn replay_events(
@@ -579,6 +673,16 @@ struct ServerCommand {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ServerRoom {
+    id: String,
+    desktop_device_id: String,
+    name: String,
+    root_alias: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SyncEventResponse {
     event_id: String,
     event_type: String,
@@ -670,6 +774,47 @@ fn validate_opaque_value(name: &str, value: &str, max_length: usize) -> Result<(
     Ok(())
 }
 
+fn validate_root_alias(value: &str) -> Result<(), AgentError> {
+    if value.is_empty()
+        || value.len() > 120
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':')
+        })
+    {
+        return Err(validation_error(
+            "managed root id has an invalid room alias format",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_server_rooms(
+    expected_device_id: &str,
+    rooms: Vec<ServerRoom>,
+) -> Result<Vec<ServerRoom>, AgentError> {
+    rooms
+        .into_iter()
+        .map(|room| validate_server_room(expected_device_id, room))
+        .collect()
+}
+
+fn validate_server_room(
+    expected_device_id: &str,
+    room: ServerRoom,
+) -> Result<ServerRoom, AgentError> {
+    if room.id.is_empty()
+        || room.desktop_device_id != expected_device_id
+        || room.name.trim().is_empty()
+        || room.name.chars().count() > 120
+        || room.root_alias.trim().is_empty()
+        || room.root_alias.chars().count() > 120
+        || room.status != "ACTIVE"
+    {
+        return Err(invalid_response_error("room failed response validation"));
+    }
+    Ok(room)
+}
+
 fn validate_sync_events(
     after: u64,
     events: Vec<SyncEventResponse>,
@@ -721,7 +866,10 @@ fn validate_heartbeat_response(
     response: HeartbeatResponse,
 ) -> Result<HeartbeatResult, AgentError> {
     if response.device_id != expected_device_id
-        || !matches!(response.presence.as_str(), "ONLINE" | "BUSY" | "AWAY")
+        || !matches!(
+            response.presence.as_str(),
+            "ONLINE_IDLE" | "ONLINE_SCANNING" | "ONLINE_EXECUTING" | "DEGRADED"
+        )
         || response.ttl_seconds == 0
     {
         return Err(invalid_response_error(
@@ -1009,6 +1157,93 @@ mod tests {
                 .device_token,
             "hm_device_secret"
         );
+    }
+
+    #[tokio::test]
+    async fn heartbeat_uses_the_control_plane_presence_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/devices/device-1/heartbeat",
+            r#"{"deviceId":"device-1","presence":"ONLINE_IDLE","ttlSeconds":45}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/devices/device-1/heartbeat HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+                assert!(request.contains(r#""presence":"ONLINE_IDLE""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let heartbeat = runtime
+            .heartbeat("ONLINE_IDLE".to_string())
+            .await
+            .expect("heartbeat");
+        server.join().expect("server thread");
+
+        assert_eq!(heartbeat.presence, "ONLINE_IDLE");
+        assert_eq!(
+            runtime.connection_status().state,
+            AgentConnectionState::Online
+        );
+    }
+
+    #[tokio::test]
+    async fn managed_root_creates_a_mobile_room_through_the_server_contract() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind room server");
+        let address = listener.local_addr().expect("room server address");
+        let server_url = format!("http://{address}");
+        let server = thread::spawn(move || {
+            let expectations = [
+                ("GET /v1/rooms HTTP/1.1", "[]"),
+                (
+                    "POST /v1/rooms HTTP/1.1",
+                    r#"{"id":"room-1","desktopDeviceId":"device-1","name":"Downloads","rootAlias":"root:abc123","status":"ACTIVE"}"#,
+                ),
+            ];
+            for (expected_request, response_body) in expectations {
+                let (mut stream, _) = listener.accept().expect("accept room request");
+                let mut buffer = [0_u8; 8192];
+                let length = stream.read(&mut buffer).expect("read room request");
+                let request = String::from_utf8_lossy(&buffer[..length]);
+                assert!(request.starts_with(expected_request));
+                if expected_request.starts_with("POST") {
+                    assert!(request.contains(r#""desktopDeviceId":"device-1""#));
+                    assert!(request.contains(r#""rootAlias":"root:abc123""#));
+                }
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write room response");
+            }
+        });
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let room = runtime
+            .ensure_room_for_root("root:abc123".to_string(), "Downloads".to_string())
+            .await
+            .expect("room sync");
+        server.join().expect("room server thread");
+
+        assert_eq!(room.room_id, "room-1");
+        assert!(room.created);
     }
 
     fn one_shot_json_server<F>(

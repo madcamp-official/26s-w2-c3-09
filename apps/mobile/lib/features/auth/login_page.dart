@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:housemouse_character_assets/character_assets.dart';
 import 'auth_controller.dart';
 
 class LoginPage extends ConsumerWidget {
@@ -15,7 +17,13 @@ class LoginPage extends ConsumerWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.home_work_outlined, size: 72),
+                SvgPicture.asset(
+                  housemouseMascotAsset,
+                  package: housemouseMascotPackage,
+                  width: 180,
+                  height: 180,
+                  semanticsLabel: 'HouseMouse 마스코트',
+                ),
                 const SizedBox(height: 16),
                 Text(
                   'HOUSEMOUSE',

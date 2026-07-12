@@ -87,11 +87,14 @@ Tauri Desktop
 - Rule DSL, proposal, 사용자 decision, 실행 직전 precheck
 - journal-before-write, no-overwrite move, 복구형 trash, create/rename, history, undo, journal recovery
 - React 파일 관리 UI와 Tauri invoke bridge
-- 실제 REST agent transport: pairing 코드 생성·polling, 15초 heartbeat, pending command 조회·상태 전이
+- 실제 REST agent transport: pairing 코드 생성·10초 polling, 15초 heartbeat, pending command 조회·상태 전이
 - device token의 OS keychain 저장과 UI·로그 비노출, 잘못된 서버 응답 schema 검증
 - device별 SQLite sync cursor와 `/v1/sync/events` REST replay
 - Desktop Agent 연결·pairing·replay 상태 UI
+- managed root 등록 시 서버 room 자동 생성·중복 조회와 수동 `Sync to mobile` 재시도
 - system tray, 사용자가 직접 설정하는 autostart, MSI/NSIS Windows bundle 구성
+- Desktop·Flutter가 함께 사용하는 픽셀풍 HouseMouse SVG 마스코트
+- Windows에서 Cargo object 파일 잠금으로 Vite가 종료되지 않도록 `src-tauri/target` 감시 제외
 - overlay window/event bridge skeleton
 - 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
 
@@ -122,9 +125,9 @@ Tauri Desktop
 
 | Phase | 현재 판정 | 남은 완료 조건 |
 |---|---|---|
-| 0 계약·파일 안전 POC | 완료 | 146개 Rust test와 fixture E2E 통과 상태 유지 |
+| 0 계약·파일 안전 POC | 완료 | 148개 Rust test와 fixture E2E 통과 상태 유지 |
 | 1 로그인·페어링·Presence | REST 경로 구현 | 실제 mobile claim E2E와 Socket.IO 알림 client |
-| 2 관리 폴더·스캔·청결도 | 양쪽 코드 구현, 통합 전 | room 등록과 snapshot을 실제 서버로 연결 |
+| 2 관리 폴더·스캔·청결도 | room 등록 연결 | 실제 snapshot 동기화 |
 | 3 규칙·명령·제안 | 양쪽 코드 구현, 통합 전 | 서버 command를 Rust proposal로 변환해 왕복 |
 | 4 실행·Undo·README·파일 전달 | 부분 구현 | README와 A FileTransfer, 실제 storage E2E |
 | 5 캐릭터·채팅 | skeleton/metadata | Rive asset, 실제 overlay window, AI provider 선택 |
@@ -145,10 +148,13 @@ Tauri Desktop
 | `flutter analyze` | 오류 0개 |
 | Flutter test | 19개 통과 |
 | Rust file-engine CLI | unit 92개 + integration 3개, 총 95개 통과 |
-| Rust Desktop/Tauri core | 51개 통과 |
+| Rust Desktop/Tauri core | 53개 통과 |
 | Rust fixture E2E | proposal → precheck → execute → undo 통과 |
 | Tauri feature check | `cargo check --features tauri-commands` 통과 |
 | Windows release bundle | 실제 앱 feature를 포함한 MSI 6.82MB, NSIS 4.81MB 생성 성공 |
+| Desktop ↔ server presence | `ONLINE_IDLE` heartbeat `201`, REST replay `200` 확인 |
+| Android ↔ server | SM S901N `adb reverse` 연결, devices/rooms/presence API `200` 확인 |
+| Managed root ↔ mobile room | Desktop `POST /v1/rooms` `201`, 자동 동기화 계약 test 통과 |
 
 CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 Tauri feature check를 실행한다.
 

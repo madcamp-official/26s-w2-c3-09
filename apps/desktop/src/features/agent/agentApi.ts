@@ -40,7 +40,7 @@ export type PairingStatus = {
 
 export type HeartbeatResult = {
   device_id: string;
-  presence: "ONLINE" | "BUSY" | "AWAY";
+  presence: "ONLINE_IDLE" | "ONLINE_SCANNING" | "ONLINE_EXECUTING" | "DEGRADED";
   ttl_seconds: number;
 };
 
@@ -50,6 +50,13 @@ export type AgentCommand = {
   room_id: string;
   status: string;
   payload: unknown;
+};
+
+export type AgentRoomSync = {
+  room_id: string;
+  root_id: string;
+  name: string;
+  created: boolean;
 };
 
 export type SyncEvent = {
@@ -84,12 +91,16 @@ export function pollAgentPairing(sessionId: string, desktopNonce: string) {
   return invokeAgentCommand<PairingStatus>("poll_agent_pairing", { sessionId, desktopNonce });
 }
 
-export function sendAgentHeartbeat(presence: HeartbeatResult["presence"] = "ONLINE") {
+export function sendAgentHeartbeat(presence: HeartbeatResult["presence"] = "ONLINE_IDLE") {
   return invokeAgentCommand<HeartbeatResult>("send_agent_heartbeat", { presence });
 }
 
 export function pollAgentCommands() {
   return invokeAgentCommand<AgentCommand[]>("poll_agent_commands");
+}
+
+export function ensureAgentRoom(rootId: string, displayName: string) {
+  return invokeAgentCommand<AgentRoomSync>("ensure_agent_room", { rootId, displayName });
 }
 
 export function replayAgentEvents() {
