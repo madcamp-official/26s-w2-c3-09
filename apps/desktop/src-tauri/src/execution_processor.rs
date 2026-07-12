@@ -20,7 +20,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::agent::{AgentPendingDecision, AgentProposalItemRecord, AgentRuntime};
+use crate::outbox_processor::enqueue_execution_result;
 use crate::storage::managed_roots::ManagedRootStore;
+use crate::storage::outbox::OutboxStore;
 
 /// Boundary for delegated execution. Turns a server-approved decision into a local
 /// journal-before-write execution, then uploads the result. Never executes anything the server
@@ -56,6 +58,7 @@ pub enum DecisionProcessingStatus {
 pub async fn process_pending_decisions(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
 ) -> Result<DecisionProcessingReport, String> {
     let decisions = agent
         .pending_decisions()
@@ -75,7 +78,7 @@ pub async fn process_pending_decisions(
         let decision_id = decision.decision_id.clone();
         let proposal_id = decision.proposal_id.clone();
 
-        match process_decision(agent, roots, decision).await {
+        match process_decision(agent, roots, outbox, decision).await {
             Ok(execute_report) => {
                 report.processed_count += 1;
                 report.executed_item_count += execute_report.executed_count;
@@ -109,33 +112,35 @@ pub async fn process_pending_decisions(
 async fn process_decision(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
     decision: AgentPendingDecision,
 ) -> Result<ExecuteReport, String> {
-    // Claiming the execution moves the command to EXECUTING on the server. From this point
-    // forward every exit path must upload a terminal result so the execution never stays
-    // claimed without an outcome.
+    // Claiming the execution moves the command to EXECUTING on the server. This stays a synchronous
+    // network call because we need the returned execution id, and because a failed claim means we
+    // must not touch any files. The claim also gates re-processing: once claimed, this decision is
+    // no longer returned by pending_decisions.
     let execution = agent
         .create_execution(decision.proposal_id.clone(), decision.decision_id.clone())
         .await
         .map_err(|error| error.to_string())?;
 
+    // From here the local files may change, so the result must be durable. We enqueue it to the
+    // outbox (a local SQLite write) instead of sending it inline: if the network is down right
+    // after the move, the flush loop still delivers the result later. The execution id is the
+    // server idempotency key, so redelivery is safe.
     match execute_approved_decision(agent, roots, &decision).await {
         Ok(execute_report) => {
             let (status, summary) = summarize_execution(&execute_report);
-            agent
-                .update_execution(execution.execution_id.clone(), status.to_string(), summary)
-                .await
-                .map_err(|error| error.to_string())?;
+            enqueue_execution_result(outbox, &execution.execution_id, status, summary)?;
             Ok(execute_report)
         }
         Err(error) => {
-            let _ = agent
-                .update_execution(
-                    execution.execution_id.clone(),
-                    "FAILED".to_string(),
-                    serde_json::json!({ "reason": error.clone() }),
-                )
-                .await;
+            enqueue_execution_result(
+                outbox,
+                &execution.execution_id,
+                "FAILED",
+                serde_json::json!({ "reason": error.clone() }),
+            )?;
             Err(error)
         }
     }

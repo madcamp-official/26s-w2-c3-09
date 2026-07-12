@@ -485,7 +485,32 @@ Done when:
 - execution result is not lost if network fails after local file mutation
 - retry is idempotent on the server
 
-## 11. Add AI Command Draft
+## 11. Add Desktop Overlay Shell / CharacterEvent Bridge
+
+Overlay and first-run onboarding are A/B boundaries. A owns the desktop native shell, event bridge, and app-level slots; B owns the character design, motion, onboarding copy, and product expression.
+
+A-side work:
+
+- add an app-level empty/onboarding slot for the first run before any managed root exists
+- route the zero-root state to onboarding instead of only showing disabled file panels
+- let B-owned onboarding/character UI prompt the user to pair and register a managed root
+- create/show/hide the Tauri overlay window
+- keep tray, close-to-tray, autostart, and overlay lifecycle compatible
+- deliver background/proposal/decision/execution state as `CharacterEvent`
+- provide an overlay chat/input bridge that can hand off to the AI command draft or proposal flow
+- expose a stable bridge for B-owned character UI
+- keep overlay code out of direct file-operation permission paths
+
+Done when:
+
+- first app launch with zero managed roots has a clear UI slot for B's onboarding design
+- onboarding can hand off to pairing and managed-root registration without bypassing safety checks
+- B can plug the character design into a working desktop overlay window
+- proposal/execution state can trigger character events
+- overlay chat can create only draft/proposal-bound requests, never direct file operations
+- overlay cannot bypass file approval, precheck, journal, or execution boundaries
+
+## 12. Add AI Command Draft
 
 AI should be added after deterministic P0 proposal flow works.
 
@@ -520,7 +545,7 @@ Done when:
 - invalid AI output is rejected before file logic
 - deterministic Rust engine computes final targets
 
-## 12. README Draft/Diff/Write
+## 13. README Draft/Diff/Write
 
 README write is a file mutation and must be proposal-gated.
 
@@ -548,7 +573,46 @@ Done when:
 - user sees diff before write
 - write is journaled/recoverable or visibly undo-limited
 
-## 13. FileTransfer P0
+## 14. Add Online File Browse Adapter
+
+Mobile file access starts with online browsing before transfer. The server may relay browse requests and cache display state, but the desktop remains the source of truth for managed-root path validation and live directory listings.
+
+Target flow:
+
+```text
+Mobile Files screen
+-> Server browse request for room/path/page
+-> Desktop background poll/replay or socket wake
+-> room maps to one registered managed root
+-> relative path is validated inside that root
+-> directory page is listed with safe skips
+-> result is uploaded to server
+-> Mobile displays the current page
+-> user selects a file
+-> FileTransfer P0 starts
+```
+
+A-side work:
+
+- define the desktop browse request/response adapter for server-originated file browse
+- map `room_id` to a registered, enabled managed root before reading anything
+- validate relative directory paths with the same root boundary rules as local browse
+- block traversal, absolute paths, symlink, junction, and reparse point escapes
+- skip unreadable or unsafe entries for read/list operations without failing the whole page
+- exclude `.housemouse`, `.housemouse_trash`, temp/lock/credential-like files from remote browse results
+- support pagination or cursor inputs without treating stale pages as current truth
+- return structured errors for offline, timeout, permission denied, invalid path, cursor invalidated, and root disabled
+- avoid uploading absolute local paths or file contents in browse responses
+
+Done when:
+
+- mobile can request a live directory page from an online desktop through the server
+- invalid paths and root escapes are rejected before filesystem reads outside the root
+- one unreadable entry does not break the whole mobile browse page
+- browse responses expose only relative paths and safe metadata
+- FileTransfer can start from a browsed relative file path without reusing unvalidated mobile input
+
+## 15. FileTransfer P0
 
 This is the second P0 vertical slice after cleanup execution.
 
@@ -583,7 +647,7 @@ Done when:
 - source changed is reported distinctly
 - checksum is produced before completion
 
-## 14. Offline Smart Cache / P1 File Cache
+## 16. Offline Smart Cache / P1 File Cache
 
 Offline file caching is not part of the first cleanup P0, but it must remain in the roadmap. It should start only after both P0 slices are stable:
 
@@ -635,7 +699,83 @@ Done when:
 - stale/offline freshness is visible
 - disabling cache or revoking device removes cached objects
 
-## 15. Windows Release Hardening
+## 17. Add Device Revoke / Unpair Safety
+
+Pairing is not complete unless the desktop also stops safely when the server or mobile revokes the device. A local "forget pairing" button is not enough; remote revoke must prevent future background work and file mutations.
+
+Target flow:
+
+```text
+Mobile/server revokes desktop device
+-> Desktop heartbeat/poll/replay/socket sees 401, 403, or revoke event
+-> background runtime enters suspended/revoked state
+-> Socket.IO disconnects
+-> pending command and decision processing stops
+-> device token is deleted or marked invalid
+-> UI asks the user to pair again
+```
+
+A-side work:
+
+- treat `UNAUTHENTICATED`, `FORBIDDEN`, and explicit revoke events as terminal pairing failures
+- stop command polling, decision execution, and realtime reconnect after revoke is detected
+- disconnect realtime Socket.IO and prevent reconnect with the revoked token
+- delete the device token from keychain or mark the local credential invalid
+- preserve managed roots, file index, journal, and operation history; do not delete user file state
+- check authenticated device state before claiming executions or starting file transfer work
+- record a clear local status such as `revoked` or `pairing_required`
+- make the UI expose re-pairing without pretending the agent is online
+- handle revoke during an in-progress local execution without corrupting journal recovery
+
+Done when:
+
+- a revoked desktop cannot receive new commands or execute approved decisions
+- background loops stop retrying with an invalid token
+- local managed roots and recovery history remain available
+- the user sees a clear re-pairing path
+- revoke after a local file mutation cannot produce fake success or duplicate execution
+
+## 18. Add Tauri Window Capability / Permission Split
+
+The desktop will have at least a main app window and a character overlay window. They must not share the same file-operation permissions. The overlay is a character/chat surface, not a privileged file manager.
+
+Window roles:
+
+```text
+main window
+-> pairing, managed roots, browse/search
+-> proposal/precheck/execute
+-> manual trash/rename/create
+-> history/recovery/background controls
+
+character-overlay window
+-> receive CharacterEvent
+-> show character/onboarding/chat UI
+-> send chat text or draft requests
+-> show/hide/focus overlay
+-> never invoke direct file mutations
+```
+
+A-side work:
+
+- define separate Tauri capabilities for the main window and `character-overlay`
+- allow file-engine mutation commands only from the main window
+- keep overlay permissions limited to overlay status, character events, and chat/draft bridge commands
+- prevent overlay access to `trash_file`, `rename_file`, `create_file`, `execute_file_changes`, `recover_journal`, and auto-approval mutation commands
+- add Rust-side window-label checks for high-risk commands where practical
+- document which commands each window may invoke
+- add a test or manual verification checklist proving overlay cannot invoke file mutation commands
+- keep overlay chat handoff proposal-bound even if B-owned UI changes
+
+Done when:
+
+- the overlay window can render and chat without file-operation privileges
+- direct file mutation commands fail from the overlay window
+- main-window file workflows still work normally
+- capability rules match the manual/delegated file-operation boundary
+- a frontend bug in overlay UI cannot bypass approval, precheck, journal, or execution boundaries
+
+## 19. Windows Release Hardening
 
 Work:
 
@@ -666,11 +806,15 @@ Done when:
 8. Rename/trash/create action normalization
 9. Socket.IO notification client
 10. Durable outbox
-11. AI command draft
-12. README write proposal
-13. FileTransfer P0
-14. Offline smart cache / P1 file cache
-15. Windows release hardening
+11. Desktop overlay shell / CharacterEvent bridge
+12. AI command draft
+13. README write proposal
+14. Online file browse adapter
+15. FileTransfer P0
+16. Offline smart cache / P1 file cache
+17. Device revoke / unpair safety
+18. Tauri window capability / permission split
+19. Windows release hardening
 ```
 
 ## Minimum MVP Cut

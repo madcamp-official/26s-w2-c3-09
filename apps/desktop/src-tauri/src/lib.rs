@@ -3,6 +3,7 @@ pub mod background;
 pub mod command_processor;
 pub mod commands;
 pub mod execution_processor;
+pub mod outbox_processor;
 pub mod overlay;
 pub mod storage;
 #[cfg(feature = "tauri-commands")]
@@ -24,6 +25,7 @@ pub fn run() {
         .manage(overlay::OverlayRuntime::default())
         .manage(storage::auto_approval::AutoApprovalStore::default())
         .manage(storage::managed_roots::ManagedRootStore::default())
+        .manage(storage::outbox::OutboxStore::default())
         .manage(storage::watchers::WatcherStore::default())
         .setup(|app| {
             use tauri::Manager;
@@ -57,6 +59,15 @@ pub fn run() {
             agent_sync
                 .load_from_db(agent_sync_path)
                 .map_err(|error| format!("cannot load desktop agent sync cursor: {error}"))?;
+            let outbox = app.state::<storage::outbox::OutboxStore>();
+            let outbox_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("cannot resolve app data directory: {error}"))?
+                .join("desktop-outbox.db");
+            outbox
+                .load_from_db(outbox_path)
+                .map_err(|error| format!("cannot load desktop outbox: {error}"))?;
             let watchers = app.state::<storage::watchers::WatcherStore>();
             let restore_results = watcher_lifecycle::restore_startup_watchers(
                 app.handle().clone(),
@@ -111,6 +122,7 @@ pub fn run() {
             commands::agent::poll_agent_commands,
             commands::agent::process_agent_commands,
             commands::agent::process_agent_decisions,
+            commands::agent::flush_agent_outbox,
             commands::agent::ensure_agent_room,
             commands::agent::replay_agent_events,
             commands::agent::update_agent_command_status,

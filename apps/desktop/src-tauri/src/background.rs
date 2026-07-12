@@ -42,6 +42,9 @@ pub struct BackgroundRuntimeStatus {
     pub last_executed_item_count: usize,
     pub last_execution_failed_count: usize,
     pub last_realtime_signal_unix_ms: Option<i64>,
+    pub last_outbox_flush_unix_ms: Option<i64>,
+    pub last_outbox_sent_count: usize,
+    pub last_outbox_failed_count: usize,
     pub last_error_message: Option<String>,
 }
 
@@ -86,6 +89,9 @@ impl Default for BackgroundRuntime {
                 last_executed_item_count: 0,
                 last_execution_failed_count: 0,
                 last_realtime_signal_unix_ms: None,
+                last_outbox_flush_unix_ms: None,
+                last_outbox_sent_count: 0,
+                last_outbox_failed_count: 0,
                 last_error_message: None,
             })),
             #[cfg(feature = "tauri-commands")]
@@ -292,6 +298,7 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
     let agent = app.state::<crate::agent::AgentRuntime>();
     let sync_store = app.state::<crate::storage::agent_sync::AgentSyncStore>();
     let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
+    let outbox = app.state::<crate::storage::outbox::OutboxStore>();
 
     match agent.heartbeat("ONLINE_IDLE".to_string()).await {
         Ok(_) => update_status(status, |status| {
@@ -318,7 +325,7 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
         }
     }
 
-    match crate::command_processor::process_pending_commands(&agent, &roots).await {
+    match crate::command_processor::process_pending_commands(&agent, &roots, &outbox).await {
         Ok(report) => update_status(status, |status| {
             status.last_command_poll_unix_ms = Some(unix_ms());
             status.last_command_count = report.inspected_count;
@@ -336,7 +343,7 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
         }),
     }
 
-    match crate::execution_processor::process_pending_decisions(&agent, &roots).await {
+    match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox).await {
         Ok(report) => update_status(status, |status| {
             status.last_decision_poll_unix_ms = Some(unix_ms());
             status.last_decision_count = report.inspected_count;
@@ -345,6 +352,26 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             if report.failed_count > 0 {
                 status.last_error_message = Some(format!(
                     "{} decision(s) failed during execution",
+                    report.failed_count
+                ));
+            }
+        }),
+        Err(error) => update_status(status, |status| {
+            status.last_error_message = Some(error);
+        }),
+    }
+
+    // Deliver everything the command and decision passes just queued (plus any backlog from a
+    // previous tick when the network was down). This runs last so a result enqueued moments ago
+    // is sent in the same tick when the network is healthy.
+    match crate::outbox_processor::flush_outbox(&agent, &outbox).await {
+        Ok(report) => update_status(status, |status| {
+            status.last_outbox_flush_unix_ms = Some(unix_ms());
+            status.last_outbox_sent_count = report.sent_count;
+            status.last_outbox_failed_count = report.failed_count;
+            if report.failed_count > 0 {
+                status.last_error_message = Some(format!(
+                    "{} outbox item(s) permanently failed delivery",
                     report.failed_count
                 ));
             }
@@ -442,5 +469,8 @@ mod tests {
         assert!(status.last_heartbeat_unix_ms.is_none());
         assert!(status.last_decision_poll_unix_ms.is_none());
         assert!(status.last_realtime_signal_unix_ms.is_none());
+        assert!(status.last_outbox_flush_unix_ms.is_none());
+        assert_eq!(status.last_outbox_sent_count, 0);
+        assert_eq!(status.last_outbox_failed_count, 0);
     }
 }

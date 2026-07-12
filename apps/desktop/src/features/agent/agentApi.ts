@@ -76,7 +76,17 @@ export type BackgroundRuntimeStatus = {
   last_executed_item_count: number;
   last_execution_failed_count: number;
   last_realtime_signal_unix_ms: number | null;
+  last_outbox_flush_unix_ms: number | null;
+  last_outbox_sent_count: number;
+  last_outbox_failed_count: number;
   last_error_message: string | null;
+};
+
+export type OutboxFlushReport = {
+  inspected_count: number;
+  sent_count: number;
+  retried_count: number;
+  failed_count: number;
 };
 
 export type CommandProcessingStatus = "submitted_proposal" | "failed" | "skipped";
@@ -176,6 +186,10 @@ export function processAgentCommands() {
 
 export function processAgentDecisions() {
   return invokeAgentCommand<DecisionProcessingReport>("process_agent_decisions");
+}
+
+export function flushAgentOutbox() {
+  return invokeAgentCommand<OutboxFlushReport>("flush_agent_outbox");
 }
 
 export function ensureAgentRoom(rootId: string, displayName: string) {

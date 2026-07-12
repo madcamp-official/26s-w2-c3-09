@@ -6,6 +6,7 @@ use crate::command_processor::{process_pending_commands, CommandProcessingReport
 use crate::execution_processor::{process_pending_decisions, DecisionProcessingReport};
 use crate::storage::agent_sync::AgentSyncStore;
 use crate::storage::managed_roots::ManagedRootStore;
+use crate::storage::outbox::OutboxStore;
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 pub struct SyncReplay {
@@ -124,16 +125,18 @@ pub async fn poll_agent_commands(runtime: &AgentRuntime) -> Result<Vec<AgentComm
 pub async fn process_agent_commands(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
+    outbox: tauri::State<'_, OutboxStore>,
 ) -> Result<CommandProcessingReport, String> {
-    process_pending_commands(&runtime, &roots).await
+    process_pending_commands(&runtime, &roots, &outbox).await
 }
 
 #[cfg(not(feature = "tauri-commands"))]
 pub async fn process_agent_commands(
     runtime: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
 ) -> Result<CommandProcessingReport, String> {
-    process_pending_commands(runtime, roots).await
+    process_pending_commands(runtime, roots, outbox).await
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -141,16 +144,35 @@ pub async fn process_agent_commands(
 pub async fn process_agent_decisions(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
+    outbox: tauri::State<'_, OutboxStore>,
 ) -> Result<DecisionProcessingReport, String> {
-    process_pending_decisions(&runtime, &roots).await
+    process_pending_decisions(&runtime, &roots, &outbox).await
 }
 
 #[cfg(not(feature = "tauri-commands"))]
 pub async fn process_agent_decisions(
     runtime: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
 ) -> Result<DecisionProcessingReport, String> {
-    process_pending_decisions(runtime, roots).await
+    process_pending_decisions(runtime, roots, outbox).await
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn flush_agent_outbox(
+    runtime: tauri::State<'_, AgentRuntime>,
+    outbox: tauri::State<'_, OutboxStore>,
+) -> Result<crate::outbox_processor::OutboxFlushReport, String> {
+    crate::outbox_processor::flush_outbox(&runtime, &outbox).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn flush_agent_outbox(
+    runtime: &AgentRuntime,
+    outbox: &OutboxStore,
+) -> Result<crate::outbox_processor::OutboxFlushReport, String> {
+    crate::outbox_processor::flush_outbox(runtime, outbox).await
 }
 
 #[cfg(feature = "tauri-commands")]

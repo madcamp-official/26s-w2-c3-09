@@ -6,7 +6,9 @@ use file_engine_cli::proposal::{
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{AgentCommand, AgentRuntime};
+use crate::outbox_processor::{enqueue_command_status, enqueue_proposal};
 use crate::storage::managed_roots::ManagedRootStore;
+use crate::storage::outbox::OutboxStore;
 
 /// Boundary for delegated work from mobile/server/AI.
 ///
@@ -54,7 +56,7 @@ struct OrganizeFilesPayload {
     user_intent: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentProposalSubmission {
     pub command_id: String,
@@ -64,17 +66,17 @@ pub struct AgentProposalSubmission {
     pub items: Vec<AgentProposalItem>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentProposalSummary {
     pub item_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme_draft: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub readme_diff: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentProposalItem {
     pub item_order: usize,
@@ -86,14 +88,14 @@ pub struct AgentProposalItem {
     pub conflict_state: AgentProposalConflictState,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AgentProposalActionType {
     Move,
     Quarantine,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AgentProposalConflictState {
     None,
@@ -103,17 +105,19 @@ pub enum AgentProposalConflictState {
 pub async fn process_pending_commands(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
 ) -> Result<CommandProcessingReport, String> {
     let commands = agent
         .poll_commands()
         .await
         .map_err(|error| error.to_string())?;
-    process_commands(agent, roots, commands).await
+    process_commands(agent, roots, outbox, commands).await
 }
 
 pub async fn process_commands(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
     commands: Vec<AgentCommand>,
 ) -> Result<CommandProcessingReport, String> {
     let mut report = CommandProcessingReport {
@@ -142,7 +146,7 @@ pub async fn process_commands(
         }
 
         report.processed_count += 1;
-        let result = process_organize_command(agent, roots, &command).await;
+        let result = process_organize_command(agent, roots, outbox, &command).await;
         match result {
             Ok(item_count) => {
                 report.submitted_proposal_count += 1;
@@ -156,9 +160,9 @@ pub async fn process_commands(
             }
             Err(error) => {
                 report.failed_count += 1;
-                let _ = agent
-                    .update_command_status(command.command_id.clone(), "FAILED".to_string())
-                    .await;
+                // The FAILED report goes through the outbox so it is not lost if the network is
+                // down; the command is already in ANALYZING so it will not be re-polled.
+                let _ = enqueue_command_status(outbox, &command.command_id, "FAILED");
                 report.results.push(CommandProcessingResult {
                     command_id: command.command_id,
                     command_type: command.command_type,
@@ -176,11 +180,14 @@ pub async fn process_commands(
 async fn process_organize_command(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
     command: &AgentCommand,
 ) -> Result<usize, String> {
     let payload = parse_organize_payload(command)?;
     validate_relative_scope(payload.relative_path.as_deref().unwrap_or_default())?;
 
+    // ANALYZING stays a synchronous claim: it moves the command out of QUEUED so it is not polled
+    // and re-processed again before the proposal is built. (Symmetric with the execution claim.)
     agent
         .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
         .await
@@ -205,10 +212,11 @@ async fn process_organize_command(
         return Err("proposal command produced no proposal items".to_string());
     }
 
-    agent
-        .submit_proposal(command.command_id.clone(), submission)
-        .await
-        .map_err(|error| error.to_string())?;
+    // The proposal is the durable result of this command. Enqueue it rather than POSTing inline:
+    // if delivery fails the flush loop retries, and because the command is already ANALYZING it
+    // will not be rebuilt from a fresh poll — so without the outbox a network blip here would
+    // strand the command with no proposal.
+    enqueue_proposal(outbox, &submission)?;
 
     Ok(item_count)
 }
@@ -343,6 +351,7 @@ mod tests {
 
     use crate::agent::AgentRuntime;
     use crate::storage::managed_roots::ManagedRootStore;
+    use crate::storage::outbox::OutboxStore;
 
     use super::{
         build_agent_proposal_submission, parse_organize_payload, process_commands,
@@ -414,7 +423,10 @@ mod tests {
             },
         ];
 
-        let report = process_commands(&runtime, &roots, commands)
+        // All three are skipped before any network or outbox use, so an uninitialized outbox is
+        // never touched.
+        let outbox = OutboxStore::default();
+        let report = process_commands(&runtime, &roots, &outbox, commands)
             .await
             .expect("unsupported direct commands are skipped before runtime calls");
 

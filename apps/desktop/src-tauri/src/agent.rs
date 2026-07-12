@@ -1310,7 +1310,7 @@ impl std::fmt::Display for AgentError {
 }
 
 impl AgentErrorCode {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             AgentErrorCode::Unconfigured => "UNCONFIGURED",
             AgentErrorCode::ValidationFailed => "VALIDATION_FAILED",
@@ -1320,6 +1320,16 @@ impl AgentErrorCode {
             AgentErrorCode::InvalidResponse => "INVALID_RESPONSE",
             AgentErrorCode::CredentialStoreUnavailable => "CREDENTIAL_STORE_UNAVAILABLE",
         }
+    }
+}
+
+impl AgentError {
+    /// True when the failure is worth retrying later (the request never reached a definitive
+    /// server verdict). A transport failure — server unreachable, timed out — is transient. A
+    /// validation/authorization/response error is a definitive rejection and must not be retried
+    /// forever with the same payload.
+    pub fn is_transient(&self) -> bool {
+        matches!(self.code, AgentErrorCode::TransportUnavailable)
     }
 }
 

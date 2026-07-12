@@ -17,6 +17,7 @@ import {
   pauseBackgroundRuntime,
   processAgentCommands,
   processAgentDecisions,
+  flushAgentOutbox,
   pollAgentCommands,
   pollAgentPairing,
   replayAgentEvents,
@@ -239,6 +240,24 @@ export function AgentPanel() {
     }
   }
 
+  async function flushOutboxNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await flushAgentOutbox();
+      setLastProcessedSummary(
+        `outbox: ${report.sent_count} sent, ${report.retried_count} retried, ${report.failed_count} failed of ${report.inspected_count}`
+      );
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function replayEvents() {
     const replay = await replayAgentEvents();
     setSyncCursor(replay.next_cursor);
@@ -314,6 +333,9 @@ export function AgentPanel() {
           <button disabled={busy} onClick={() => void processDecisionsNow()}>
             Process approved decisions
           </button>
+          <button disabled={busy} onClick={() => void flushOutboxNow()}>
+            Flush outbox
+          </button>
           <button className="danger-button" disabled={busy} onClick={() => void forgetDevice()}>
             Forget local pairing
           </button>
@@ -359,6 +381,11 @@ export function AgentPanel() {
             </small>
             <small>
               realtime signal {formatRuntimeTime(background.last_realtime_signal_unix_ms)}
+            </small>
+            <small>
+              outbox sent {background.last_outbox_sent_count} | failed{" "}
+              {background.last_outbox_failed_count} | flush{" "}
+              {formatRuntimeTime(background.last_outbox_flush_unix_ms)}
             </small>
             {lastProcessedSummary ? <small>{lastProcessedSummary}</small> : null}
             {background.last_error_message ? (
