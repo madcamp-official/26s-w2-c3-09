@@ -357,6 +357,9 @@ export function AgentPanel() {
               {background.last_execution_failed_count} | decision poll{" "}
               {formatRuntimeTime(background.last_decision_poll_unix_ms)}
             </small>
+            <small>
+              realtime signal {formatRuntimeTime(background.last_realtime_signal_unix_ms)}
+            </small>
             {lastProcessedSummary ? <small>{lastProcessedSummary}</small> : null}
             {background.last_error_message ? (
               <small className="error-text">{background.last_error_message}</small>

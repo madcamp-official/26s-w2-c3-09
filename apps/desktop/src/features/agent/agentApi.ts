@@ -75,6 +75,7 @@ export type BackgroundRuntimeStatus = {
   last_decision_count: number;
   last_executed_item_count: number;
   last_execution_failed_count: number;
+  last_realtime_signal_unix_ms: number | null;
   last_error_message: string | null;
 };
 

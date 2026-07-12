@@ -5,12 +5,26 @@ use serde::Serialize;
 #[cfg(feature = "tauri-commands")]
 use tauri::async_runtime::JoinHandle;
 #[cfg(feature = "tauri-commands")]
-use tokio::sync::watch;
+use tokio::sync::{watch, Notify};
 #[cfg(feature = "tauri-commands")]
 use tokio::time::{interval, Duration};
 
 #[cfg(feature = "tauri-commands")]
 const BACKGROUND_TICK_SECONDS: u64 = 15;
+/// Delay before retrying the realtime Socket.IO connection after a failed initial connect. The
+/// REST background loop keeps working the whole time, so this only affects push responsiveness.
+#[cfg(feature = "tauri-commands")]
+const REALTIME_RECONNECT_SECONDS: u64 = 15;
+/// Socket.IO event names that mean "there is new agent work or a state change worth a REST pass".
+/// Each one only wakes the REST loop; the events themselves are never treated as the source of
+/// truth (that stays `/v1/sync/events` replay and command/decision polling).
+#[cfg(feature = "tauri-commands")]
+const REALTIME_WAKE_EVENTS: [&str; 4] = [
+    "command.available",
+    "command.updated",
+    "proposal.created",
+    "decision.created",
+];
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct BackgroundRuntimeStatus {
@@ -27,6 +41,7 @@ pub struct BackgroundRuntimeStatus {
     pub last_decision_count: usize,
     pub last_executed_item_count: usize,
     pub last_execution_failed_count: usize,
+    pub last_realtime_signal_unix_ms: Option<i64>,
     pub last_error_message: Option<String>,
 }
 
@@ -50,6 +65,7 @@ pub struct BackgroundRuntime {
 struct BackgroundTask {
     stop: watch::Sender<bool>,
     handle: JoinHandle<()>,
+    realtime_handle: Option<JoinHandle<()>>,
 }
 
 impl Default for BackgroundRuntime {
@@ -69,6 +85,7 @@ impl Default for BackgroundRuntime {
                 last_decision_count: 0,
                 last_executed_item_count: 0,
                 last_execution_failed_count: 0,
+                last_realtime_signal_unix_ms: None,
                 last_error_message: None,
             })),
             #[cfg(feature = "tauri-commands")]
@@ -109,8 +126,30 @@ impl BackgroundRuntime {
 
             let (stop, stop_rx) = watch::channel(false);
             let status = Arc::clone(&self.status);
-            let handle = tauri::async_runtime::spawn(run_background_loop(app, status, stop_rx));
-            *task = Some(BackgroundTask { stop, handle });
+            // `wake` lets the realtime Socket.IO client nudge the REST loop to run a tick
+            // immediately instead of waiting for the next fixed interval.
+            let wake = Arc::new(Notify::new());
+
+            // Open the realtime notification client only when paired. It is a pure latency
+            // optimization: if it never connects, the interval-driven REST loop still runs.
+            let realtime_handle = app
+                .state::<crate::agent::AgentRuntime>()
+                .realtime_credentials()
+                .map(|credentials| {
+                    tauri::async_runtime::spawn(run_realtime_client(
+                        credentials,
+                        Arc::clone(&wake),
+                        stop_rx.clone(),
+                    ))
+                });
+
+            let handle =
+                tauri::async_runtime::spawn(run_background_loop(app, status, stop_rx, wake));
+            *task = Some(BackgroundTask {
+                stop,
+                handle,
+                realtime_handle,
+            });
         }
 
         update_status(&self.status, |status| {
@@ -143,6 +182,9 @@ impl BackgroundRuntime {
             if let Some(task) = task.take() {
                 let _ = task.stop.send(true);
                 task.handle.abort();
+                if let Some(realtime_handle) = task.realtime_handle {
+                    realtime_handle.abort();
+                }
             }
         }
 
@@ -160,6 +202,7 @@ async fn run_background_loop(
     app: tauri::AppHandle,
     status: Arc<Mutex<BackgroundRuntimeStatus>>,
     mut stop: watch::Receiver<bool>,
+    wake: Arc<Notify>,
 ) {
     run_background_tick(&app, &status).await;
 
@@ -168,10 +211,74 @@ async fn run_background_loop(
     loop {
         tokio::select! {
             _ = ticker.tick() => run_background_tick(&app, &status).await,
+            // A realtime notification arrived: run the same REST pass immediately instead of
+            // waiting for the next interval. The event is only a signal; the tick below is what
+            // actually reconciles state over REST.
+            _ = wake.notified() => {
+                update_status(&status, |status| {
+                    status.last_realtime_signal_unix_ms = Some(unix_ms());
+                });
+                run_background_tick(&app, &status).await;
+            }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
                     mark_suspended(&status, "background runtime stopped");
                     break;
+                }
+            }
+        }
+    }
+}
+
+/// Runs the realtime Socket.IO client. It joins the authenticated `user:<id>` room and, for each
+/// agent-relevant event, nudges the REST loop via `wake`. Socket.IO is treated strictly as a
+/// "new data exists" hint: it never carries authoritative state, so a disconnect or missed event
+/// only costs latency, not correctness — the interval REST loop still reconciles everything.
+#[cfg(feature = "tauri-commands")]
+async fn run_realtime_client(
+    credentials: crate::agent::RealtimeCredentials,
+    wake: Arc<Notify>,
+    mut stop: watch::Receiver<bool>,
+) {
+    use futures_util::FutureExt;
+    use rust_socketio::asynchronous::ClientBuilder;
+
+    loop {
+        if *stop.borrow() {
+            return;
+        }
+
+        let mut builder = ClientBuilder::new(credentials.base_url.clone())
+            .namespace("/realtime")
+            .auth(serde_json::json!({ "token": credentials.device_token }))
+            .reconnect(true)
+            .reconnect_on_disconnect(true)
+            .reconnect_delay(2_000, 10_000);
+
+        for event in REALTIME_WAKE_EVENTS {
+            let wake = Arc::clone(&wake);
+            builder = builder.on(event, move |_payload, _client| {
+                let wake = Arc::clone(&wake);
+                async move {
+                    wake.notify_one();
+                }
+                .boxed()
+            });
+        }
+
+        match builder.connect().await {
+            Ok(client) => {
+                // The client keeps itself connected (and reconnects on drop) until we stop.
+                let _ = stop.changed().await;
+                let _ = client.disconnect().await;
+                return;
+            }
+            Err(_) => {
+                // Server unreachable at connect time. The REST loop is the fallback; retry later
+                // unless we are being stopped.
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(REALTIME_RECONNECT_SECONDS)) => {}
+                    _ = stop.changed() => return,
                 }
             }
         }
@@ -334,5 +441,6 @@ mod tests {
         assert_eq!(status.last_execution_failed_count, 0);
         assert!(status.last_heartbeat_unix_ms.is_none());
         assert!(status.last_decision_poll_unix_ms.is_none());
+        assert!(status.last_realtime_signal_unix_ms.is_none());
     }
 }

@@ -109,6 +109,13 @@ pub struct AgentExecution {
     pub status: String,
 }
 
+/// Connection parameters for the realtime Socket.IO client. Intentionally not `Serialize`: the
+/// device token must never leave the process through a Tauri command or a serialized log line.
+pub struct RealtimeCredentials {
+    pub base_url: String,
+    pub device_token: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AgentErrorCode {
@@ -276,6 +283,19 @@ impl AgentRuntime {
             last_error_code: state.last_error.as_ref().map(|error| error.code.clone()),
             last_error_message: state.last_error.as_ref().map(|error| error.message.clone()),
         }
+    }
+
+    /// Returns the server origin and device token needed to open the realtime Socket.IO client,
+    /// or `None` when the desktop is not yet paired. The returned struct is deliberately not
+    /// `Serialize`, so the token can never be returned through a Tauri command or logged.
+    pub fn realtime_credentials(&self) -> Option<RealtimeCredentials> {
+        let state = self.state.lock().expect("agent state mutex poisoned");
+        let base_url = state.server_base_url.clone()?;
+        let credential = state.credential.as_ref()?;
+        Some(RealtimeCredentials {
+            base_url,
+            device_token: credential.device_token.clone(),
+        })
     }
 
     pub async fn start_pairing(&self, device_name: String) -> Result<PairingSession, AgentError> {
@@ -1377,6 +1397,29 @@ mod tests {
         let serialized = serde_json::to_string(&runtime.connection_status()).expect("status json");
 
         assert!(!serialized.contains("must-not-leak"));
+    }
+
+    #[test]
+    fn realtime_credentials_require_pairing() {
+        let unpaired = AgentRuntime::for_test(
+            Some("http://127.0.0.1:3000"),
+            Arc::new(MemoryCredentialStore::default()),
+        );
+        assert!(unpaired.realtime_credentials().is_none());
+
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: "http://127.0.0.1:3000".to_string(),
+                device_id: "device-1".to_string(),
+                device_token: "hm_device_secret".to_string(),
+            })),
+        };
+        let paired = AgentRuntime::for_test(Some("http://127.0.0.1:3000"), Arc::new(store));
+        let credentials = paired
+            .realtime_credentials()
+            .expect("paired runtime exposes realtime credentials");
+        assert_eq!(credentials.base_url, "http://127.0.0.1:3000");
+        assert_eq!(credentials.device_token, "hm_device_secret");
     }
 
     #[test]
