@@ -244,6 +244,9 @@ pub fn build_agent_proposal_submission(
 }
 
 fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
+    // The local engine only produces Move and Trash proposals, so the submission side can only
+    // ever emit MOVE or QUARANTINE. Create/write actions have no local `ProposalAction`, so the
+    // desktop can never submit an arbitrary delegated write; the match below is exhaustive.
     let action_type = match proposal.action {
         ProposalAction::Move => AgentProposalActionType::Move,
         ProposalAction::Trash => AgentProposalActionType::Quarantine,

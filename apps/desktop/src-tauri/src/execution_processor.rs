@@ -13,7 +13,9 @@ use file_engine_cli::decision::DecisionApplication;
 use file_engine_cli::execute::{execute_decision_application, ExecuteReport};
 use file_engine_cli::journal::TRASH_DIR;
 use file_engine_cli::path_guard::PathGuard;
-use file_engine_cli::proposal::{proposal_id, Proposal, ProposalAction, ProposalReport, ProposalStatus};
+use file_engine_cli::proposal::{
+    proposal_id, Proposal, ProposalAction, ProposalReport, ProposalStatus,
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -197,9 +199,19 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
         .clone()
         .ok_or_else(|| format!("proposal item {} is missing a source path", item.item_order))?;
 
+    // MVP delegation is intentionally limited to relocating existing files. A delegated rename
+    // arrives as a MOVE whose destination is a sibling of the source (folder/old -> folder/new);
+    // it needs no separate action because the local engine already journals every MOVE the same
+    // way a manual rename does. CREATE_DIR and README_WRITE are write actions that create new
+    // content, so they are refused here — no delegated command may turn into an arbitrary write.
     let action = match item.action_type.as_str() {
         "MOVE" => ProposalAction::Move,
         "QUARANTINE" => ProposalAction::Trash,
+        write @ ("CREATE_DIR" | "README_WRITE") => {
+            return Err(format!(
+                "delegated write action {write} is not allowed; only MOVE (including rename) and QUARANTINE may be delegated"
+            ))
+        }
         other => {
             return Err(format!(
                 "delegated action type {other} is not supported yet"
@@ -299,7 +311,12 @@ mod tests {
     /// Builds a move item whose precondition matches the file's actual on-disk size and
     /// modified time, mirroring what command_processor::proposal_item() records at proposal
     /// creation time so the reconstructed proposal precisely matches the current file.
-    fn move_item_matching_disk(root: &std::path::Path, order: i64, from: &str, to: &str) -> AgentProposalItemRecord {
+    fn move_item_matching_disk(
+        root: &std::path::Path,
+        order: i64,
+        from: &str,
+        to: &str,
+    ) -> AgentProposalItemRecord {
         let metadata = fs::metadata(root.join(from)).expect("seeded file metadata");
         let modified_unix_ms = metadata
             .modified()
@@ -322,14 +339,56 @@ mod tests {
     }
 
     #[test]
-    fn build_local_proposal_report_rejects_unsupported_action_types() {
+    fn delegated_create_and_write_actions_are_refused() {
         let dir = tempdir().expect("tempdir");
-        let mut item = move_item(0, "a.pdf", "Documents/a.pdf");
-        item.action_type = "README_WRITE".to_string();
 
-        let error =
-            build_local_proposal_report(dir.path(), &[item]).expect_err("unsupported action");
-        assert!(error.contains("not supported yet"));
+        for write_action in ["CREATE_DIR", "README_WRITE"] {
+            let mut item = move_item(0, "a.pdf", "Documents/a.pdf");
+            item.action_type = write_action.to_string();
+
+            let error = build_local_proposal_report(dir.path(), &[item])
+                .expect_err("write action must be refused");
+            assert!(
+                error.contains("is not allowed"),
+                "unexpected error for {write_action}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn delegated_rename_executes_as_a_journaled_move() {
+        use file_engine_cli::journal::{read_operation_history, JournalAction};
+
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("notes")).expect("notes dir");
+        fs::write(root.join("notes/old.txt"), b"hi").expect("seed file");
+
+        // A delegated rename is just a MOVE whose destination is a sibling of the source.
+        let items = vec![move_item_matching_disk(
+            root,
+            0,
+            "notes/old.txt",
+            "notes/new.txt",
+        )];
+        let report = build_local_proposal_report(root, &items).expect("local proposal");
+        let application = DecisionApplication {
+            approved: report,
+            rejected: Vec::new(),
+        };
+        let execute_report = execute_decision_application(root, application).expect("execute");
+
+        assert_eq!(execute_report.executed_count, 1);
+        assert!(root.join("notes/new.txt").exists());
+        assert!(!root.join("notes/old.txt").exists());
+
+        // The rename is journaled as a Move, exactly like a manual rename, so it stays undoable.
+        let history = read_operation_history(root).expect("history");
+        assert_eq!(history.operations[0].action, JournalAction::Move);
+        assert!(history.operations[0].can_undo);
+
+        let (status, _) = summarize_execution(&execute_report);
+        assert_eq!(status, "SUCCEEDED");
     }
 
     #[test]

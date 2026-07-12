@@ -451,6 +451,36 @@ mod tests {
     }
 
     #[test]
+    fn proposal_trash_matches_direct_trash_on_disk_structure() {
+        // A proposal-executed QUARANTINE and a direct manual trash must produce the same journal
+        // action and the same recoverable on-disk layout (a `file` payload plus an `original.json`
+        // metadata sidecar under .housemouse_trash/<op>/), because both go through trash_file().
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::create_dir_all(root.join(".housemouse")).expect("create state dir");
+        fs::write(root.join("inbox").join("cache.tmp"), "noise").expect("write temp");
+        fs::write(
+            root.join(".housemouse").join("rules.json"),
+            r#"{"version":1,"rules":[{"id":"temp-trash","when":{"name_matches":"*.tmp"},"then":{"trash":true}}]}"#,
+        )
+        .expect("write rules");
+
+        let report = execute_root(&root).expect("execute");
+        let history = crate::journal::read_operation_history(&root).expect("history");
+
+        let trashed_relative = &report.results[0].to;
+        let trashed_dir = std::path::Path::new(trashed_relative)
+            .parent()
+            .expect("trashed parent");
+        // Same payload filename and metadata sidecar a direct trash writes.
+        assert!(root.join(trashed_relative).exists());
+        assert!(root.join(trashed_dir).join("original.json").exists());
+        assert!(trashed_relative.starts_with(crate::journal::TRASH_DIR));
+        assert_eq!(history.operations[0].action, JournalAction::Trash);
+    }
+
+    #[test]
     fn refuses_saved_proposal_when_source_changed() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");

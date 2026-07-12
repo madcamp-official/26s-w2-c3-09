@@ -1153,7 +1153,10 @@ fn validate_server_command(response: ServerCommand) -> Result<AgentCommand, Agen
 fn validate_pending_decisions(
     responses: Vec<PendingDecisionResponse>,
 ) -> Result<Vec<AgentPendingDecision>, AgentError> {
-    responses.into_iter().map(validate_pending_decision).collect()
+    responses
+        .into_iter()
+        .map(validate_pending_decision)
+        .collect()
 }
 
 fn validate_pending_decision(
@@ -1218,12 +1221,7 @@ fn validate_execution_response(response: ExecutionResponse) -> Result<AgentExecu
     if response.id.is_empty()
         || !matches!(
             response.status.as_str(),
-            "EXECUTING"
-                | "SUCCEEDED"
-                | "PARTIALLY_SUCCEEDED"
-                | "FAILED"
-                | "STALE"
-                | "ROLLED_BACK"
+            "EXECUTING" | "SUCCEEDED" | "PARTIALLY_SUCCEEDED" | "FAILED" | "STALE" | "ROLLED_BACK"
         )
     {
         return Err(invalid_response_error(
@@ -1611,7 +1609,10 @@ mod tests {
         };
         let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
 
-        let decisions = runtime.pending_decisions().await.expect("pending decisions");
+        let decisions = runtime
+            .pending_decisions()
+            .await
+            .expect("pending decisions");
         server.join().expect("server thread");
 
         assert_eq!(decisions.len(), 1);
