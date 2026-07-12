@@ -327,8 +327,11 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     setStatus("Analyzing");
     try {
       const report = await analyzeRoot(selectedRootId);
-      setResultLines(report.files.map((file) => `${file.path} (${file.size_bytes} bytes)`));
-      setStatus(`Analyzed ${report.files.length} files`);
+      setResultLines([
+        ...report.files.map((file) => `${file.path} (${file.size_bytes} bytes)`),
+        ...formatSkippedEntries(report.skipped_entries)
+      ]);
+      setStatus(formatCountWithSkipped("Analyzed", report.files.length, report.skipped_entries.length, "files"));
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Analyze failed");
@@ -523,6 +526,9 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     try {
       const report = await browseRootTree(rootId, path);
       setBrowseEntries(report.entries);
+      if (report.skipped_entries.length > 0) {
+        setStatus(`Browsing ${report.path || "/"} (${report.skipped_entries.length} skipped)`);
+      }
     } catch (caught) {
       setBrowseEntries([]);
       setError(errorMessage(caught));
@@ -536,7 +542,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     try {
       const report = await searchManagedRoot(rootId, query);
       setSearchResults(report.files);
-      setStatus(`Found ${report.files.length} indexed files`);
+      setStatus(formatCountWithSkipped("Found", report.files.length, report.skipped_entries.length, "indexed files"));
     } catch (caught) {
       setError(errorMessage(caught));
       setStatus("Search failed");
@@ -550,7 +556,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     setStatus("Reindexing");
     try {
       const report = await reindexManagedRoot(selectedRootId);
-      setStatus(`Indexed ${report.files.length} files`);
+      setStatus(formatCountWithSkipped("Indexed", report.files.length, report.skipped_entries.length, "files"));
       // Refresh whatever the search box is currently showing against the new index.
       if (searchResults !== null) {
         await runSearch(selectedRootId, searchQuery);
@@ -1068,6 +1074,14 @@ function formatUndoLines(report: UndoReport) {
   return report.results.map((result) =>
     [result.status, `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
   );
+}
+
+function formatSkippedEntries(entries: Array<{ path: string; reason: string }>) {
+  return entries.map((entry) => `skipped | ${entry.path || "/"} | ${entry.reason}`);
+}
+
+function formatCountWithSkipped(label: string, count: number, skipped: number, noun: string) {
+  return skipped > 0 ? `${label} ${count} ${noun}, skipped ${skipped}` : `${label} ${count} ${noun}`;
 }
 
 function errorMessage(caught: unknown) {

@@ -15,6 +15,7 @@ pub struct BrowseReport {
     pub root: String,
     pub path: String,
     pub entries: Vec<BrowseEntry>,
+    pub skipped_entries: Vec<SkippedEntry>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -24,6 +25,12 @@ pub struct BrowseEntry {
     pub is_dir: bool,
     pub size_bytes: Option<u64>,
     pub modified_unix_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct SkippedEntry {
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(Debug)]
@@ -59,29 +66,40 @@ pub fn browse_root(
     };
 
     let mut entries = Vec::new();
+    let mut skipped_entries = Vec::new();
     let read_dir = fs::read_dir(&target_dir).map_err(|error| BrowseError::ReadDir {
         path: target_dir.clone(),
         message: error.to_string(),
     })?;
 
     for entry in read_dir {
-        let entry = entry.map_err(|error| BrowseError::ReadDir {
-            path: target_dir.clone(),
-            message: error.to_string(),
-        })?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                skipped_entries.push(skipped_entry(guard.root(), &target_dir, error.to_string()));
+                continue;
+            }
+        };
         let entry_path = entry.path();
         if is_housemouse_internal_dir(&entry_path) {
             continue;
         }
 
-        let metadata =
-            fs::symlink_metadata(&entry_path).map_err(|error| BrowseError::Metadata {
-                path: entry_path.clone(),
-                message: error.to_string(),
-            })?;
+        let metadata = match fs::symlink_metadata(&entry_path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                skipped_entries.push(skipped_entry(guard.root(), &entry_path, error.to_string()));
+                continue;
+            }
+        };
         let file_type = metadata.file_type();
 
         if is_link_or_reparse_point(&metadata, file_type) {
+            skipped_entries.push(skipped_entry(
+                guard.root(),
+                &entry_path,
+                "skipped symlink, junction, or reparse point".to_string(),
+            ));
             continue;
         }
 
@@ -92,13 +110,18 @@ pub fn browse_root(
             .unwrap_or_default()
             .to_string();
 
-        entries.push(BrowseEntry {
-            name,
-            path: relative_entry_path(guard.root(), &entry_path)?,
-            is_dir,
-            size_bytes: if is_dir { None } else { Some(metadata.len()) },
-            modified_unix_ms: modified_unix_ms(&metadata),
-        });
+        match relative_entry_path(guard.root(), &entry_path) {
+            Ok(path) => entries.push(BrowseEntry {
+                name,
+                path,
+                is_dir,
+                size_bytes: if is_dir { None } else { Some(metadata.len()) },
+                modified_unix_ms: modified_unix_ms(&metadata),
+            }),
+            Err(error) => {
+                skipped_entries.push(skipped_entry(guard.root(), &entry_path, error.to_string()))
+            }
+        }
     }
 
     entries.sort_by(|left, right| match (left.is_dir, right.is_dir) {
@@ -106,11 +129,13 @@ pub fn browse_root(
         (false, true) => Ordering::Greater,
         _ => left.name.cmp(&right.name),
     });
+    skipped_entries.sort_by(|left, right| left.path.cmp(&right.path));
 
     Ok(BrowseReport {
         root: guard.root().display().to_string(),
         path: relative_path,
         entries,
+        skipped_entries,
     })
 }
 
@@ -133,6 +158,19 @@ fn relative_entry_path(root: &Path, path: &Path) -> Result<String, BrowseError> 
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/"))
+}
+
+fn skipped_entry(root: &Path, path: &Path, reason: String) -> SkippedEntry {
+    SkippedEntry {
+        path: path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/"),
+        reason,
+    }
 }
 
 fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
@@ -212,6 +250,7 @@ mod tests {
         assert!(!report.entries[2].is_dir);
         assert_eq!(report.entries[2].size_bytes, Some(2));
         assert_eq!(report.path, "");
+        assert!(report.skipped_entries.is_empty());
     }
 
     #[test]
@@ -280,6 +319,26 @@ mod tests {
     }
 
     #[test]
+    fn browses_downloads_like_names() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("Downloads");
+        fs::create_dir_all(root.join("새 폴더")).expect("create korean folder");
+        fs::write(root.join("보고서 (최종).pdf"), "pdf").expect("write korean pdf");
+        fs::write(root.join("installer.tmp"), "tmp").expect("write temp file");
+
+        let report = browse_root(&root, None).expect("browse downloads-like root");
+        let names = report
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["새 폴더", "installer.tmp", "보고서 (최종).pdf"]);
+        assert!(report.entries[0].is_dir);
+        assert!(report.skipped_entries.is_empty());
+    }
+
+    #[test]
     fn ignores_direct_symlinks() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
@@ -306,6 +365,7 @@ mod tests {
 
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].name, "real.txt");
+        assert_eq!(report.skipped_entries.len(), 1);
     }
 
     #[cfg(windows)]
@@ -329,5 +389,6 @@ mod tests {
 
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].name, "real.txt");
+        assert_eq!(report.skipped_entries.len(), 1);
     }
 }

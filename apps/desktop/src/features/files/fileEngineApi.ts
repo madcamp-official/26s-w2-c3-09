@@ -31,9 +31,15 @@ export type FileEntry = {
   modified_unix_ms: number | null;
 };
 
+export type SkippedEntry = {
+  path: string;
+  reason: string;
+};
+
 export type AnalyzeReport = {
   root: string;
   files: FileEntry[];
+  skipped_entries: SkippedEntry[];
 };
 
 export type BrowseEntry = {
@@ -48,6 +54,7 @@ export type BrowseReport = {
   root: string;
   path: string;
   entries: BrowseEntry[];
+  skipped_entries: SkippedEntry[];
 };
 
 export type IndexedFile = {
@@ -60,6 +67,7 @@ export type IndexedFile = {
 export type FileIndexReport = {
   root: string;
   files: IndexedFile[];
+  skipped_entries: SkippedEntry[];
 };
 
 export type ProposalStatus = "ready" | "destination_exists";

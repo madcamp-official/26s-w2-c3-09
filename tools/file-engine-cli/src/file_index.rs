@@ -7,7 +7,7 @@ use std::time::UNIX_EPOCH;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
-use crate::analyzer::{analyze_root, AnalyzeError};
+use crate::analyzer::{analyze_root, AnalyzeError, SkippedEntry};
 use crate::db::{block_on, open_root_db, DbError};
 use crate::path_guard::{PathGuard, PathGuardError};
 
@@ -15,6 +15,7 @@ use crate::path_guard::{PathGuard, PathGuardError};
 pub struct FileIndexReport {
     pub root: String,
     pub files: Vec<IndexedFile>,
+    pub skipped_entries: Vec<SkippedEntry>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -82,6 +83,7 @@ pub fn reindex_root(root: impl AsRef<Path>) -> Result<FileIndexReport, FileIndex
     Ok(FileIndexReport {
         root: analysis.root,
         files,
+        skipped_entries: analysis.skipped_entries,
     })
 }
 
@@ -199,6 +201,7 @@ fn query_index(
     Ok(FileIndexReport {
         root: guard.root().display().to_string(),
         files,
+        skipped_entries: Vec::new(),
     })
 }
 
@@ -331,6 +334,7 @@ mod tests {
             .collect();
         assert_eq!(paths, vec!["inbox/note.md", "inbox/photo.png"]);
         assert_eq!(report.files[0].extension.as_deref(), Some("md"));
+        assert!(report.skipped_entries.is_empty());
     }
 
     #[test]
@@ -442,5 +446,22 @@ mod tests {
             .map(|file| file.relative_path.as_str())
             .collect();
         assert_eq!(paths, vec!["a_b.txt"]);
+    }
+
+    #[test]
+    fn reindex_keeps_downloads_like_names_searchable() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("Downloads");
+        fs::create_dir_all(&root).expect("create downloads");
+        fs::write(root.join("보고서 (최종).pdf"), "pdf").expect("write korean pdf");
+        fs::write(root.join("installer.tmp"), "tmp").expect("write temp file");
+
+        let indexed = reindex_root(&root).expect("reindex");
+        assert_eq!(indexed.files.len(), 2);
+        assert!(indexed.skipped_entries.is_empty());
+
+        let hits = search_index(&root, "보고서").expect("search korean name");
+        assert_eq!(hits.files.len(), 1);
+        assert_eq!(hits.files[0].relative_path, "보고서 (최종).pdf");
     }
 }

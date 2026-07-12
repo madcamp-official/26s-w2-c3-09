@@ -116,9 +116,14 @@ Rules:
       "size_bytes": 12,
       "modified_unix_ms": 1783672855045
     }
-  ]
+  ],
+  "skipped_entries": []
 }
 ```
+
+Real-world folders such as Downloads can contain unreadable, temporary, or reparse-point entries.
+Read-only scans skip those entries and report them in `skipped_entries`; mutation commands still
+fail closed before changing files.
 
 ### BrowseReport
 
@@ -141,11 +146,13 @@ Rules:
       "size_bytes": 12,
       "modified_unix_ms": 1783672855045
     }
-  ]
+  ],
+  "skipped_entries": []
 }
 ```
 
 Omit `--path` (or pass an empty string) to browse the managed root itself. `entries` is sorted directories-first, then alphabetically. Directory entries always carry `size_bytes: null`.
+Entries that cannot be inspected safely are omitted from `entries` and listed in `skipped_entries`.
 
 ### ProposalReport
 

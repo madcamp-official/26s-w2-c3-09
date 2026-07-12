@@ -13,6 +13,7 @@ use crate::path_guard::{PathGuard, PathGuardError};
 pub struct AnalyzeReport {
     pub root: String,
     pub files: Vec<FileEntry>,
+    pub skipped_entries: Vec<SkippedEntry>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -20,6 +21,12 @@ pub struct FileEntry {
     pub path: String,
     pub size_bytes: u64,
     pub modified_unix_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct SkippedEntry {
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(Debug)]
@@ -34,13 +41,16 @@ pub enum AnalyzeError {
 pub fn analyze_root(root: impl AsRef<Path>) -> Result<AnalyzeReport, AnalyzeError> {
     let guard = PathGuard::new(root).map_err(AnalyzeError::Guard)?;
     let mut files = Vec::new();
+    let mut skipped_entries = Vec::new();
 
-    collect_files(guard.root(), guard.root(), &mut files)?;
+    collect_files(guard.root(), guard.root(), &mut files, &mut skipped_entries)?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
+    skipped_entries.sort_by(|left, right| left.path.cmp(&right.path));
 
     Ok(AnalyzeReport {
         root: guard.root().display().to_string(),
         files,
+        skipped_entries,
     })
 }
 
@@ -48,47 +58,78 @@ fn collect_files(
     root: &Path,
     current_dir: &Path,
     files: &mut Vec<FileEntry>,
+    skipped_entries: &mut Vec<SkippedEntry>,
 ) -> Result<(), AnalyzeError> {
-    let entries = fs::read_dir(current_dir).map_err(|error| AnalyzeError::ReadDir {
-        path: current_dir.to_path_buf(),
-        message: error.to_string(),
-    })?;
+    let entries = match fs::read_dir(current_dir) {
+        Ok(entries) => entries,
+        Err(error) if current_dir == root => {
+            return Err(AnalyzeError::ReadDir {
+                path: current_dir.to_path_buf(),
+                message: error.to_string(),
+            });
+        }
+        Err(error) => {
+            skipped_entries.push(skipped_entry(root, current_dir, error.to_string()));
+            return Ok(());
+        }
+    };
 
     for entry in entries {
-        let entry = entry.map_err(|error| AnalyzeError::ReadDir {
-            path: current_dir.to_path_buf(),
-            message: error.to_string(),
-        })?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                skipped_entries.push(skipped_entry(root, current_dir, error.to_string()));
+                continue;
+            }
+        };
         let path = entry.path();
         if is_housemouse_internal_dir(&path) {
             continue;
         }
 
-        let metadata = fs::symlink_metadata(&path).map_err(|error| AnalyzeError::Metadata {
-            path: path.clone(),
-            message: error.to_string(),
-        })?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                skipped_entries.push(skipped_entry(root, &path, error.to_string()));
+                continue;
+            }
+        };
         let file_type = metadata.file_type();
 
         if is_link_or_reparse_point(&metadata, file_type) {
+            skipped_entries.push(skipped_entry(
+                root,
+                &path,
+                "skipped symlink, junction, or reparse point".to_string(),
+            ));
             continue;
         }
 
         if metadata.is_dir() {
-            collect_files(root, &path, files)?;
+            collect_files(root, &path, files, skipped_entries)?;
             continue;
         }
 
         if metadata.is_file() {
-            files.push(FileEntry {
-                path: relative_path(root, &path)?,
-                size_bytes: metadata.len(),
-                modified_unix_ms: modified_unix_ms(&metadata),
-            });
+            match relative_path(root, &path) {
+                Ok(relative_path) => files.push(FileEntry {
+                    path: relative_path,
+                    size_bytes: metadata.len(),
+                    modified_unix_ms: modified_unix_ms(&metadata),
+                }),
+                Err(error) => skipped_entries.push(skipped_entry(root, &path, error.to_string())),
+            }
         }
     }
 
     Ok(())
+}
+
+fn skipped_entry(root: &Path, path: &Path, reason: String) -> SkippedEntry {
+    SkippedEntry {
+        path: relative_path_lossy(root, path),
+        reason,
+    }
 }
 
 fn relative_path(root: &Path, path: &Path) -> Result<String, AnalyzeError> {
@@ -103,6 +144,15 @@ fn relative_path(root: &Path, path: &Path) -> Result<String, AnalyzeError> {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/"))
+}
+
+fn relative_path_lossy(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
@@ -178,6 +228,7 @@ mod tests {
         assert_eq!(paths, vec!["a/one.txt", "b/two.txt"]);
         assert_eq!(report.files[0].size_bytes, 1);
         assert_eq!(report.files[1].size_bytes, 2);
+        assert!(report.skipped_entries.is_empty());
     }
 
     #[test]
@@ -207,6 +258,7 @@ mod tests {
 
         assert_eq!(report.files.len(), 1);
         assert_eq!(report.files[0].path, "real.txt");
+        assert_eq!(report.skipped_entries.len(), 1);
     }
 
     #[test]
@@ -229,6 +281,29 @@ mod tests {
             .map(|file| file.path.as_str())
             .collect::<Vec<_>>();
         assert_eq!(paths, vec!["real.txt"]);
+    }
+
+    #[test]
+    fn analyzes_downloads_like_names() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("Downloads");
+        fs::create_dir_all(&root).expect("create downloads");
+        fs::write(root.join("보고서 (최종).pdf"), "pdf").expect("write korean pdf");
+        fs::write(root.join("installer.tmp"), "tmp").expect("write temp file");
+        fs::write(root.join("shortcut.lnk"), "shortcut").expect("write shortcut file");
+
+        let report = analyze_root(&root).expect("analyze downloads-like root");
+        let paths = report
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            paths,
+            vec!["installer.tmp", "shortcut.lnk", "보고서 (최종).pdf"]
+        );
+        assert!(report.skipped_entries.is_empty());
     }
 
     #[cfg(windows)]
@@ -256,5 +331,6 @@ mod tests {
             .map(|file| file.path.as_str())
             .collect::<Vec<_>>();
         assert_eq!(paths, vec!["inside.txt"]);
+        assert_eq!(report.skipped_entries.len(), 1);
     }
 }
