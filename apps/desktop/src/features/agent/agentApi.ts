@@ -69,7 +69,28 @@ export type BackgroundRuntimeStatus = {
   last_replay_unix_ms: number | null;
   last_command_poll_unix_ms: number | null;
   last_command_count: number;
+  last_processed_command_count: number;
+  last_submitted_proposal_count: number;
   last_error_message: string | null;
+};
+
+export type CommandProcessingStatus = "submitted_proposal" | "failed" | "skipped";
+
+export type CommandProcessingResult = {
+  command_id: string;
+  command_type: string;
+  status: CommandProcessingStatus;
+  message: string | null;
+  proposal_item_count: number;
+};
+
+export type CommandProcessingReport = {
+  inspected_count: number;
+  processed_count: number;
+  submitted_proposal_count: number;
+  failed_count: number;
+  skipped_count: number;
+  results: CommandProcessingResult[];
 };
 
 export type SyncEvent = {
@@ -122,6 +143,10 @@ export function sendAgentHeartbeat(presence: HeartbeatResult["presence"] = "ONLI
 
 export function pollAgentCommands() {
   return invokeAgentCommand<AgentCommand[]>("poll_agent_commands");
+}
+
+export function processAgentCommands() {
+  return invokeAgentCommand<CommandProcessingReport>("process_agent_commands");
 }
 
 export function ensureAgentRoom(rootId: string, displayName: string) {

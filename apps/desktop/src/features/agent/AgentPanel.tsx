@@ -15,6 +15,7 @@ import {
   getBackgroundRuntimeStatus,
   PairingSession,
   pauseBackgroundRuntime,
+  processAgentCommands,
   pollAgentCommands,
   pollAgentPairing,
   replayAgentEvents,
@@ -40,6 +41,7 @@ export function AgentPanel() {
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
+  const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +201,25 @@ export function AgentPanel() {
     }
   }
 
+  async function processCommandsNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await processAgentCommands();
+      setLastProcessedSummary(
+        `${report.submitted_proposal_count} proposal batch(es), ${report.failed_count} failed, ${report.skipped_count} skipped`
+      );
+      setCommands(await pollAgentCommands());
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function replayEvents() {
     const replay = await replayAgentEvents();
     setSyncCursor(replay.next_cursor);
@@ -268,6 +289,9 @@ export function AgentPanel() {
           <button disabled={busy} onClick={() => void refreshCommands()}>
             Refresh pending commands
           </button>
+          <button disabled={busy} onClick={() => void processCommandsNow()}>
+            Process commands
+          </button>
           <button className="danger-button" disabled={busy} onClick={() => void forgetDevice()}>
             Forget local pairing
           </button>
@@ -298,9 +322,14 @@ export function AgentPanel() {
               {formatRuntimeTime(background.last_heartbeat_unix_ms)}
             </small>
             <small>
+              processed {background.last_processed_command_count} | submitted proposals{" "}
+              {background.last_submitted_proposal_count}
+            </small>
+            <small>
               replay {formatRuntimeTime(background.last_replay_unix_ms)} | command poll{" "}
               {formatRuntimeTime(background.last_command_poll_unix_ms)}
             </small>
+            {lastProcessedSummary ? <small>{lastProcessedSummary}</small> : null}
             {background.last_error_message ? (
               <small className="error-text">{background.last_error_message}</small>
             ) : null}

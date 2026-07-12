@@ -2,7 +2,9 @@ use crate::agent::{
     AgentCommand, AgentConnectionStatus, AgentRoomSync, AgentRuntime, HeartbeatResult,
     PairingSession, PairingStatus, SyncEvent,
 };
+use crate::command_processor::{process_pending_commands, CommandProcessingReport};
 use crate::storage::agent_sync::AgentSyncStore;
+use crate::storage::managed_roots::ManagedRootStore;
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 pub struct SyncReplay {
@@ -114,6 +116,23 @@ pub async fn poll_agent_commands(runtime: &AgentRuntime) -> Result<Vec<AgentComm
         .poll_commands()
         .await
         .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn process_agent_commands(
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+) -> Result<CommandProcessingReport, String> {
+    process_pending_commands(&runtime, &roots).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn process_agent_commands(
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<CommandProcessingReport, String> {
+    process_pending_commands(runtime, roots).await
 }
 
 #[cfg(feature = "tauri-commands")]

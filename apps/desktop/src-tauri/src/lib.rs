@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod background;
+pub mod command_processor;
 pub mod commands;
 pub mod overlay;
 pub mod storage;
@@ -107,6 +108,7 @@ pub fn run() {
             commands::agent::poll_agent_pairing,
             commands::agent::send_agent_heartbeat,
             commands::agent::poll_agent_commands,
+            commands::agent::process_agent_commands,
             commands::agent::ensure_agent_room,
             commands::agent::replay_agent_events,
             commands::agent::update_agent_command_status,

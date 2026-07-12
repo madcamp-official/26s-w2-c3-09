@@ -21,6 +21,8 @@ pub struct BackgroundRuntimeStatus {
     pub last_replay_unix_ms: Option<i64>,
     pub last_command_poll_unix_ms: Option<i64>,
     pub last_command_count: usize,
+    pub last_processed_command_count: usize,
+    pub last_submitted_proposal_count: usize,
     pub last_error_message: Option<String>,
 }
 
@@ -57,6 +59,8 @@ impl Default for BackgroundRuntime {
                 last_replay_unix_ms: None,
                 last_command_poll_unix_ms: None,
                 last_command_count: 0,
+                last_processed_command_count: 0,
+                last_submitted_proposal_count: 0,
                 last_error_message: None,
             })),
             #[cfg(feature = "tauri-commands")]
@@ -172,6 +176,7 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
 
     let agent = app.state::<crate::agent::AgentRuntime>();
     let sync_store = app.state::<crate::storage::agent_sync::AgentSyncStore>();
+    let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
 
     match agent.heartbeat("ONLINE_IDLE".to_string()).await {
         Ok(_) => update_status(status, |status| {
@@ -198,13 +203,21 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
         }
     }
 
-    match agent.poll_commands().await {
-        Ok(commands) => update_status(status, |status| {
+    match crate::command_processor::process_pending_commands(&agent, &roots).await {
+        Ok(report) => update_status(status, |status| {
             status.last_command_poll_unix_ms = Some(unix_ms());
-            status.last_command_count = commands.len();
+            status.last_command_count = report.inspected_count;
+            status.last_processed_command_count = report.processed_count;
+            status.last_submitted_proposal_count = report.submitted_proposal_count;
+            if report.failed_count > 0 {
+                status.last_error_message = Some(format!(
+                    "{} command(s) failed during proposal processing",
+                    report.failed_count
+                ));
+            }
         }),
         Err(error) => update_status(status, |status| {
-            status.last_error_message = Some(error.to_string());
+            status.last_error_message = Some(error);
         }),
     }
 }
@@ -288,6 +301,8 @@ mod tests {
 
         assert_eq!(status.state, BackgroundRuntimeState::Stopped);
         assert_eq!(status.last_command_count, 0);
+        assert_eq!(status.last_processed_command_count, 0);
+        assert_eq!(status.last_submitted_proposal_count, 0);
         assert!(status.last_heartbeat_unix_ms.is_none());
     }
 }

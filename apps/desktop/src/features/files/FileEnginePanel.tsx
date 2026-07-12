@@ -798,7 +798,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
               Analyze
             </button>
             <button type="button" onClick={proposeForSelectedRoot} disabled={!selectedRootId}>
-              Propose
+              Build proposal
             </button>
             <button
               type="button"
@@ -841,6 +841,10 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
               {readyProposalCount} ready, {approvedCount} approved
             </p>
           ) : null}
+          <p className="mode-note">
+            Delegated cleanup uses proposals only. Mobile, agent, and AI requests cannot run the
+            manual file tools directly.
+          </p>
           {journalCorruption ? (
             <p className="error-text">Journal needs recovery before execute/undo will run.</p>
           ) : null}
@@ -850,7 +854,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         </div>
 
         <div className="panel">
-          <h2>Proposals</h2>
+          <h2>Delegated proposals</h2>
           <div className="proposal-list">
             {proposal?.proposals.map((item) => (
               <article key={item.proposal_id} className="proposal-row">
@@ -926,7 +930,12 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
 
       <section className="panel">
         <div className="section-header">
-          <h2>Browse</h2>
+          <div>
+            <h2>Manual file tools</h2>
+            <p className="path-text">
+              These buttons are local-only actions started by this desktop user.
+            </p>
+          </div>
           <button type="button" onClick={() => void refreshBrowse()} disabled={!selectedRootId}>
             Refresh
           </button>

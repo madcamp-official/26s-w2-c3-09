@@ -302,6 +302,14 @@ pre {
   color: #5f6972;
 }
 
+.mode-note {
+  border: 1px solid #d9e2e8;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #4b5563;
+  padding: 8px 10px;
+}
+
 .auto-approval-panel {
   display: grid;
   grid-template-columns: repeat(3, max-content) minmax(88px, 1fr);

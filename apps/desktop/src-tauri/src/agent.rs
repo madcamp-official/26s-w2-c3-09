@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::command_processor::AgentProposalSubmission;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -468,6 +469,39 @@ impl AgentRuntime {
         }
     }
 
+    pub async fn root_id_for_room(&self, room_id: String) -> Result<AgentRoomSync, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let rooms = self
+            .send_json::<Vec<ServerRoom>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|rooms| validate_server_rooms(&credential.device_id, rooms));
+        let rooms = match rooms {
+            Ok(rooms) => rooms,
+            Err(error) => {
+                self.record_error(error.clone(), AgentConnectionState::Offline);
+                return Err(error);
+            }
+        };
+
+        let Some(room) = rooms.into_iter().find(|room| room.id == room_id) else {
+            let error = invalid_response_error("command room is not registered for this device");
+            self.record_error(error.clone(), AgentConnectionState::Offline);
+            return Err(error);
+        };
+        self.mark_online();
+        Ok(AgentRoomSync {
+            room_id: room.id,
+            root_id: room.root_alias,
+            name: room.name,
+            created: false,
+        })
+    }
+
     pub async fn replay_events(
         &self,
         after: u64,
@@ -527,6 +561,34 @@ impl AgentRuntime {
                 }
                 Ok(command)
             });
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn submit_proposal(
+        &self,
+        idempotency_key: String,
+        proposal: AgentProposalSubmission,
+    ) -> Result<(), AgentError> {
+        validate_opaque_value("proposal idempotency key", &idempotency_key, 200)?;
+        if proposal.items.is_empty() || proposal.items.len() > 200 {
+            return Err(validation_error(
+                "proposal submission must contain between 1 and 200 items",
+            ));
+        }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_empty(
+                self.http
+                    .post(format!("{base_url}/v1/agent/proposals"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&proposal),
+            )
+            .await;
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -606,6 +668,19 @@ impl AgentRuntime {
             .json::<T>()
             .await
             .map_err(|_| invalid_response_error("server returned an unexpected response shape"))
+    }
+
+    async fn send_empty(&self, request: reqwest::RequestBuilder) -> Result<(), AgentError> {
+        let response = request.send().await.map_err(|_| AgentError {
+            code: AgentErrorCode::TransportUnavailable,
+            message: "cannot reach the HouseMouse server".to_string(),
+        })?;
+        let status = response.status();
+        if !status.is_success() {
+            let server_error = response.json::<ServerErrorResponse>().await.ok();
+            return Err(http_error(status, server_error));
+        }
+        Ok(())
     }
 
     #[cfg(test)]
