@@ -517,13 +517,27 @@ AI should be added after deterministic P0 proposal flow works.
 Allowed role:
 
 ```text
-natural language
+natural language from mobile chat or desktop overlay chat
 -> CommandDraft / Rule DSL draft
 -> schema validation
 -> deterministic file proposal
 -> approval
 -> execute
 ```
+
+Desktop overlay chat boundary:
+
+- desktop overlay chat is an input bridge, not a file-operation surface
+- overlay chat submits a message to the AI command draft flow
+- AI/provider code returns only a validated command/rule draft
+- the draft must enter the same command/proposal pipeline as mobile/server commands
+- the desktop file engine remains the only layer that computes concrete file targets
+- chat output must never call `trash_file`, `rename_file`, `create_file`, or execution APIs directly
+
+A/B split:
+
+- B owns chat UI, AI provider calls, natural-language UX, and server-side command draft creation
+- A owns the desktop overlay bridge, local validation, deterministic proposal generation, precheck, journal, execution, undo visibility, and outbox result delivery
 
 Forbidden:
 
@@ -544,6 +558,8 @@ Done when:
 
 - invalid AI output is rejected before file logic
 - deterministic Rust engine computes final targets
+- desktop overlay chat can create only draft/proposal-bound requests
+- desktop overlay chat cannot bypass approval, precheck, journal, execution, or outbox boundaries
 
 ## 13. README Draft/Diff/Write
 

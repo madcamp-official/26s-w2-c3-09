@@ -184,6 +184,27 @@ pub fn propose_file_changes(
     propose_file_changes_impl(root)
 }
 
+/// Local validation of an AI/rule-draft (plan item 12). Strictly parses and validates a candidate
+/// Rule DSL draft without touching the filesystem — B's desktop AI code can call this to reject a
+/// bad draft before it ever enters the command/proposal pipeline. Validation only: it never reads
+/// the disk, computes targets, or mutates anything.
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn validate_rule_draft(draft: serde_json::Value) -> Result<(), String> {
+    validate_rule_draft_impl(draft)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn validate_rule_draft(draft: serde_json::Value) -> Result<(), String> {
+    validate_rule_draft_impl(draft)
+}
+
+fn validate_rule_draft_impl(draft: serde_json::Value) -> Result<(), String> {
+    let rule_set: file_engine_cli::rules::RuleSet = serde_json::from_value(draft)
+        .map_err(|error| format!("invalid rule draft shape: {error}"))?;
+    rule_set.validate().map_err(command_error)
+}
+
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn get_auto_approval_policy(
@@ -695,7 +716,34 @@ mod tests {
         precheck_file_changes, prepare_demo_root, propose_file_changes, recover_journal,
         register_managed_root, register_managed_root_in_store, reindex_managed_root, rename_file,
         search_managed_root, trash_file, undo_operation, update_auto_approval_policy,
+        validate_rule_draft,
     };
+
+    #[test]
+    fn validate_rule_draft_accepts_valid_and_rejects_invalid() {
+        // A well-formed "clean up PDFs" draft passes local validation with no filesystem access.
+        validate_rule_draft(serde_json::json!({
+            "version": 1,
+            "rules": [
+                { "id": "pdfs", "when": { "extension_in": ["pdf"] }, "then": { "trash": true } }
+            ]
+        }))
+        .expect("valid draft accepted");
+
+        // Unknown field -> rejected at parse (strict schema).
+        assert!(validate_rule_draft(serde_json::json!({
+            "version": 1,
+            "rules": [{ "id": "x", "when": {}, "then": { "nope": true } }]
+        }))
+        .is_err());
+
+        // Well-formed but a rule with no condition ("match everything") -> rejected by validate().
+        assert!(validate_rule_draft(serde_json::json!({
+            "version": 1,
+            "rules": [{ "id": "x", "when": {}, "then": { "trash": true } }]
+        }))
+        .is_err());
+    }
 
     #[test]
     fn register_managed_root_returns_canonical_directory() {

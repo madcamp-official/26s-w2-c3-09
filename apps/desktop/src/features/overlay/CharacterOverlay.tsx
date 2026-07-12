@@ -44,7 +44,9 @@ export function CharacterOverlay() {
     try {
       await submitOverlayDraftRequest(draft);
       setDraft("");
-      setNotice("Draft handed off to the proposal flow. It still needs your approval before anything runs.");
+      setNotice(
+        "Sent to the AI draft flow. Any resulting cleanup is a proposal you must approve before anything runs — the overlay never changes files itself."
+      );
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause));
     } finally {

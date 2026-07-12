@@ -250,6 +250,15 @@ export function proposeFileChanges(rootId: string) {
   return invokeCommand<ProposalReport>("propose_file_changes", { rootId });
 }
 
+/**
+ * Locally validates an AI-produced Rule DSL draft (plan item 12) without touching the filesystem.
+ * Resolves when the draft is a well-formed, safe rule set; rejects otherwise. Use this to reject
+ * bad AI output before it enters the command/proposal pipeline. Validation only — never mutates.
+ */
+export function validateRuleDraft(draft: unknown) {
+  return invokeCommand<void>("validate_rule_draft", { draft });
+}
+
 export function getAutoApprovalPolicy(rootId: string) {
   return invokeCommand<AutoApprovalPolicy>("get_auto_approval_policy", { rootId });
 }

@@ -7,7 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::analyzer::{analyze_root, AnalyzeError};
-use crate::rules::{load_rule_set_for_root, normalize_relative_path, RuleContext, RuleError};
+use crate::rules::{
+    load_rule_set_for_root, normalize_relative_path, RuleContext, RuleError, RuleSet,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ProposalReport {
@@ -53,6 +55,20 @@ pub enum ProposalError {
 pub fn propose_for_root(root: impl AsRef<Path>) -> Result<ProposalReport, ProposalError> {
     let root = root.as_ref();
     let rule_set = load_rule_set_for_root(root).map_err(ProposalError::Rule)?;
+    propose_for_root_with_rule_set(root, rule_set)
+}
+
+/// Computes a proposal by applying a caller-supplied rule set to the managed root, rather than the
+/// root's persisted `rules.json`. This is the deterministic engine an AI/rule-draft flow feeds
+/// into: the draft is validated (`RuleSet::validate`) before it reaches this function, and the
+/// engine — not the AI — computes the concrete file targets. The rule set is validated again here
+/// so no caller can hand in an unvalidated set.
+pub fn propose_for_root_with_rule_set(
+    root: impl AsRef<Path>,
+    rule_set: RuleSet,
+) -> Result<ProposalReport, ProposalError> {
+    let root = root.as_ref();
+    rule_set.validate().map_err(ProposalError::Rule)?;
     let report = analyze_root(root).map_err(ProposalError::Analyze)?;
     let existing_paths = report
         .files
@@ -159,7 +175,68 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{propose_for_root, read_proposal_file, ProposalStatus};
+    use super::{
+        propose_for_root, propose_for_root_with_rule_set, read_proposal_file, ProposalStatus,
+    };
+
+    #[test]
+    fn applies_a_supplied_rule_set_deterministically_without_touching_files() {
+        use crate::rules::RuleSet;
+
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("downloads")).expect("create downloads");
+        // Two PDFs plus an unrelated file; the draft rule should only match the PDFs.
+        fs::write(root.join("downloads").join("old.pdf"), "pdf").expect("write pdf");
+        fs::write(root.join("downloads").join("report.pdf"), "pdf").expect("write pdf");
+        fs::write(root.join("downloads").join("keep.txt"), "txt").expect("write txt");
+
+        // The shape an AI "clean up old PDFs" draft would produce (age omitted here so the test is
+        // deterministic; the engine still computes the concrete targets).
+        let draft = r#"{"version":1,"rules":[
+            {"id":"cleanup-pdfs","when":{"extension_in":["pdf"]},"then":{"trash":true}}
+        ]}"#;
+        let rule_set = serde_json::from_str::<RuleSet>(draft).expect("parse draft");
+
+        let report = propose_for_root_with_rule_set(&root, rule_set).expect("propose");
+
+        let mut froms = report
+            .proposals
+            .iter()
+            .map(|proposal| proposal.from.as_str())
+            .collect::<Vec<_>>();
+        froms.sort();
+        assert_eq!(froms, vec!["downloads/old.pdf", "downloads/report.pdf"]);
+        // Deterministic proposal only — nothing on disk changed.
+        assert!(root.join("downloads").join("old.pdf").exists());
+        assert!(root.join("downloads").join("keep.txt").exists());
+    }
+
+    #[test]
+    fn refuses_to_apply_an_invalid_rule_set() {
+        use crate::rules::RuleSet;
+
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("create root");
+
+        // A rule with no condition would mean "match everything" — validation must reject it
+        // before any file access.
+        let invalid = RuleSet {
+            version: 1,
+            rules: vec![crate::rules::Rule {
+                id: "empty".to_string(),
+                priority: 0,
+                when: crate::rules::Condition::default(),
+                then: crate::rules::Action {
+                    move_to: None,
+                    trash: true,
+                },
+            }],
+        };
+
+        assert!(propose_for_root_with_rule_set(&root, invalid).is_err());
+    }
 
     #[test]
     fn proposes_moves_by_extension_without_touching_files() {

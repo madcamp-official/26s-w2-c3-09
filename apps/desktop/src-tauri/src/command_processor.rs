@@ -1,9 +1,12 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::proposal::{
-    propose_for_root, Proposal, ProposalAction, ProposalReport, ProposalStatus,
+    propose_for_root, propose_for_root_with_rule_set, Proposal, ProposalAction, ProposalReport,
+    ProposalStatus,
 };
+use file_engine_cli::rules::RuleSet;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::agent::{AgentCommand, AgentRuntime};
 use crate::outbox_processor::{enqueue_command_status, enqueue_proposal};
@@ -44,7 +47,7 @@ pub enum CommandProcessingStatus {
     Skipped,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct OrganizeFilesPayload {
     #[serde(default)]
@@ -54,6 +57,11 @@ struct OrganizeFilesPayload {
     rule_mode: Option<String>,
     #[serde(default)]
     user_intent: Option<String>,
+    /// An AI/server-produced Rule DSL draft (plan item 12). When present the desktop uses this
+    /// draft instead of the root's saved rules — but only after strictly parsing and validating it
+    /// (see `resolve_proposal`), so malformed AI output is rejected before any file logic runs.
+    #[serde(default)]
+    rule_draft: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -205,7 +213,7 @@ async fn process_organize_command(
         ));
     }
 
-    let local_report = propose_for_root(&managed_root.root).map_err(|error| error.to_string())?;
+    let local_report = resolve_proposal(&managed_root.root, &payload)?;
     let submission = build_agent_proposal_submission(command, local_report, payload.max_proposals)?;
     let item_count = submission.items.len();
     if item_count == 0 {
@@ -219,6 +227,22 @@ async fn process_organize_command(
     enqueue_proposal(outbox, &submission)?;
 
     Ok(item_count)
+}
+
+/// Computes the local proposal for a command. If the command carries an AI/server rule draft, the
+/// draft is treated as untrusted input: it is strictly parsed and validated here before any file
+/// access, so malformed AI output is rejected before the engine reads the disk. The deterministic
+/// Rust engine — never the AI — computes the concrete file targets. Without a draft, the root's own
+/// saved rules are used.
+fn resolve_proposal(root: &str, payload: &OrganizeFilesPayload) -> Result<ProposalReport, String> {
+    match &payload.rule_draft {
+        Some(draft) => {
+            let rule_set: RuleSet = serde_json::from_value(draft.clone())
+                .map_err(|error| format!("invalid AI rule draft shape: {error}"))?;
+            propose_for_root_with_rule_set(root, rule_set).map_err(|error| error.to_string())
+        }
+        None => propose_for_root(root).map_err(|error| error.to_string()),
+    }
 }
 
 pub fn build_agent_proposal_submission(
@@ -355,7 +379,8 @@ mod tests {
 
     use super::{
         build_agent_proposal_submission, parse_organize_payload, process_commands,
-        validate_relative_scope, AgentCommand, AgentProposalActionType, AgentProposalConflictState,
+        resolve_proposal, validate_relative_scope, AgentCommand, AgentProposalActionType,
+        AgentProposalConflictState, OrganizeFilesPayload,
     };
 
     fn command(payload: serde_json::Value) -> AgentCommand {
@@ -366,6 +391,70 @@ mod tests {
             status: "QUEUED".to_string(),
             payload,
         }
+    }
+
+    fn organize_payload(rule_draft: Option<serde_json::Value>) -> OrganizeFilesPayload {
+        OrganizeFilesPayload {
+            relative_path: None,
+            max_proposals: 50,
+            rule_mode: None,
+            user_intent: None,
+            rule_draft,
+        }
+    }
+
+    #[test]
+    fn ai_rule_draft_produces_a_deterministic_proposal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("downloads")).expect("downloads");
+        std::fs::write(root.join("downloads/old.pdf"), "pdf").expect("pdf");
+        std::fs::write(root.join("downloads/keep.txt"), "txt").expect("txt");
+
+        // The validated rule-draft shape an AI "clean up PDFs" request would translate to.
+        let payload = organize_payload(Some(json!({
+            "version": 1,
+            "rules": [
+                { "id": "cleanup-pdfs", "when": { "extension_in": ["pdf"] }, "then": { "trash": true } }
+            ]
+        })));
+
+        let report = resolve_proposal(&root.to_string_lossy(), &payload).expect("draft proposal");
+        let froms = report
+            .proposals
+            .iter()
+            .map(|p| p.from.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(froms, vec!["downloads/old.pdf"]);
+    }
+
+    #[test]
+    fn malformed_ai_rule_draft_is_rejected_before_file_logic() {
+        // A non-existent root: if the draft shape were parsed after touching the disk this would
+        // fail with a filesystem error. Instead it must fail at draft parsing.
+        let payload = organize_payload(Some(json!({
+            "version": 1,
+            "rules": [{ "id": "x", "when": {}, "then": { "bogusField": true } }]
+        })));
+
+        let error = resolve_proposal("C:/definitely/missing/root", &payload)
+            .expect_err("malformed draft rejected");
+        assert!(
+            error.contains("invalid AI rule draft shape"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn semantically_invalid_ai_rule_draft_is_rejected_before_file_logic() {
+        // Well-formed JSON, but a rule with no condition means "match everything" — the engine's
+        // validate() must reject it before analyzing the (here non-existent) root.
+        let payload = organize_payload(Some(json!({
+            "version": 1,
+            "rules": [{ "id": "x", "when": {}, "then": { "trash": true } }]
+        })));
+
+        assert!(resolve_proposal("C:/definitely/missing/root", &payload).is_err());
     }
 
     #[test]

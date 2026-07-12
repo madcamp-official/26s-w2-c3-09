@@ -103,6 +103,7 @@ pub fn run() {
             commands::file_engine::reindex_managed_root,
             commands::file_engine::search_managed_root,
             commands::file_engine::propose_file_changes,
+            commands::file_engine::validate_rule_draft,
             commands::file_engine::get_auto_approval_policy,
             commands::file_engine::update_auto_approval_policy,
             commands::file_engine::auto_approve_file_changes,
