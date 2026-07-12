@@ -70,7 +70,7 @@ pub fn run() {
                 }
             }
             app.state::<background::BackgroundRuntime>()
-                .start_suspended("desktop agent transport is not configured yet")?;
+                .start(app.handle().clone())?;
             if let Err(error) = tray::install_tray(app) {
                 eprintln!("failed to install tray skeleton: {error}");
             }
@@ -79,6 +79,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::background::get_background_runtime_status,
+            commands::background::start_background_runtime,
             commands::background::pause_background_runtime,
             commands::file_engine::register_managed_root,
             commands::file_engine::list_managed_roots,

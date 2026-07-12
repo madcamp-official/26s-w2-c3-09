@@ -17,6 +17,8 @@ const MENU_HIDE_MANAGER: &str = "hide_manager";
 #[cfg(feature = "tauri-commands")]
 const MENU_PAUSE_AGENT: &str = "pause_agent";
 #[cfg(feature = "tauri-commands")]
+const MENU_RESUME_AGENT: &str = "resume_agent";
+#[cfg(feature = "tauri-commands")]
 const MENU_QUIT: &str = "quit";
 
 #[cfg(feature = "tauri-commands")]
@@ -29,10 +31,22 @@ pub fn install_tray(app: &App) -> Result<(), String> {
             .map_err(|error| format!("cannot create tray menu item: {error}"))?;
     let pause_agent = MenuItem::with_id(app, MENU_PAUSE_AGENT, "Pause agent", true, None::<&str>)
         .map_err(|error| format!("cannot create tray menu item: {error}"))?;
+    let resume_agent =
+        MenuItem::with_id(app, MENU_RESUME_AGENT, "Resume agent", true, None::<&str>)
+            .map_err(|error| format!("cannot create tray menu item: {error}"))?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)
         .map_err(|error| format!("cannot create tray menu item: {error}"))?;
-    let menu = Menu::with_items(app, &[&open_manager, &hide_manager, &pause_agent, &quit])
-        .map_err(|error| format!("cannot create tray menu: {error}"))?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &open_manager,
+            &hide_manager,
+            &pause_agent,
+            &resume_agent,
+            &quit,
+        ],
+    )
+    .map_err(|error| format!("cannot create tray menu: {error}"))?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("Housemouse")
@@ -42,6 +56,7 @@ pub fn install_tray(app: &App) -> Result<(), String> {
             MENU_OPEN_MANAGER => show_main_window(app),
             MENU_HIDE_MANAGER => hide_main_window(app),
             MENU_PAUSE_AGENT => pause_background_runtime(app),
+            MENU_RESUME_AGENT => resume_background_runtime(app),
             MENU_QUIT => app.exit(0),
             _ => {}
         });
@@ -77,6 +92,12 @@ pub fn hide_main_window(app: &tauri::AppHandle) {
 pub fn pause_background_runtime(app: &tauri::AppHandle) {
     let runtime = app.state::<crate::background::BackgroundRuntime>();
     let _ = runtime.pause("paused from system tray");
+}
+
+#[cfg(feature = "tauri-commands")]
+pub fn resume_background_runtime(app: &tauri::AppHandle) {
+    let runtime = app.state::<crate::background::BackgroundRuntime>();
+    let _ = runtime.start(app.clone());
 }
 
 #[cfg(feature = "tauri-commands")]

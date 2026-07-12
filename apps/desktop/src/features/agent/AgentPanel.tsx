@@ -1,25 +1,29 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   disable as disableAutostart,
   enable as enableAutostart,
   isEnabled as isAutostartEnabled
 } from "@tauri-apps/plugin-autostart";
+import { QRCodeSVG } from "qrcode.react";
 
 import {
   AgentCommand,
   AgentConnectionStatus,
+  BackgroundRuntimeStatus,
   forgetAgentDevice,
   getAgentConnectionStatus,
+  getBackgroundRuntimeStatus,
   PairingSession,
+  pauseBackgroundRuntime,
   pollAgentCommands,
   pollAgentPairing,
   replayAgentEvents,
-  sendAgentHeartbeat,
+  startBackgroundRuntime,
   startAgentPairing,
   updateAgentCommandStatus
 } from "./agentApi";
 
-const heartbeatIntervalMs = 15_000;
+const backgroundRefreshIntervalMs = 15_000;
 // The server allows ten pairing requests per minute. One create, one mobile claim,
 // and polling must all fit in that shared budget.
 const pairingPollIntervalMs = 10_000;
@@ -30,6 +34,7 @@ const mascotUrl = new URL(
 
 export function AgentPanel() {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
+  const [background, setBackground] = useState<BackgroundRuntimeStatus | null>(null);
   const [deviceName, setDeviceName] = useState("HouseMouse Desktop");
   const [pairing, setPairing] = useState<PairingSession | null>(null);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
@@ -39,16 +44,26 @@ export function AgentPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pairingRequestInFlight = useRef(false);
+  const pairingPayload = useMemo(
+    () => (pairing && connection?.server_base_url ? pairingQrPayload(pairing, connection.server_base_url) : null),
+    [connection?.server_base_url, pairing]
+  );
 
   useEffect(() => {
     void refreshConnection();
     void refreshAutostart();
+    void refreshBackground();
   }, []);
 
   useEffect(() => {
     if (!pairing) return;
 
     const poll = async () => {
+      if (new Date(pairing.expires_at).getTime() <= Date.now()) {
+        setPairing(null);
+        setError("Pairing code expired. Start a new pairing session.");
+        return;
+      }
       if (pairingRequestInFlight.current) return;
       pairingRequestInFlight.current = true;
       try {
@@ -56,6 +71,8 @@ export function AgentPanel() {
         setError(null);
         if (result.status === "CLAIMED") {
           setPairing(null);
+          setBackground(await startBackgroundRuntime());
+          await replayEvents();
           await refreshConnection();
         } else {
           await refreshConnection();
@@ -75,19 +92,11 @@ export function AgentPanel() {
   useEffect(() => {
     if (!connection?.device_id) return;
 
-    const heartbeat = async () => {
-      try {
-        await sendAgentHeartbeat("ONLINE_IDLE");
-        await replayEvents();
-        await refreshConnection();
-      } catch (cause) {
-        setError(errorMessage(cause));
-        await refreshConnection();
-      }
-    };
-
-    void heartbeat();
-    const timer = window.setInterval(() => void heartbeat(), heartbeatIntervalMs);
+    void resumeBackgroundRuntime({ silent: true });
+    const timer = window.setInterval(() => {
+      void refreshConnection();
+      void refreshBackground();
+    }, backgroundRefreshIntervalMs);
     return () => window.clearInterval(timer);
   }, [connection?.device_id]);
 
@@ -96,6 +105,43 @@ export function AgentPanel() {
       setConnection(await getAgentConnectionStatus());
     } catch (cause) {
       setError(errorMessage(cause));
+    }
+  }
+
+  async function refreshBackground() {
+    try {
+      setBackground(await getBackgroundRuntimeStatus());
+    } catch (cause) {
+      setError(errorMessage(cause));
+    }
+  }
+
+  async function resumeBackgroundRuntime(options: { silent?: boolean } = {}) {
+    if (!options.silent) {
+      setBusy(true);
+      setError(null);
+    }
+    try {
+      setBackground(await startBackgroundRuntime());
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      if (!options.silent) {
+        setBusy(false);
+      }
+    }
+  }
+
+  async function pauseBackground() {
+    setBusy(true);
+    setError(null);
+    try {
+      setBackground(await pauseBackgroundRuntime());
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -181,6 +227,7 @@ export function AgentPanel() {
     setBusy(true);
     setError(null);
     try {
+      setBackground(await pauseBackgroundRuntime());
       setConnection(await forgetAgentDevice());
       setPairing(null);
       setCommands([]);
@@ -242,6 +289,33 @@ export function AgentPanel() {
         </div>
       ) : null}
 
+      {background ? (
+        <div className="background-runtime">
+          <div>
+            <strong>Background runtime</strong>
+            <small>
+              {background.state} | commands {background.last_command_count} | heartbeat{" "}
+              {formatRuntimeTime(background.last_heartbeat_unix_ms)}
+            </small>
+            <small>
+              replay {formatRuntimeTime(background.last_replay_unix_ms)} | command poll{" "}
+              {formatRuntimeTime(background.last_command_poll_unix_ms)}
+            </small>
+            {background.last_error_message ? (
+              <small className="error-text">{background.last_error_message}</small>
+            ) : null}
+          </div>
+          <div className="runtime-actions">
+            <button disabled={busy || !connection?.device_id} onClick={() => void resumeBackgroundRuntime()}>
+              Resume
+            </button>
+            <button disabled={busy} onClick={() => void pauseBackground()}>
+              Pause
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {autostart !== null ? (
         <label className="autostart-setting">
           <input
@@ -256,9 +330,24 @@ export function AgentPanel() {
 
       {pairing ? (
         <div className="pairing-code" role="status">
-          <span>Enter this code in the signed-in mobile app</span>
-          <strong>{pairing.code}</strong>
-          <small>Expires: {new Date(pairing.expires_at).toLocaleString()}</small>
+          <div className="pairing-qr-panel">
+            {pairingPayload ? (
+              <QRCodeSVG
+                className="pairing-qr"
+                value={pairingPayload}
+                size={156}
+                level="M"
+                includeMargin
+                aria-label="HouseMouse pairing QR code"
+              />
+            ) : null}
+            <div className="pairing-code-copy">
+              <span>Scan this QR or enter this code in the signed-in mobile app</span>
+              <strong>{pairing.code}</strong>
+              <small>Expires: {new Date(pairing.expires_at).toLocaleString()}</small>
+              <small>QR contains only pairing claim data. It never contains the device token.</small>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -276,7 +365,7 @@ export function AgentPanel() {
               <div>
                 <strong>{command.command_type}</strong>
                 <small>
-                  {command.status} · room {command.room_id}
+                  {command.status} | room {command.room_id}
                 </small>
               </div>
               <div className="command-actions">
@@ -310,4 +399,19 @@ export function AgentPanel() {
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function pairingQrPayload(pairing: PairingSession, serverBaseUrl: string) {
+  return JSON.stringify({
+    type: "housemouse_pairing",
+    version: 1,
+    code: pairing.code,
+    sessionId: pairing.session_id,
+    serverBaseUrl,
+    expiresAt: pairing.expires_at
+  });
+}
+
+function formatRuntimeTime(value: number | null) {
+  return value ? new Date(value).toLocaleTimeString() : "never";
 }

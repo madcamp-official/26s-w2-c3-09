@@ -146,6 +146,35 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.background-runtime {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #d9e2e8;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.background-runtime > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.background-runtime small {
+  color: #5f6972;
+  overflow-wrap: anywhere;
+}
+
+.runtime-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .agent-pairing-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -184,6 +213,26 @@ pre {
   border-radius: 6px;
   background: #eef6ff;
   padding: 12px;
+}
+
+.pairing-qr-panel {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+}
+
+.pairing-qr {
+  display: block;
+  border: 1px solid #d3d9de;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.pairing-code-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
 }
 
 .pairing-code strong {
@@ -444,7 +493,8 @@ pre {
   .input-row,
   .workspace-grid,
   .auto-approval-panel,
-  .proposal-row {
+  .proposal-row,
+  .pairing-qr-panel {
     grid-template-columns: 1fr;
   }
 

@@ -17,6 +17,15 @@ pub fn get_background_runtime_status(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub fn start_background_runtime(
+    app: tauri::AppHandle,
+    runtime: tauri::State<'_, BackgroundRuntime>,
+) -> Result<BackgroundRuntimeStatus, String> {
+    runtime.start(app)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub fn pause_background_runtime(
     runtime: tauri::State<'_, BackgroundRuntime>,
 ) -> Result<BackgroundRuntimeStatus, String> {

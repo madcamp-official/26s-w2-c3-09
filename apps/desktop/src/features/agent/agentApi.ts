@@ -59,6 +59,19 @@ export type AgentRoomSync = {
   created: boolean;
 };
 
+export type BackgroundRuntimeState = "stopped" | "running" | "suspended";
+
+export type BackgroundRuntimeStatus = {
+  state: BackgroundRuntimeState;
+  last_started_unix_ms: number | null;
+  last_stopped_unix_ms: number | null;
+  last_heartbeat_unix_ms: number | null;
+  last_replay_unix_ms: number | null;
+  last_command_poll_unix_ms: number | null;
+  last_command_count: number;
+  last_error_message: string | null;
+};
+
 export type SyncEvent = {
   event_id: string;
   event_type: string;
@@ -81,6 +94,18 @@ export type SyncReplay = {
 
 export function getAgentConnectionStatus() {
   return invokeAgentCommand<AgentConnectionStatus>("get_agent_connection_status");
+}
+
+export function getBackgroundRuntimeStatus() {
+  return invokeAgentCommand<BackgroundRuntimeStatus>("get_background_runtime_status");
+}
+
+export function startBackgroundRuntime() {
+  return invokeAgentCommand<BackgroundRuntimeStatus>("start_background_runtime");
+}
+
+export function pauseBackgroundRuntime() {
+  return invokeAgentCommand<BackgroundRuntimeStatus>("pause_background_runtime");
 }
 
 export function startAgentPairing(deviceName: string) {
