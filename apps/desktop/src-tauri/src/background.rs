@@ -300,6 +300,9 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
     let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
     let outbox = app.state::<crate::storage::outbox::OutboxStore>();
 
+    // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
+    let mut activity = crate::overlay::OverlayActivity::default();
+
     match agent.heartbeat("ONLINE_IDLE".to_string()).await {
         Ok(_) => update_status(status, |status| {
             status.state = BackgroundRuntimeState::Running;
@@ -310,6 +313,15 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             update_status(status, |status| {
                 status.last_error_message = Some(error.to_string());
             });
+            // Heartbeat failure means we are offline; tell the overlay so the character can reflect
+            // it, then stop this pass.
+            emit_overlay_activity(
+                app,
+                crate::overlay::OverlayActivity {
+                    had_error: true,
+                    ..crate::overlay::OverlayActivity::default()
+                },
+            );
             return;
         }
     }
@@ -326,39 +338,56 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
     }
 
     match crate::command_processor::process_pending_commands(&agent, &roots, &outbox).await {
-        Ok(report) => update_status(status, |status| {
-            status.last_command_poll_unix_ms = Some(unix_ms());
-            status.last_command_count = report.inspected_count;
-            status.last_processed_command_count = report.processed_count;
-            status.last_submitted_proposal_count = report.submitted_proposal_count;
+        Ok(report) => {
+            activity.processed_command_count = report.processed_count;
+            activity.submitted_proposal_count = report.submitted_proposal_count;
             if report.failed_count > 0 {
-                status.last_error_message = Some(format!(
-                    "{} command(s) failed during proposal processing",
-                    report.failed_count
-                ));
+                activity.had_error = true;
             }
-        }),
-        Err(error) => update_status(status, |status| {
-            status.last_error_message = Some(error);
-        }),
+            update_status(status, |status| {
+                status.last_command_poll_unix_ms = Some(unix_ms());
+                status.last_command_count = report.inspected_count;
+                status.last_processed_command_count = report.processed_count;
+                status.last_submitted_proposal_count = report.submitted_proposal_count;
+                if report.failed_count > 0 {
+                    status.last_error_message = Some(format!(
+                        "{} command(s) failed during proposal processing",
+                        report.failed_count
+                    ));
+                }
+            });
+        }
+        Err(error) => {
+            activity.had_error = true;
+            update_status(status, |status| {
+                status.last_error_message = Some(error);
+            });
+        }
     }
 
     match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox).await {
-        Ok(report) => update_status(status, |status| {
-            status.last_decision_poll_unix_ms = Some(unix_ms());
-            status.last_decision_count = report.inspected_count;
-            status.last_executed_item_count = report.executed_item_count;
-            status.last_execution_failed_count = report.failed_count;
-            if report.failed_count > 0 {
-                status.last_error_message = Some(format!(
-                    "{} decision(s) failed during execution",
-                    report.failed_count
-                ));
-            }
-        }),
-        Err(error) => update_status(status, |status| {
-            status.last_error_message = Some(error);
-        }),
+        Ok(report) => {
+            activity.executed_item_count = report.executed_item_count;
+            activity.execution_failed_count = report.failed_count;
+            update_status(status, |status| {
+                status.last_decision_poll_unix_ms = Some(unix_ms());
+                status.last_decision_count = report.inspected_count;
+                status.last_executed_item_count = report.executed_item_count;
+                status.last_execution_failed_count = report.failed_count;
+                if report.failed_count > 0 {
+                    status.last_error_message = Some(format!(
+                        "{} decision(s) failed during execution",
+                        report.failed_count
+                    ));
+                }
+            });
+        }
+        Err(error) => {
+            activity.had_error = true;
+            update_status(status, |status| {
+                status.last_error_message = Some(error);
+            });
+        }
     }
 
     // Deliver everything the command and decision passes just queued (plus any backlog from a
@@ -380,6 +409,21 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             status.last_error_message = Some(error);
         }),
     }
+
+    // Turn this whole pass into one character state for the overlay. This is best-effort: if no
+    // overlay window is open it is silently skipped.
+    emit_overlay_activity(app, activity);
+}
+
+/// Emits the derived character state to the overlay window, if one is open. The overlay bridge is
+/// deliberately one-way (state out) and never routes back into any file-operation path.
+#[cfg(feature = "tauri-commands")]
+fn emit_overlay_activity(app: &tauri::AppHandle, activity: crate::overlay::OverlayActivity) {
+    use tauri::Manager;
+
+    let overlay = app.state::<crate::overlay::OverlayRuntime>();
+    let event = crate::overlay::character_event_for(&activity);
+    crate::commands::overlay::emit_character_event_if_open(app, &overlay, &event);
 }
 
 #[cfg(feature = "tauri-commands")]

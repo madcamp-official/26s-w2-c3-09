@@ -129,6 +129,8 @@ pub fn run() {
             commands::agent::forget_agent_device,
             commands::overlay::get_overlay_status,
             commands::overlay::emit_character_event,
+            commands::overlay::show_overlay,
+            commands::overlay::hide_overlay,
             commands::watcher::start_watching_root,
             commands::watcher::stop_watching_root,
             commands::watcher::is_watching_root,

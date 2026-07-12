@@ -43,6 +43,38 @@ pub enum CharacterEventKind {
     Error,
 }
 
+/// A summary of what one background pass did, used to derive the character state to show. Kept as
+/// plain counts so the overlay stays decoupled from the command/decision processor report types.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OverlayActivity {
+    pub had_error: bool,
+    pub executed_item_count: usize,
+    pub execution_failed_count: usize,
+    pub submitted_proposal_count: usize,
+    pub processed_command_count: usize,
+}
+
+/// Maps a background pass to the character state to display, ordered by urgency: a failure wins,
+/// then freshly executed work, then proposals waiting on a human, then analysis, otherwise idle.
+pub fn character_event_for(activity: &OverlayActivity) -> CharacterEvent {
+    let kind = if activity.had_error || activity.execution_failed_count > 0 {
+        CharacterEventKind::Error
+    } else if activity.executed_item_count > 0 {
+        CharacterEventKind::Success
+    } else if activity.submitted_proposal_count > 0 {
+        CharacterEventKind::WaitingForApproval
+    } else if activity.processed_command_count > 0 {
+        CharacterEventKind::Analyzing
+    } else {
+        CharacterEventKind::Idle
+    };
+    CharacterEvent {
+        kind,
+        message: None,
+        correlation_id: None,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OverlayErrorCode {
@@ -109,6 +141,30 @@ impl OverlayRuntime {
         inner.last_event_kind = Some(event.kind.clone());
         inner.last_error = None;
         Ok(())
+    }
+
+    /// Records that the overlay window is created and shown. Called by the shell after the actual
+    /// Tauri window is built/shown; the overlay runtime itself never touches the file engine.
+    pub fn mark_visible(&self) -> Result<OverlayStatus, OverlayError> {
+        self.set_visibility(OverlayState::Visible)
+    }
+
+    /// Records that the overlay window is hidden (but still alive). The character UI keeps its
+    /// state; only visibility changes.
+    pub fn mark_hidden(&self) -> Result<OverlayStatus, OverlayError> {
+        self.set_visibility(OverlayState::Hidden)
+    }
+
+    fn set_visibility(&self, state: OverlayState) -> Result<OverlayStatus, OverlayError> {
+        {
+            let mut inner = self.inner.lock().map_err(|_| OverlayError {
+                code: OverlayErrorCode::EmitFailed,
+                message: "overlay runtime lock poisoned".to_string(),
+            })?;
+            inner.state = state;
+            inner.last_error = None;
+        }
+        self.status()
     }
 
     pub fn mark_not_ready(&self, message: impl Into<String>) -> OverlayError {
@@ -186,5 +242,59 @@ mod tests {
 
         assert_eq!(status.last_event_kind, Some(CharacterEventKind::Working));
         assert_eq!(status.last_error_code, None);
+    }
+
+    #[test]
+    fn visibility_transitions_clear_the_not_ready_error() {
+        let runtime = OverlayRuntime::default();
+
+        let shown = runtime.mark_visible().expect("visible");
+        assert_eq!(shown.state, OverlayState::Visible);
+        assert_eq!(shown.last_error_code, None);
+
+        let hidden = runtime.mark_hidden().expect("hidden");
+        assert_eq!(hidden.state, OverlayState::Hidden);
+    }
+
+    #[test]
+    fn character_event_mapping_is_ordered_by_urgency() {
+        use super::{character_event_for, OverlayActivity};
+
+        // Failure beats everything else in the same pass.
+        let failing = character_event_for(&OverlayActivity {
+            execution_failed_count: 1,
+            executed_item_count: 3,
+            ..OverlayActivity::default()
+        });
+        assert_eq!(failing.kind, CharacterEventKind::Error);
+
+        assert_eq!(
+            character_event_for(&OverlayActivity {
+                executed_item_count: 2,
+                ..OverlayActivity::default()
+            })
+            .kind,
+            CharacterEventKind::Success
+        );
+        assert_eq!(
+            character_event_for(&OverlayActivity {
+                submitted_proposal_count: 1,
+                ..OverlayActivity::default()
+            })
+            .kind,
+            CharacterEventKind::WaitingForApproval
+        );
+        assert_eq!(
+            character_event_for(&OverlayActivity {
+                processed_command_count: 1,
+                ..OverlayActivity::default()
+            })
+            .kind,
+            CharacterEventKind::Analyzing
+        );
+        assert_eq!(
+            character_event_for(&OverlayActivity::default()).kind,
+            CharacterEventKind::Idle
+        );
     }
 }

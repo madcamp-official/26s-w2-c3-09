@@ -520,3 +520,98 @@ pre {
     display: grid;
   }
 }
+
+/* Onboarding slot (A-owned shell; B fills the design slot) */
+.app-shell-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.onboarding-slot {
+  border: 1px solid #e1e5e8;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 16px;
+  background: #fbfcfd;
+}
+
+.onboarding-design-slot {
+  border: 1px dashed #c7ccd1;
+  border-radius: 6px;
+  padding: 16px;
+  margin: 12px 0;
+  color: #4b5563;
+}
+
+.onboarding-steps {
+  display: grid;
+  gap: 10px;
+  padding-left: 18px;
+}
+
+.onboarding-steps li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* Character overlay window (A-owned shell; B plugs into .character-stage) */
+.character-overlay {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100vh;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.character-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.character-state-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+}
+
+.character-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed #c7ccd1;
+  border-radius: 8px;
+}
+
+.character-placeholder {
+  font-size: 72px;
+}
+
+.character-overlay.character-error .character-stage {
+  border-color: #dc2626;
+}
+
+.character-overlay.character-success .character-stage {
+  border-color: #16a34a;
+}
+
+.character-chat {
+  display: flex;
+  gap: 6px;
+}
+
+.character-chat input {
+  flex: 1;
+}
+
+.character-notice {
+  font-size: 12px;
+  color: #4b5563;
+}
