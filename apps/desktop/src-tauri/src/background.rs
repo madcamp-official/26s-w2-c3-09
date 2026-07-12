@@ -23,6 +23,10 @@ pub struct BackgroundRuntimeStatus {
     pub last_command_count: usize,
     pub last_processed_command_count: usize,
     pub last_submitted_proposal_count: usize,
+    pub last_decision_poll_unix_ms: Option<i64>,
+    pub last_decision_count: usize,
+    pub last_executed_item_count: usize,
+    pub last_execution_failed_count: usize,
     pub last_error_message: Option<String>,
 }
 
@@ -61,6 +65,10 @@ impl Default for BackgroundRuntime {
                 last_command_count: 0,
                 last_processed_command_count: 0,
                 last_submitted_proposal_count: 0,
+                last_decision_poll_unix_ms: None,
+                last_decision_count: 0,
+                last_executed_item_count: 0,
+                last_execution_failed_count: 0,
                 last_error_message: None,
             })),
             #[cfg(feature = "tauri-commands")]
@@ -220,6 +228,24 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             status.last_error_message = Some(error);
         }),
     }
+
+    match crate::execution_processor::process_pending_decisions(&agent, &roots).await {
+        Ok(report) => update_status(status, |status| {
+            status.last_decision_poll_unix_ms = Some(unix_ms());
+            status.last_decision_count = report.inspected_count;
+            status.last_executed_item_count = report.executed_item_count;
+            status.last_execution_failed_count = report.failed_count;
+            if report.failed_count > 0 {
+                status.last_error_message = Some(format!(
+                    "{} decision(s) failed during execution",
+                    report.failed_count
+                ));
+            }
+        }),
+        Err(error) => update_status(status, |status| {
+            status.last_error_message = Some(error);
+        }),
+    }
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -303,6 +329,10 @@ mod tests {
         assert_eq!(status.last_command_count, 0);
         assert_eq!(status.last_processed_command_count, 0);
         assert_eq!(status.last_submitted_proposal_count, 0);
+        assert_eq!(status.last_decision_count, 0);
+        assert_eq!(status.last_executed_item_count, 0);
+        assert_eq!(status.last_execution_failed_count, 0);
         assert!(status.last_heartbeat_unix_ms.is_none());
+        assert!(status.last_decision_poll_unix_ms.is_none());
     }
 }

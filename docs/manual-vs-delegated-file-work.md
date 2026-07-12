@@ -33,6 +33,15 @@ Delegated code must not call `trash_file`, `rename_file`, or `create_file` direc
 
 ## Current Boundary
 
-`apps/desktop/src-tauri/src/command_processor.rs` is the delegated boundary. It accepts cleanup commands and turns them into proposal submissions. Unsupported command types that look like direct file tools are skipped or failed explicitly instead of being executed.
+`apps/desktop/src-tauri/src/command_processor.rs` and `apps/desktop/src-tauri/src/execution_processor.rs` are the delegated boundary. `command_processor.rs` accepts cleanup commands and turns them into proposal submissions. `execution_processor.rs` accepts server-approved decisions, reconstructs the local proposal snapshot from the server's recorded items, and journals the execution through the same `file_engine_cli::execute` path the manual proposal UI uses — it never calls `trash_file`, `rename_file`, or `create_file` directly. Unsupported command or item types that look like direct file tools are skipped or failed explicitly instead of being executed.
+
+## Auto Approval Is Not Delegation Permission
+
+The desktop-local "Auto approve proposals" policy (`apps/desktop/src-tauri/src/storage/auto_approval.rs`) is a manual-tool convenience, not a delegation grant:
+
+- It only pre-checks `ready` items in a proposal the local user already built through the manual UI (`propose_file_changes` → `auto_approve_file_changes`). It never calls `precheck_file_changes` or `execute_file_changes` itself — those still require an explicit user click, so a stale or newly-conflicting item is still caught before any file changes.
+- Default is disabled. Enabling it requires an explicit action allowlist (`move`/`trash`) and a positive `max_files_per_run`; an empty allowlist or zero limit is rejected by both the store (`AutoApprovalStore::patch`) and the engine (`file_engine_cli::auto_approval::AutoApprovalPolicy::validate`).
+- `command_processor.rs` and `execution_processor.rs` never read `AutoApprovalStore` and never call `auto_approve_decisions`. Delegated work — from mobile, the server, or a future AI command draft — only ever executes after an explicit `APPROVE` decision recorded by the server (see `execution_processor.rs`'s `pending_decisions`/`create_execution`/`update_execution` flow). A locally enabled auto-approval policy has zero effect on proposals that originated remotely; there is no shared code path between them.
+- Direct manual tools (`trash_file`, `rename_file`, `create_file`) are never auto-approved — auto approval only ever fills in decision checkboxes for a proposal, and proposals never contain those actions directly.
 
 `apps/desktop/src-tauri/src/commands/file_engine.rs` owns direct manual tools and local proposal execution. Keep new remote/mobile/AI commands out of direct operation functions unless they first pass through proposal approval.

@@ -16,6 +16,7 @@ import {
   PairingSession,
   pauseBackgroundRuntime,
   processAgentCommands,
+  processAgentDecisions,
   pollAgentCommands,
   pollAgentPairing,
   replayAgentEvents,
@@ -220,6 +221,24 @@ export function AgentPanel() {
     }
   }
 
+  async function processDecisionsNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await processAgentDecisions();
+      setLastProcessedSummary(
+        `${report.processed_count} execution(s) completed, ${report.failed_count} failed, ${report.executed_item_count} item(s) executed`
+      );
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function replayEvents() {
     const replay = await replayAgentEvents();
     setSyncCursor(replay.next_cursor);
@@ -292,6 +311,9 @@ export function AgentPanel() {
           <button disabled={busy} onClick={() => void processCommandsNow()}>
             Process commands
           </button>
+          <button disabled={busy} onClick={() => void processDecisionsNow()}>
+            Process approved decisions
+          </button>
           <button className="danger-button" disabled={busy} onClick={() => void forgetDevice()}>
             Forget local pairing
           </button>
@@ -328,6 +350,12 @@ export function AgentPanel() {
             <small>
               replay {formatRuntimeTime(background.last_replay_unix_ms)} | command poll{" "}
               {formatRuntimeTime(background.last_command_poll_unix_ms)}
+            </small>
+            <small>
+              decisions {background.last_decision_count} | executed items{" "}
+              {background.last_executed_item_count} | execution failures{" "}
+              {background.last_execution_failed_count} | decision poll{" "}
+              {formatRuntimeTime(background.last_decision_poll_unix_ms)}
             </small>
             {lastProcessedSummary ? <small>{lastProcessedSummary}</small> : null}
             {background.last_error_message ? (

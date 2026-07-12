@@ -71,6 +71,10 @@ export type BackgroundRuntimeStatus = {
   last_command_count: number;
   last_processed_command_count: number;
   last_submitted_proposal_count: number;
+  last_decision_poll_unix_ms: number | null;
+  last_decision_count: number;
+  last_executed_item_count: number;
+  last_execution_failed_count: number;
   last_error_message: string | null;
 };
 
@@ -91,6 +95,26 @@ export type CommandProcessingReport = {
   failed_count: number;
   skipped_count: number;
   results: CommandProcessingResult[];
+};
+
+export type DecisionProcessingStatus = "completed" | "failed";
+
+export type DecisionProcessingResult = {
+  decision_id: string;
+  proposal_id: string;
+  status: DecisionProcessingStatus;
+  message: string | null;
+  executed_item_count: number;
+  skipped_item_count: number;
+};
+
+export type DecisionProcessingReport = {
+  inspected_count: number;
+  processed_count: number;
+  executed_item_count: number;
+  skipped_item_count: number;
+  failed_count: number;
+  results: DecisionProcessingResult[];
 };
 
 export type SyncEvent = {
@@ -147,6 +171,10 @@ export function pollAgentCommands() {
 
 export function processAgentCommands() {
   return invokeAgentCommand<CommandProcessingReport>("process_agent_commands");
+}
+
+export function processAgentDecisions() {
+  return invokeAgentCommand<DecisionProcessingReport>("process_agent_decisions");
 }
 
 export function ensureAgentRoom(rootId: string, displayName: string) {

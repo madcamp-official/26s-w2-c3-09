@@ -84,6 +84,31 @@ pub struct AgentRoomSync {
     pub created: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentProposalItemRecord {
+    pub item_order: i64,
+    pub action_type: String,
+    pub source_relative_path: Option<String>,
+    pub destination_relative_path: Option<String>,
+    pub reason_code: String,
+    pub precondition: Value,
+    pub conflict_state: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentPendingDecision {
+    pub decision_id: String,
+    pub proposal_id: String,
+    pub room_id: String,
+    pub items: Vec<AgentProposalItemRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentExecution {
+    pub execution_id: String,
+    pub status: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AgentErrorCode {
@@ -596,6 +621,107 @@ impl AgentRuntime {
         result
     }
 
+    /// Fetches approved decisions this device has not yet claimed an execution for.
+    ///
+    /// The server only ever returns `APPROVE` decisions here (rejected decisions never need a
+    /// local execution), and MVP approval always covers every proposal item, so every returned
+    /// decision means "execute this entire local proposal snapshot."
+    pub async fn pending_decisions(&self) -> Result<Vec<AgentPendingDecision>, AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<PendingDecisionResponse>>(
+                self.http
+                    .get(format!(
+                        "{base_url}/v1/devices/{}/decisions/pending",
+                        credential.device_id
+                    ))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(validate_pending_decisions);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    /// Claims an approved decision for local execution. Uses the decision id as the
+    /// idempotency key so a retry after a crash or network failure cannot create a second
+    /// execution for the same approval.
+    pub async fn create_execution(
+        &self,
+        proposal_id: String,
+        decision_id: String,
+    ) -> Result<AgentExecution, AgentError> {
+        validate_opaque_value("proposal id", &proposal_id, 200)?;
+        validate_opaque_value("decision id", &decision_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ExecutionResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/agent/executions"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", decision_id.clone())
+                    .json(&json!({
+                        "proposalId": proposal_id,
+                        "decisionId": decision_id,
+                        "desktopDeviceId": credential.device_id,
+                    })),
+            )
+            .await
+            .and_then(validate_execution_response);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    /// Uploads the terminal outcome of a claimed execution. Uses the execution id as the
+    /// idempotency key so a retry of the same outcome after a network failure replays instead
+    /// of being rejected as a conflicting update.
+    pub async fn update_execution(
+        &self,
+        execution_id: String,
+        status: String,
+        result_summary: Value,
+    ) -> Result<AgentExecution, AgentError> {
+        validate_opaque_value("execution id", &execution_id, 200)?;
+        if !matches!(
+            status.as_str(),
+            "SUCCEEDED" | "PARTIALLY_SUCCEEDED" | "FAILED" | "STALE" | "ROLLED_BACK"
+        ) {
+            return Err(validation_error(
+                "execution status must be SUCCEEDED, PARTIALLY_SUCCEEDED, FAILED, STALE, or ROLLED_BACK",
+            ));
+        }
+        if !result_summary.is_object() {
+            return Err(validation_error(
+                "execution result summary must be a JSON object",
+            ));
+        }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ExecutionResponse>(
+                self.http
+                    .patch(format!("{base_url}/v1/agent/executions/{execution_id}"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", execution_id.clone())
+                    .json(&json!({
+                        "status": status,
+                        "resultSummary": result_summary,
+                    })),
+            )
+            .await
+            .and_then(validate_execution_response);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     pub fn forget_device(&self) -> Result<AgentConnectionStatus, AgentError> {
         self.credentials.delete()?;
         let mut state = self.state.lock().expect("agent state mutex poisoned");
@@ -803,6 +929,49 @@ impl From<ServerCommand> for AgentCommand {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DecisionResponse {
+    id: String,
+    proposal_id: String,
+    decision_type: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposalResponse {
+    id: String,
+    room_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposalItemResponse {
+    id: String,
+    proposal_id: String,
+    item_order: i64,
+    action_type: String,
+    source_relative_path: Option<String>,
+    destination_relative_path: Option<String>,
+    reason_code: String,
+    precondition: Value,
+    conflict_state: String,
+}
+
+#[derive(Deserialize)]
+struct PendingDecisionResponse {
+    decision: DecisionResponse,
+    proposal: ProposalResponse,
+    items: Vec<ProposalItemResponse>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutionResponse {
+    id: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
 struct ServerErrorResponse {
     code: Option<String>,
     message: Option<String>,
@@ -979,6 +1148,92 @@ fn validate_server_command(response: ServerCommand) -> Result<AgentCommand, Agen
         return Err(invalid_response_error("command failed response validation"));
     }
     Ok(response.into())
+}
+
+fn validate_pending_decisions(
+    responses: Vec<PendingDecisionResponse>,
+) -> Result<Vec<AgentPendingDecision>, AgentError> {
+    responses.into_iter().map(validate_pending_decision).collect()
+}
+
+fn validate_pending_decision(
+    response: PendingDecisionResponse,
+) -> Result<AgentPendingDecision, AgentError> {
+    if response.decision.id.is_empty()
+        || response.decision.proposal_id != response.proposal.id
+        || response.decision.decision_type != "APPROVE"
+        || response.proposal.id.is_empty()
+        || response.proposal.room_id.is_empty()
+        || response.items.is_empty()
+    {
+        return Err(invalid_response_error(
+            "pending decision failed response validation",
+        ));
+    }
+    let items = response
+        .items
+        .into_iter()
+        .map(|item| validate_proposal_item(&response.proposal.id, item))
+        .collect::<Result<Vec<_>, AgentError>>()?;
+    Ok(AgentPendingDecision {
+        decision_id: response.decision.id,
+        proposal_id: response.proposal.id,
+        room_id: response.proposal.room_id,
+        items,
+    })
+}
+
+fn validate_proposal_item(
+    expected_proposal_id: &str,
+    item: ProposalItemResponse,
+) -> Result<AgentProposalItemRecord, AgentError> {
+    if item.id.is_empty()
+        || item.proposal_id != expected_proposal_id
+        || item.reason_code.is_empty()
+        || !matches!(
+            item.action_type.as_str(),
+            "MOVE" | "QUARANTINE" | "CREATE_DIR" | "README_WRITE"
+        )
+        || !matches!(
+            item.conflict_state.as_str(),
+            "NONE" | "NAME_CONFLICT" | "UNSUPPORTED"
+        )
+    {
+        return Err(invalid_response_error(
+            "proposal item failed response validation",
+        ));
+    }
+    Ok(AgentProposalItemRecord {
+        item_order: item.item_order,
+        action_type: item.action_type,
+        source_relative_path: item.source_relative_path,
+        destination_relative_path: item.destination_relative_path,
+        reason_code: item.reason_code,
+        precondition: item.precondition,
+        conflict_state: item.conflict_state,
+    })
+}
+
+fn validate_execution_response(response: ExecutionResponse) -> Result<AgentExecution, AgentError> {
+    if response.id.is_empty()
+        || !matches!(
+            response.status.as_str(),
+            "EXECUTING"
+                | "SUCCEEDED"
+                | "PARTIALLY_SUCCEEDED"
+                | "FAILED"
+                | "STALE"
+                | "ROLLED_BACK"
+        )
+    {
+        return Err(invalid_response_error(
+            "execution failed response validation",
+        ));
+    }
+    Ok(AgentExecution {
+        execution_id: response.id,
+        status: response.status,
+    })
 }
 
 fn http_error(status: StatusCode, server_error: Option<ServerErrorResponse>) -> AgentError {
@@ -1319,6 +1574,141 @@ mod tests {
 
         assert_eq!(room.room_id, "room-1");
         assert!(room.created);
+    }
+
+    #[tokio::test]
+    async fn pending_decisions_maps_the_control_plane_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/devices/device-1/decisions/pending",
+            r#"[{
+                "decision":{"id":"decision-1","proposalId":"proposal-1","decisionType":"APPROVE","approvedItemIds":["item-1"]},
+                "proposal":{"id":"proposal-1","commandId":"command-1","roomId":"room-1","status":"APPROVED"},
+                "items":[{
+                    "id":"item-1",
+                    "proposalId":"proposal-1",
+                    "itemOrder":0,
+                    "actionType":"MOVE",
+                    "sourceRelativePath":"a.pdf",
+                    "destinationRelativePath":"Documents/a.pdf",
+                    "reasonCode":"RULE_MOVE_BY_EXTENSION",
+                    "precondition":{"sourceSizeBytes":10,"sourceModifiedUnixMs":123},
+                    "conflictState":"NONE"
+                }]
+            }]"#,
+            |request| {
+                assert!(request.starts_with("GET /v1/devices/device-1/decisions/pending HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let decisions = runtime.pending_decisions().await.expect("pending decisions");
+        server.join().expect("server thread");
+
+        assert_eq!(decisions.len(), 1);
+        let decision = &decisions[0];
+        assert_eq!(decision.decision_id, "decision-1");
+        assert_eq!(decision.proposal_id, "proposal-1");
+        assert_eq!(decision.room_id, "room-1");
+        assert_eq!(decision.items.len(), 1);
+        assert_eq!(decision.items[0].action_type, "MOVE");
+        assert_eq!(
+            decision.items[0].source_relative_path.as_deref(),
+            Some("a.pdf")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_execution_claims_the_decision_with_an_idempotency_key() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/agent/executions",
+            r#"{"id":"execution-1","status":"EXECUTING"}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/agent/executions HTTP/1.1"));
+                assert!(request.contains("idempotency-key: decision-1"));
+                assert!(request.contains(r#""proposalId":"proposal-1""#));
+                assert!(request.contains(r#""decisionId":"decision-1""#));
+                assert!(request.contains(r#""desktopDeviceId":"device-1""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let execution = runtime
+            .create_execution("proposal-1".to_string(), "decision-1".to_string())
+            .await
+            .expect("execution");
+        server.join().expect("server thread");
+
+        assert_eq!(execution.execution_id, "execution-1");
+        assert_eq!(execution.status, "EXECUTING");
+    }
+
+    #[tokio::test]
+    async fn update_execution_uploads_the_terminal_result() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/agent/executions/execution-1",
+            r#"{"id":"execution-1","status":"SUCCEEDED"}"#,
+            |request| {
+                assert!(request.starts_with("PATCH /v1/agent/executions/execution-1 HTTP/1.1"));
+                assert!(request.contains("idempotency-key: execution-1"));
+                assert!(request.contains(r#""status":"SUCCEEDED""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let execution = runtime
+            .update_execution(
+                "execution-1".to_string(),
+                "SUCCEEDED".to_string(),
+                serde_json::json!({ "executedCount": 1 }),
+            )
+            .await
+            .expect("execution");
+        server.join().expect("server thread");
+
+        assert_eq!(execution.status, "SUCCEEDED");
+    }
+
+    #[tokio::test]
+    async fn update_execution_rejects_a_non_object_result_summary() {
+        let runtime = AgentRuntime::for_test(
+            Some("http://127.0.0.1:3000"),
+            Arc::new(MemoryCredentialStore::default()),
+        );
+
+        let error = runtime
+            .update_execution(
+                "execution-1".to_string(),
+                "SUCCEEDED".to_string(),
+                serde_json::json!([1, 2, 3]),
+            )
+            .await
+            .expect_err("array result summary must be rejected");
+
+        assert_eq!(error.code, AgentErrorCode::ValidationFailed);
     }
 
     fn one_shot_json_server<F>(

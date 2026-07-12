@@ -3,6 +3,7 @@ use crate::agent::{
     PairingSession, PairingStatus, SyncEvent,
 };
 use crate::command_processor::{process_pending_commands, CommandProcessingReport};
+use crate::execution_processor::{process_pending_decisions, DecisionProcessingReport};
 use crate::storage::agent_sync::AgentSyncStore;
 use crate::storage::managed_roots::ManagedRootStore;
 
@@ -133,6 +134,23 @@ pub async fn process_agent_commands(
     roots: &ManagedRootStore,
 ) -> Result<CommandProcessingReport, String> {
     process_pending_commands(runtime, roots).await
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn process_agent_decisions(
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+) -> Result<DecisionProcessingReport, String> {
+    process_pending_decisions(&runtime, &roots).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn process_agent_decisions(
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<DecisionProcessingReport, String> {
+    process_pending_decisions(runtime, roots).await
 }
 
 #[cfg(feature = "tauri-commands")]

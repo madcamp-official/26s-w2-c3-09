@@ -61,6 +61,11 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   const [browsePath, setBrowsePath] = useState("");
   const [browseEntries, setBrowseEntries] = useState<BrowseEntry[]>([]);
   const [autoApprovalPolicy, setAutoApprovalPolicy] = useState<AutoApprovalPolicy | null>(null);
+  // Records which proposal_ids the "Auto approve proposals" policy pre-checked in this run, so
+  // execute results can be traced back to whether a human or the policy approved them. Auto
+  // approval only ever pre-fills these checkboxes here in the local manual UI; it never touches
+  // delegated/mobile-originated proposals, which always execute from the server's own decision.
+  const [autoApprovedProposalIds, setAutoApprovedProposalIds] = useState<Set<string>>(new Set());
   const [watchingRootIds, setWatchingRootIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<IndexedFile[] | null>(null);
@@ -364,6 +369,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       const report = await proposeFileChanges(selectedRootId);
       setProposal(report);
       setPrecheckSnapshot(null);
+      setAutoApprovedProposalIds(new Set());
       setDecisions(
         Object.fromEntries(
           report.proposals.map((item) => [
@@ -429,6 +435,18 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           autoDecisions.map((decision) => [decision.proposal_id, decision.decision])
         )
       }));
+      // Record which items the policy pre-approved, distinct from ones a human checked. This
+      // does not skip precheck or execute: the checkboxes above still drive the same
+      // precheck-then-execute gate as a manual approval.
+      const autoApprovedIds = new Set(autoDecisions.map((decision) => decision.proposal_id));
+      setAutoApprovedProposalIds(autoApprovedIds);
+      const autoApprovedItems = proposal.proposals.filter((item) =>
+        autoApprovedIds.has(item.proposal_id)
+      );
+      setResultLines([
+        `Auto approved ${autoDecisions.length} proposal(s) — still requires precheck and execute:`,
+        ...autoApprovedItems.map((item) => `auto-approved | ${item.from} -> ${item.to}`)
+      ]);
       setStatus(`Auto approved ${autoDecisions.length} proposals`);
     } catch (caught) {
       setError(errorMessage(caught));
@@ -464,12 +482,18 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       }
 
       setStatus("Executing");
+      const autoApprovedCount = decisionsToApply.filter(
+        (decision) =>
+          decision.decision === "approved" && autoApprovedProposalIds.has(decision.proposal_id)
+      ).length;
       const report = await executeFileChanges(selectedRootId, proposal, decisionsToApply);
       const lines = formatExecuteLines(report);
       setResultLines(lines);
       setPrecheckSnapshot(null);
+      setAutoApprovedProposalIds(new Set());
       setStatus(
-        `Executed ${report.executed_count}, skipped ${report.skipped_count}, rejected ${report.rejected_count}`
+        `Executed ${report.executed_count}, skipped ${report.skipped_count}, rejected ${report.rejected_count}` +
+          (autoApprovedCount > 0 ? ` (${autoApprovedCount} auto-approved)` : "")
       );
       await refreshHistory(selectedRootId);
     } catch (caught) {
@@ -635,6 +659,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     setSelectedRootId(rootId);
     setProposal(null);
     setPrecheckSnapshot(null);
+    setAutoApprovedProposalIds(new Set());
     setDecisions({});
     setRejectionReasons({});
     setResultLines([]);
@@ -786,7 +811,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                     void updateSelectedAutoApprovalPolicy({ enabled: event.target.checked })
                   }
                 />
-                Auto approval
+                Auto approve proposals
               </label>
               <label>
                 <input
@@ -817,6 +842,11 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                   }
                 />
               </label>
+              <small className="auto-approval-hint">
+                Pre-checks ready proposal items for the actions above. It does not run file
+                operations by itself — precheck and execute below are still required, and this
+                policy never applies to proposals started from mobile or the agent.
+              </small>
             </div>
           ) : null}
 
@@ -838,8 +868,9 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
               type="button"
               onClick={() => void autoApproveSelectedProposal()}
               disabled={!selectedRootId || !proposal || !autoApprovalPolicy?.enabled}
+              title="Pre-checks ready proposal items only. Precheck and execute are still required."
             >
-              Auto approve
+              Auto approve proposals
             </button>
             <button
               type="button"
