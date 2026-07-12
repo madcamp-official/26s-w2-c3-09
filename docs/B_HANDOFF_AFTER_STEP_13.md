@@ -28,7 +28,7 @@ Implemented on the desktop side:
 - manual `trash_file`, `rename_file`, `create_file` kept separate from delegated work
 - delegated work normalized to proposal items only
 - `MOVE` and `QUARANTINE` execution through the journaled file engine
-- `CREATE_DIR` and `README_WRITE` refused by execution until the README/write design is implemented
+- `CREATE_DIR` refused by execution; `README_WRITE` allowed only for approved root-level `README.md` full-content writes
 - AI/rule-draft validation before filesystem access
 - overlay shell and chat input bridge that can only emit a draft request, never mutate files
 
@@ -88,9 +88,12 @@ Rules B should preserve:
 
 Current A behavior:
 
-- `README_WRITE` is recognized as a server proposal action shape but is explicitly refused by the desktop executor.
-- This is intentional until A adds the journaled README write path.
-- B can design the UX and API around README draft/diff approval now, but should not expect desktop execution of `README_WRITE` yet.
+- `README_WRITE` can execute only against root-level `README.md`.
+- The approved proposal item must carry the final approved content in `precondition.content` or `precondition.readmeContent`.
+- The same precondition object should include `sourceSizeBytes` and `sourceModifiedUnixMs` for the current `README.md`; use `0` and `null` when it does not exist.
+- Desktop rechecks the live `README.md` before writing and reports stale/changed state instead of overwriting.
+- Desktop writes a journal row before mutation and keeps a backup under `.housemouse/readme_backups/` so undo can restore the previous README or remove a newly created README.
+- `CREATE_DIR` remains refused; README writing must not be represented as `create_file`.
 
 ## B-Side TODO
 

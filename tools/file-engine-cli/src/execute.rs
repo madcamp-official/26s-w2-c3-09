@@ -59,6 +59,10 @@ pub enum ExecuteError {
         to: PathBuf,
         message: String,
     },
+    Write {
+        path: PathBuf,
+        message: String,
+    },
     Trash(TrashError),
     Serialize(String),
 }
@@ -144,6 +148,16 @@ fn execute_prechecked(
                     reason: None,
                 });
             }
+            ProposalAction::ReadmeWrite => match execute_readme_write(&guard, &store, check, index)? {
+                Ok(result) => {
+                    executed_count += 1;
+                    results.push(result);
+                }
+                Err(reason) => {
+                    skipped_count += 1;
+                    results.push(skipped_result(check, Some(reason)));
+                }
+            },
         }
     }
 
@@ -155,6 +169,75 @@ fn execute_prechecked(
         rejected_count: 0,
         results,
     })
+}
+
+fn execute_readme_write(
+    guard: &PathGuard,
+    store: &JournalStore,
+    check: &PrecheckResult,
+    index: usize,
+) -> Result<Result<ExecuteResult, String>, ExecuteError> {
+    if check.from != "README.md" || check.to != "README.md" {
+        return Ok(Err(
+            "README_WRITE may only target README.md at the managed-root root".to_string(),
+        ));
+    }
+    let Some(content) = &check.content else {
+        return Ok(Err("README_WRITE is missing approved content".to_string()));
+    };
+
+    let operation_id = format!("op-{}-{index}", unix_ms());
+    let backup_relative = format!(".housemouse/readme_backups/{operation_id}.bak");
+    let absent_relative = format!(".housemouse/readme_backups/{operation_id}.absent");
+    let target = guard.root().join("README.md");
+    let backup = guard.root().join(&backup_relative);
+    let absent = guard.root().join(&absent_relative);
+    if let Some(parent) = backup.parent() {
+        fs::create_dir_all(parent).map_err(|error| ExecuteError::CreateParentDir {
+            path: parent.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    }
+
+    if target.exists() {
+        fs::copy(&target, &backup).map_err(|error| ExecuteError::Write {
+            path: backup.clone(),
+            message: error.to_string(),
+        })?;
+    } else {
+        fs::write(&absent, b"").map_err(|error| ExecuteError::Write {
+            path: absent.clone(),
+            message: error.to_string(),
+        })?;
+    }
+
+    let planned = readme_journal_entry(
+        &operation_id,
+        JournalStatus::Planned,
+        &backup_relative,
+        "README.md",
+    );
+    store.append(&planned).map_err(ExecuteError::Journal)?;
+    fs::write(&target, content).map_err(|error| ExecuteError::Write {
+        path: target.clone(),
+        message: error.to_string(),
+    })?;
+    store
+        .append(&readme_journal_entry(
+            &operation_id,
+            JournalStatus::Executed,
+            &backup_relative,
+            "README.md",
+        ))
+        .map_err(ExecuteError::Journal)?;
+
+    Ok(Ok(ExecuteResult {
+        action: check.action.clone(),
+        from: "README.md".to_string(),
+        to: "README.md".to_string(),
+        status: ExecuteStatus::Executed,
+        reason: None,
+    }))
 }
 
 fn execute_move(
@@ -288,9 +371,26 @@ fn journal_entry(
         action: match check.action {
             ProposalAction::Move => JournalAction::Move,
             ProposalAction::Trash => JournalAction::Trash,
+            ProposalAction::ReadmeWrite => JournalAction::ReadmeWrite,
         },
         from: check.from.clone(),
         to: check.to.clone(),
+        created_unix_ms: unix_ms(),
+    }
+}
+
+fn readme_journal_entry(
+    operation_id: &str,
+    status: JournalStatus,
+    backup_relative: &str,
+    target_relative: &str,
+) -> JournalEntry {
+    JournalEntry {
+        operation_id: operation_id.to_string(),
+        status,
+        action: JournalAction::ReadmeWrite,
+        from: backup_relative.to_string(),
+        to: target_relative.to_string(),
         created_unix_ms: unix_ms(),
     }
 }
@@ -344,6 +444,9 @@ impl fmt::Display for ExecuteError {
                     from.display(),
                     to.display()
                 )
+            }
+            ExecuteError::Write { path, message } => {
+                write!(formatter, "cannot write {}: {message}", path.display())
             }
             ExecuteError::Trash(error) => write!(formatter, "{error}"),
             ExecuteError::Serialize(message) => {

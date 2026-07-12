@@ -101,6 +101,7 @@ pub struct AgentProposalItem {
 pub enum AgentProposalActionType {
     Move,
     Quarantine,
+    ReadmeWrite,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -282,6 +283,7 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
     let action_type = match proposal.action {
         ProposalAction::Move => AgentProposalActionType::Move,
         ProposalAction::Trash => AgentProposalActionType::Quarantine,
+        ProposalAction::ReadmeWrite => AgentProposalActionType::ReadmeWrite,
     };
     let conflict_state = match proposal.status {
         ProposalStatus::Ready => AgentProposalConflictState::None,
@@ -295,6 +297,7 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
         destination_relative_path: match proposal.action {
             ProposalAction::Move => Some(proposal.to.clone()),
             ProposalAction::Trash => None,
+            ProposalAction::ReadmeWrite => Some("README.md".to_string()),
         },
         reason_code: reason_code(proposal),
         precondition: serde_json::json!({
@@ -311,6 +314,7 @@ fn reason_code(proposal: &Proposal) -> String {
     match proposal.action {
         ProposalAction::Move => "RULE_MOVE_BY_EXTENSION",
         ProposalAction::Trash => "RULE_QUARANTINE",
+        ProposalAction::ReadmeWrite => "README_WRITE",
     }
     .to_string()
 }
@@ -534,6 +538,7 @@ mod tests {
                     action: ProposalAction::Move,
                     from: "inbox/note.md".to_string(),
                     to: "documents/note.md".to_string(),
+                    content: None,
                     source_size_bytes: 12,
                     source_modified_unix_ms: Some(10),
                     reason: "move note".to_string(),
@@ -544,6 +549,7 @@ mod tests {
                     action: ProposalAction::Trash,
                     from: "inbox/noise.tmp".to_string(),
                     to: ".housemouse_trash/noise.tmp".to_string(),
+                    content: None,
                     source_size_bytes: 3,
                     source_modified_unix_ms: None,
                     reason: "trash temp".to_string(),

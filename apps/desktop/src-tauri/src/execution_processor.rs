@@ -199,11 +199,6 @@ fn build_local_proposal_report(
 }
 
 fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, String> {
-    let from = item
-        .source_relative_path
-        .clone()
-        .ok_or_else(|| format!("proposal item {} is missing a source path", item.item_order))?;
-
     // MVP delegation is intentionally limited to relocating existing files. A delegated rename
     // arrives as a MOVE whose destination is a sibling of the source (folder/old -> folder/new);
     // it needs no separate action because the local engine already journals every MOVE the same
@@ -212,9 +207,10 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
     let action = match item.action_type.as_str() {
         "MOVE" => ProposalAction::Move,
         "QUARANTINE" => ProposalAction::Trash,
-        write @ ("CREATE_DIR" | "README_WRITE") => {
+        "README_WRITE" => ProposalAction::ReadmeWrite,
+        write @ "CREATE_DIR" => {
             return Err(format!(
-                "delegated write action {write} is not allowed; only MOVE (including rename) and QUARANTINE may be delegated"
+                "delegated write action {write} is not allowed; README_WRITE is the only delegated create/write action supported"
             ))
         }
         other => {
@@ -222,6 +218,14 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
                 "delegated action type {other} is not supported yet"
             ))
         }
+    };
+
+    let from = match action {
+        ProposalAction::Move | ProposalAction::Trash => item
+            .source_relative_path
+            .clone()
+            .ok_or_else(|| format!("proposal item {} is missing a source path", item.item_order))?,
+        ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
     let to = match action {
@@ -232,6 +236,7 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
             )
         })?,
         ProposalAction::Trash => TRASH_DIR.to_string(),
+        ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
     let status = match item.conflict_state.as_str() {
@@ -245,17 +250,35 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
     };
 
     let (source_size_bytes, source_modified_unix_ms) = precondition_snapshot(&item.precondition);
+    let content = if action == ProposalAction::ReadmeWrite {
+        Some(readme_write_content(&item.precondition)?)
+    } else {
+        None
+    };
 
     Ok(Proposal {
         proposal_id: proposal_id(&action, &from, &to),
         action,
         from,
         to,
+        content,
         source_size_bytes,
         source_modified_unix_ms,
         reason: item.reason_code.clone(),
         status,
     })
+}
+
+fn readme_write_content(value: &Value) -> Result<String, String> {
+    let content = value
+        .get("content")
+        .or_else(|| value.get("readmeContent"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| "README_WRITE precondition is missing approved content".to_string())?;
+    if content.len() > 200_000 {
+        return Err("README_WRITE content exceeds 200000 bytes".to_string());
+    }
+    Ok(content.to_string())
 }
 
 fn precondition_snapshot(value: &Value) -> (u64, Option<u128>) {
@@ -344,20 +367,69 @@ mod tests {
     }
 
     #[test]
-    fn delegated_create_and_write_actions_are_refused() {
+    fn delegated_create_dir_is_refused() {
         let dir = tempdir().expect("tempdir");
 
-        for write_action in ["CREATE_DIR", "README_WRITE"] {
-            let mut item = move_item(0, "a.pdf", "Documents/a.pdf");
-            item.action_type = write_action.to_string();
+        let mut item = move_item(0, "a.pdf", "Documents/a.pdf");
+        item.action_type = "CREATE_DIR".to_string();
 
-            let error = build_local_proposal_report(dir.path(), &[item])
-                .expect_err("write action must be refused");
-            assert!(
-                error.contains("is not allowed"),
-                "unexpected error for {write_action}: {error}"
-            );
-        }
+        let error =
+            build_local_proposal_report(dir.path(), &[item]).expect_err("create must be refused");
+        assert!(error.contains("is not allowed"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn delegated_readme_write_executes_and_stays_undoable() {
+        use file_engine_cli::journal::{read_operation_history, JournalAction};
+        use file_engine_cli::undo::undo_operation;
+
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::write(root.join("README.md"), "# Old\n").expect("seed readme");
+        let metadata = fs::metadata(root.join("README.md")).expect("readme metadata");
+        let modified_unix_ms = metadata
+            .modified()
+            .expect("mtime")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("mtime after epoch")
+            .as_millis() as u64;
+        let item = AgentProposalItemRecord {
+            item_order: 0,
+            action_type: "README_WRITE".to_string(),
+            source_relative_path: None,
+            destination_relative_path: Some("README.md".to_string()),
+            reason_code: "README_WRITE".to_string(),
+            precondition: json!({
+                "sourceSizeBytes": metadata.len(),
+                "sourceModifiedUnixMs": modified_unix_ms,
+                "content": "# New\n"
+            }),
+            conflict_state: "NONE".to_string(),
+        };
+        let report = build_local_proposal_report(root, &[item]).expect("local readme proposal");
+        let execute_report = execute_decision_application(
+            root,
+            DecisionApplication {
+                approved: report,
+                rejected: Vec::new(),
+            },
+        )
+        .expect("execute readme write");
+
+        assert_eq!(execute_report.executed_count, 1);
+        assert_eq!(
+            fs::read_to_string(root.join("README.md")).expect("read readme"),
+            "# New\n"
+        );
+        let history = read_operation_history(root).expect("history");
+        assert_eq!(history.operations[0].action, JournalAction::ReadmeWrite);
+        assert!(history.operations[0].can_undo);
+
+        undo_operation(root, &history.operations[0].operation_id).expect("undo readme write");
+        assert_eq!(
+            fs::read_to_string(root.join("README.md")).expect("read restored readme"),
+            "# Old\n"
+        );
     }
 
     #[test]

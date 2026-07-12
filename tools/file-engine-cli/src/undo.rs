@@ -87,9 +87,26 @@ fn undo_with_filter(
         }
 
         if entry.status != JournalStatus::Executed
-            || !matches!(entry.action, JournalAction::Move | JournalAction::Trash)
+            || !matches!(
+                entry.action,
+                JournalAction::Move | JournalAction::Trash | JournalAction::ReadmeWrite
+            )
             || undone_operation_ids.contains(&entry.operation_id)
         {
+            continue;
+        }
+
+        if entry.action == JournalAction::ReadmeWrite {
+            match undo_readme_write(&guard, &store, entry)? {
+                Ok(result) => {
+                    undone_count += 1;
+                    results.push(result);
+                }
+                Err(reason) => {
+                    skipped_count += 1;
+                    results.push(skipped_result(entry, Some(reason)));
+                }
+            }
             continue;
         }
 
@@ -176,6 +193,57 @@ fn undo_with_filter(
         skipped_count,
         results,
     })
+}
+
+fn undo_readme_write(
+    guard: &PathGuard,
+    store: &JournalStore,
+    entry: &JournalEntry,
+) -> Result<Result<UndoResult, String>, UndoError> {
+    if entry.to != "README.md" {
+        return Ok(Err(
+            "README write journal target is not README.md; refusing undo".to_string(),
+        ));
+    }
+
+    let target = guard.root().join("README.md");
+    let backup = guard.root().join(&entry.from);
+    let absent = backup.with_extension("absent");
+
+    store
+        .append(&undo_entry(entry, JournalStatus::UndoPlanned))
+        .map_err(UndoError::Journal)?;
+
+    if backup.exists() {
+        fs::copy(&backup, &target).map_err(|error| UndoError::Move {
+            from: backup.clone(),
+            to: target.clone(),
+            message: error.to_string(),
+        })?;
+    } else if absent.exists() {
+        if target.exists() {
+            fs::remove_file(&target).map_err(|error| UndoError::Move {
+                from: target.clone(),
+                to: absent.clone(),
+                message: error.to_string(),
+            })?;
+        }
+    } else {
+        return Ok(Err(
+            "README write backup is missing; refusing undo".to_string(),
+        ));
+    }
+
+    store
+        .append(&undo_entry(entry, JournalStatus::Undone))
+        .map_err(UndoError::Journal)?;
+
+    Ok(Ok(UndoResult {
+        from: entry.to.clone(),
+        to: entry.from.clone(),
+        status: UndoStatus::Undone,
+        reason: None,
+    }))
 }
 
 fn undo_entry(entry: &JournalEntry, status: JournalStatus) -> JournalEntry {

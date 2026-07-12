@@ -102,6 +102,7 @@ impl JournalStatus {
 pub enum JournalAction {
     Move,
     Trash,
+    ReadmeWrite,
 }
 
 impl JournalAction {
@@ -109,6 +110,7 @@ impl JournalAction {
         match self {
             JournalAction::Move => "move",
             JournalAction::Trash => "trash",
+            JournalAction::ReadmeWrite => "readme_write",
         }
     }
 
@@ -116,6 +118,7 @@ impl JournalAction {
         match value {
             "move" => Some(JournalAction::Move),
             "trash" => Some(JournalAction::Trash),
+            "readme_write" => Some(JournalAction::ReadmeWrite),
             _ => None,
         }
     }
@@ -380,7 +383,14 @@ fn undo_blocked_reason_from_filesystem(
     root: &Path,
     operation: &OperationHistoryEntry,
 ) -> Option<String> {
-    if !matches!(operation.action, JournalAction::Move | JournalAction::Trash) {
+    if !matches!(
+        operation.action,
+        JournalAction::Move | JournalAction::Trash | JournalAction::ReadmeWrite
+    ) {
+        return None;
+    }
+
+    if operation.action == JournalAction::ReadmeWrite {
         return None;
     }
 

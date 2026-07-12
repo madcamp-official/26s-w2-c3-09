@@ -23,6 +23,8 @@ pub struct Proposal {
     pub action: ProposalAction,
     pub from: String,
     pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     pub source_size_bytes: u64,
     pub source_modified_unix_ms: Option<u128>,
     pub reason: String,
@@ -34,6 +36,7 @@ pub struct Proposal {
 pub enum ProposalAction {
     Move,
     Trash,
+    ReadmeWrite,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -130,6 +133,7 @@ impl ProposalAction {
         match self {
             ProposalAction::Move => "move",
             ProposalAction::Trash => "trash",
+            ProposalAction::ReadmeWrite => "readme_write",
         }
     }
 }

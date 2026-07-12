@@ -7,6 +7,7 @@ use std::time::UNIX_EPOCH;
 use serde::Serialize;
 
 use crate::decision::DecisionError;
+use crate::fs_safety::is_link_or_reparse_point;
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::proposal::{
     propose_for_root, Proposal, ProposalAction, ProposalError, ProposalReport, ProposalStatus,
@@ -23,6 +24,8 @@ pub struct PrecheckResult {
     pub action: ProposalAction,
     pub from: String,
     pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     pub status: PrecheckStatus,
     pub reason: Option<String>,
 }
@@ -95,6 +98,10 @@ fn precheck_proposal(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
         );
     }
 
+    if proposal.action == ProposalAction::ReadmeWrite {
+        return precheck_readme_write(guard, proposal);
+    }
+
     let source = match guard.resolve_existing(&proposal.from) {
         Ok(source) => source,
         Err(PathGuardError::MissingPath(_)) => {
@@ -140,11 +147,85 @@ fn precheck_proposal(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
     result(proposal, PrecheckStatus::Ready, None)
 }
 
+fn precheck_readme_write(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
+    if proposal.from != "README.md" || proposal.to != "README.md" {
+        return result(
+            proposal,
+            PrecheckStatus::RejectedPath,
+            Some("README_WRITE may only target README.md at the managed-root root".to_string()),
+        );
+    }
+    if proposal.content.is_none() {
+        return result(
+            proposal,
+            PrecheckStatus::RejectedPath,
+            Some("README_WRITE proposal is missing approved content".to_string()),
+        );
+    }
+
+    let raw_target = guard.root().join("README.md");
+    let target_metadata = fs::symlink_metadata(&raw_target).ok();
+    if let Some(metadata) = &target_metadata {
+        if is_link_or_reparse_point(metadata, metadata.file_type()) {
+            return result(
+                proposal,
+                PrecheckStatus::RejectedPath,
+                Some("README.md is a symlink, junction, or reparse point".to_string()),
+            );
+        }
+    }
+
+    let target = match guard.resolve_existing("README.md") {
+        Ok(target) => target,
+        Err(PathGuardError::MissingPath(_)) => {
+            if proposal.source_size_bytes == 0 && proposal.source_modified_unix_ms.is_none() {
+                return result(proposal, PrecheckStatus::Ready, None);
+            }
+            return result(
+                proposal,
+                PrecheckStatus::MissingSource,
+                Some("README.md no longer exists".to_string()),
+            );
+        }
+        Err(error) => {
+            return result(
+                proposal,
+                PrecheckStatus::RejectedPath,
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    let metadata = match fs::metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return result(
+                proposal,
+                PrecheckStatus::MissingSource,
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    if metadata.len() != proposal.source_size_bytes
+        || modified_unix_ms(&metadata) != proposal.source_modified_unix_ms
+    {
+        return result(
+            proposal,
+            PrecheckStatus::SourceChanged,
+            Some("README.md changed since proposal".to_string()),
+        );
+    }
+
+    result(proposal, PrecheckStatus::Ready, None)
+}
+
 fn result(proposal: &Proposal, status: PrecheckStatus, reason: Option<String>) -> PrecheckResult {
     PrecheckResult {
         action: proposal.action.clone(),
         from: proposal.from.clone(),
         to: proposal.to.clone(),
+        content: proposal.content.clone(),
         status,
         reason,
     }
