@@ -381,14 +381,18 @@ async function tick() {
   }
 }
 
-await tick();
-const timer = setInterval(() => void tick(), 30_000);
+async function start() {
+  await tick();
+  const timer = setInterval(() => void tick(), 30_000);
 
-async function shutdown() {
-  clearInterval(timer);
-  await connection.close();
-  process.exit(0);
+  async function shutdown() {
+    clearInterval(timer);
+    await connection.close();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", () => void shutdown());
+  process.on("SIGTERM", () => void shutdown());
 }
 
-process.on("SIGINT", () => void shutdown());
-process.on("SIGTERM", () => void shutdown());
+void start();
