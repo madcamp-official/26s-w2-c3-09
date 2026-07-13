@@ -265,7 +265,11 @@ class HomeController extends AsyncNotifier<HomeData> {
     ref.watch(homeSummaryFetcherProvider);
     ref.watch(mutationQueueProvider);
     ref.watch(displayCacheProvider);
-    final gate = ref.watch(connectionGateControllerProvider).requireValue;
+    // The five-second connection safety reconcile owns the authoritative
+    // device/room gate. Home data should not refetch just because that gate
+    // confirmed liveness; summary reloads are reserved for explicit refreshes
+    // and realtime events without a complete targeted patch.
+    final gate = ref.read(connectionGateControllerProvider).requireValue;
     ref.listen(realtimeHomeUpdateProvider, (previous, next) {
       if (next == null || identical(previous, next)) return;
       unawaited(applyRealtimeUpdate(next));

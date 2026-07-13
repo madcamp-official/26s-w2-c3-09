@@ -1,6 +1,12 @@
+import 'package:drift/native.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mousekeeper/core/sync/realtime_controller.dart';
+import 'package:mousekeeper/core/sync/mutation_queue.dart';
+import 'package:mousekeeper/features/auth/connection_gate_controller.dart';
 import 'package:mousekeeper/features/home/home_controller.dart';
+import 'package:mousekeeper/storage/app_database.dart';
+import 'package:mousekeeper/storage/display_cache.dart';
 
 void main() {
   test('home projection is parsed from exactly one summary fetch', () async {
@@ -187,6 +193,123 @@ void main() {
       isNull,
     );
   });
+
+  test(
+    'connection safety reconcile does not reload the home summary projection',
+    () async {
+      final database = AppDatabase.forTesting(NativeDatabase.memory());
+      final cache = DisplayCache(database, 'user-a');
+      final api = _FakeConnectionControlApi()
+        ..devices = [
+          {
+            'id': 'device-a',
+            'deviceName': 'Desk',
+            'platform': 'WINDOWS',
+            'status': 'ACTIVE',
+          },
+        ]
+        ..rooms = [
+          {
+            'id': 'room-a',
+            'desktopDeviceId': 'device-a',
+            'name': 'Downloads',
+            'rootAlias': 'root:downloads',
+            'status': 'ACTIVE',
+          },
+        ];
+      var summaryCalls = 0;
+      final container = ProviderContainer(
+        overrides: [
+          connectionControlApiProvider.overrideWithValue(api),
+          displayCacheProvider.overrideWithValue(cache),
+          mutationQueueProvider.overrideWithValue(
+            MutationQueue(
+              database,
+              (
+                _,
+                _, {
+                String? idempotencyKey,
+                String? expectedOwnerUid,
+              }) async => <String, dynamic>{},
+              () => 'user-a',
+            ),
+          ),
+          homeSummaryFetcherProvider.overrideWithValue(() async {
+            summaryCalls++;
+            return {
+              'devices': [
+                {
+                  'id': 'device-a',
+                  'status': 'ACTIVE',
+                  'presence': 'ONLINE_IDLE',
+                },
+              ],
+              'rooms': [
+                {
+                  'id': 'room-a',
+                  'desktopDeviceId': 'device-a',
+                  'status': 'ACTIVE',
+                  'pendingProposalCount': 0,
+                  'latestExecutionStatus': null,
+                  'cleanlinessScore': null,
+                  'cleanlinessFormulaVersion': null,
+                  'cleanlinessCalculatedAt': null,
+                },
+              ],
+              'character': null,
+            };
+          }),
+        ],
+      );
+      final gateSubscription = container.listen(
+        connectionGateControllerProvider,
+        (_, _) {},
+        fireImmediately: true,
+      );
+      ProviderSubscription<AsyncValue<HomeData>>? homeSubscription;
+      addTearDown(() async {
+        homeSubscription?.close();
+        gateSubscription.close();
+        container.dispose();
+        await database.close();
+      });
+
+      await container.read(connectionGateControllerProvider.future);
+      homeSubscription = container.listen(
+        homeControllerProvider,
+        (_, _) {},
+        fireImmediately: true,
+      );
+      await container.read(homeControllerProvider.future);
+      expect(summaryCalls, 1);
+
+      api.devices = [
+        {
+          'id': 'device-a',
+          'deviceName': 'Renamed desk',
+          'platform': 'WINDOWS',
+          'status': 'ACTIVE',
+        },
+      ];
+      expect(
+        await container
+            .read(connectionGateControllerProvider.notifier)
+            .reconcile(),
+        isTrue,
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(summaryCalls, 1);
+      expect(
+        container
+            .read(connectionGateControllerProvider)
+            .requireValue
+            .devices
+            .single['deviceName'],
+        'Renamed desk',
+      );
+    },
+  );
 }
 
 HomeData _homeData() => const HomeData(
@@ -209,3 +332,25 @@ HomeData _homeData() => const HomeData(
   outboxPending: 0,
   outboxFailed: 0,
 );
+
+class _FakeConnectionControlApi implements ConnectionControlApi {
+  List<Map<String, dynamic>> devices = [];
+  List<Map<String, dynamic>> rooms = [];
+
+  @override
+  Future<List<Map<String, dynamic>>> listDevices() async =>
+      devices.map(Map<String, dynamic>.from).toList();
+
+  @override
+  Future<List<Map<String, dynamic>>> listRooms() async =>
+      rooms.map(Map<String, dynamic>.from).toList();
+
+  @override
+  Future<void> claimPairing(String code) async {}
+
+  @override
+  Future<void> revokeDevice(String deviceId, String idempotencyKey) async {}
+
+  @override
+  Future<void> removeRoom(String roomId, String idempotencyKey) async {}
+}

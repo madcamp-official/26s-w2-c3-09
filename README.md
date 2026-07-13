@@ -2,7 +2,7 @@
 
 ## Recent implementation notes (2026-07-13)
 
-- Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but it no longer turns that loop into a full `/v1/home/summary` refresh.
+- Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but HomeController no longer subscribes to that gate as a summary dependency, with regression coverage proving the loop does not trigger another `/v1/home/summary` fetch.
 - Realtime Home updates remain item-scoped where payloads are complete: `presence.updated` patches only the affected device, lifecycle events remove only affected devices/rooms, and execution status patches only the affected room.
 - `execution.updated` events now carry `executionId`, `roomId`, and `status` in the payload itself, so mobile reducers can perform targeted result upserts without depending on envelope-only fields.
 - Mobile Room now patches/upserts only the affected execution row for `execution.updated` realtime events and skips the redundant full room reload that follows from the generic revision signal.
