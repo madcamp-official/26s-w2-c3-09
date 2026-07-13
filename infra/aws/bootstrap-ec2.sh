@@ -120,7 +120,7 @@ done
 runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm install --frozen-lockfile"
 runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @housemouse/contracts build"
 runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @housemouse/database build"
-runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @housemouse/server build"
+runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin NODE_OPTIONS=--max-old-space-size=1024 pnpm --filter @housemouse/server build"
 runuser -u housemouse -- /bin/bash -c "set -a; source '${CONFIG_DIR}/server.env'; set +a; cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @housemouse/database db:migrate"
 
 install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-server.service" /etc/systemd/system/housemouse-server.service

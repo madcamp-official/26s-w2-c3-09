@@ -77,7 +77,8 @@ cd /opt/housemouse
 sudo -u housemouse pnpm install --frozen-lockfile
 sudo -u housemouse pnpm --filter @housemouse/contracts build
 sudo -u housemouse pnpm --filter @housemouse/database build
-sudo -u housemouse pnpm --filter @housemouse/server build
+sudo -u housemouse env NODE_OPTIONS=--max-old-space-size=1024 \
+  pnpm --filter @housemouse/server build
 
 sudo -u housemouse bash -c 'set -a; source /etc/housemouse/server.env; set +a; pnpm --filter @housemouse/database db:migrate'
 ```
