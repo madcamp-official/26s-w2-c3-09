@@ -163,7 +163,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 
 - 청결도는 Rust의 `mousekeeper-cleanliness-v1` 공식이 만든 하나의 snapshot만 사용한다. Desktop은 그 객체를 표시·queue하고 서버는 재계산 없이 저장하며 모바일은 score, 감점 code/count/points, 계산 시각, 공식 버전을 그대로 표시한다.
 - device와 room 연결 해제는 모바일·Desktop 양쪽에서 시작할 수 있다. 서버는 멱등 transaction으로 ACTIVE 상태와 진행 작업을 종료하고 durable event를 기록한 뒤 즉시 publish한다. device 해제는 socket과 연결 room을 함께 정리한다.
-- 모바일은 로그인 직후 서버의 ACTIVE device/room을 확인하는 Pairing Gate를 통과해야 main navigation을 만든다. stale Drift cache는 gate를 열 수 없고 revoke/remove event와 replay가 관련 cache·outbox를 계단식으로 제거한다. event 유실 시에도 2초 간격의 직렬 authoritative reconcile로 수렴한다.
+- 모바일은 로그인 직후 서버의 ACTIVE device/room을 확인하는 Pairing Gate를 통과해야 main navigation을 만든다. stale Drift cache는 gate를 열 수 없고 revoke/remove event와 replay가 관련 cache·outbox를 계단식으로 제거한다. event 유실 시에도 5초 간격의 직렬 authoritative safety reconcile로 device/room 연결 상태만 보정하며, 홈 전체 데이터는 `/v1/home/summary`를 재호출하지 않고 완전한 WebSocket payload 단위로 갱신한다.
 - `CharacterState` 9종과 lifecycle 최종 상태는 TypeScript·JSON Schema·OpenAPI·Rust·Flutter에서 같은 대문자 wire value를 사용한다. 모바일은 잘못된 상태·ID·sequence를 fail-closed로 폐기하고 상대경로는 모든 계약에서 같은 1,024자·경계 규칙을 적용한다.
 - 모바일 realtime replay와 mutation queue는 시작 시점 UID·generation에 고정된다. 로그아웃 뒤 다른 계정으로 전환되면 이전 계정의 늦은 socket 응답·cursor·cache write·ACK·outbox 갱신을 모두 폐기하며, 계정별 flush는 서로 막지 않는다.
 - room 연결 해제 시 Desktop watcher와 disposable index만 정리한다. managed root, 실제 파일, `.mousekeeper_trash`, operation journal과 undo 가능 기록은 삭제하지 않는다.
