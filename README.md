@@ -98,7 +98,7 @@ Tauri Desktop
 - Rule DSL, proposal, 사용자 decision, 실행 직전 precheck
 - journal-before-write, no-overwrite move, 복구형 trash, create/rename, history, undo, journal recovery
 - React 파일 관리 UI와 Tauri invoke bridge
-- 실제 REST agent transport: pairing 코드 생성·10초 polling, 15초 heartbeat, pending command 조회·상태 전이
+- 실제 REST agent transport: pairing 코드 생성·2초 status polling, 5초 heartbeat, 15초 fast REST reconcile, 30초 heavy transfer/smart-cache reconcile, pending command 조회·상태 전이
 - device token의 OS keychain 저장과 UI·로그 비노출, 잘못된 서버 응답 schema 검증
 - device별 SQLite sync cursor와 `/v1/sync/events` REST replay
 - Desktop Agent 연결·pairing·replay 상태 UI
