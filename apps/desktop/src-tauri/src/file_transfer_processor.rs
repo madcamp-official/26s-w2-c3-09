@@ -1,15 +1,20 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::fs_safety::is_link_or_reparse_point;
 use file_engine_cli::path_guard::{PathGuard, PathGuardError};
+use sha2::{Digest, Sha256};
 
 use crate::agent::{
     AgentFileTransfer, AgentFileTransferFailureCode, AgentFileTransferSourceVersion,
     AgentFileTransferUploadTarget, AgentRuntime,
 };
 use crate::storage::managed_roots::ManagedRootStore;
+
+const FILE_READ_CHUNK_BYTES: usize = 1024 * 1024;
+const UPLOAD_TIMEOUT_SECONDS: u64 = 120;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatedTransferSource {
@@ -34,6 +39,21 @@ pub struct PreparedTransferUpload {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferUploadPreparationError {
+    pub transfer_id: String,
+    pub failure_code: Option<AgentFileTransferFailureCode>,
+    pub failure_reported: bool,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompletedTransferUpload {
+    pub transfer_id: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferUploadExecutionError {
     pub transfer_id: String,
     pub failure_code: Option<AgentFileTransferFailureCode>,
     pub failure_reported: bool,
@@ -100,6 +120,80 @@ pub async fn prepare_upload_target_for_transfer(
         source,
         upload_target,
     })
+}
+
+pub async fn upload_prepared_transfer(
+    agent: &AgentRuntime,
+    prepared: PreparedTransferUpload,
+) -> Result<CompletedTransferUpload, TransferUploadExecutionError> {
+    if let Err(error) = ensure_source_unchanged(&prepared.source) {
+        return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await);
+    }
+
+    let payload = match read_source_payload(&prepared.source) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await)
+        }
+    };
+
+    if let Err(error) = ensure_source_unchanged(&prepared.source) {
+        return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await);
+    }
+
+    put_upload_bytes(&prepared.upload_target.upload_url, payload.bytes)
+        .await
+        .map_err(|message| TransferUploadExecutionError {
+            transfer_id: prepared.source.transfer_id.clone(),
+            failure_code: None,
+            failure_reported: false,
+            message,
+        })?;
+
+    if let Err(error) = ensure_source_unchanged(&prepared.source) {
+        return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await);
+    }
+
+    agent
+        .complete_file_transfer_upload(
+            prepared.source.transfer_id.clone(),
+            format!("{}-complete", prepared.source.transfer_id),
+            payload.size_bytes,
+            payload.sha256.clone(),
+        )
+        .await
+        .map_err(|error| TransferUploadExecutionError {
+            transfer_id: prepared.source.transfer_id.clone(),
+            failure_code: None,
+            failure_reported: false,
+            message: error.to_string(),
+        })?;
+
+    Ok(CompletedTransferUpload {
+        transfer_id: prepared.source.transfer_id,
+        size_bytes: payload.size_bytes,
+        sha256: payload.sha256,
+    })
+}
+
+async fn report_source_changed(
+    agent: &AgentRuntime,
+    transfer_id: &str,
+    error: TransferUploadExecutionError,
+) -> TransferUploadExecutionError {
+    let failure_reported = agent
+        .fail_file_transfer(
+            transfer_id.to_string(),
+            AgentFileTransferFailureCode::SourceChanged,
+        )
+        .await
+        .is_ok();
+    TransferUploadExecutionError {
+        transfer_id: transfer_id.to_string(),
+        failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+        failure_reported,
+        message: error.message,
+    }
 }
 
 pub async fn validate_transfer_source_for_request(
@@ -195,6 +289,127 @@ pub fn validate_local_transfer_source(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct TransferUploadPayload {
+    bytes: Vec<u8>,
+    size_bytes: u64,
+    sha256: String,
+}
+
+fn read_source_payload(
+    source: &ValidatedTransferSource,
+) -> Result<TransferUploadPayload, TransferUploadExecutionError> {
+    let mut file =
+        File::open(&source.resolved_path).map_err(|error| TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: format!("cannot open source file for upload: {error}"),
+        })?;
+    let mut hasher = Sha256::new();
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(source.source_version.size_bytes)
+            .unwrap_or(FILE_READ_CHUNK_BYTES)
+            .min(FILE_READ_CHUNK_BYTES),
+    );
+    let mut buffer = vec![0_u8; FILE_READ_CHUNK_BYTES];
+
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| TransferUploadExecutionError {
+                transfer_id: source.transfer_id.clone(),
+                failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+                failure_reported: false,
+                message: format!("cannot read source file for upload: {error}"),
+            })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+
+    let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if size_bytes != source.source_version.size_bytes {
+        return Err(TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: "source size changed while preparing upload".to_string(),
+        });
+    }
+
+    Ok(TransferUploadPayload {
+        bytes,
+        size_bytes,
+        sha256: hex_lower(&hasher.finalize()),
+    })
+}
+
+async fn put_upload_bytes(upload_url: &str, bytes: Vec<u8>) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(UPLOAD_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|error| format!("cannot configure upload client: {error}"))?;
+    let response = client
+        .put(upload_url)
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|error| format!("cannot upload file bytes: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "upload target rejected file bytes with HTTP {}",
+            response.status()
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_source_unchanged(
+    source: &ValidatedTransferSource,
+) -> Result<(), TransferUploadExecutionError> {
+    let metadata =
+        fs::metadata(&source.resolved_path).map_err(|error| TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: format!("cannot re-read source metadata: {error}"),
+        })?;
+    if !metadata.is_file() {
+        return Err(TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: "source is no longer a file".to_string(),
+        });
+    }
+    let modified_unix_ms = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis());
+    let current = AgentFileTransferSourceVersion {
+        file_id: stable_file_id(
+            &source.source_relative_path,
+            metadata.len(),
+            modified_unix_ms,
+        ),
+        size_bytes: metadata.len(),
+        modified_at: unix_ms_to_rfc3339(modified_unix_ms),
+    };
+    if current != source.source_version {
+        return Err(TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: "source file changed before upload completion".to_string(),
+        });
+    }
+    Ok(())
+}
+
 fn upload_target_failure_code(message: &str) -> Option<AgentFileTransferFailureCode> {
     if message.contains("SIZE_LIMIT_EXCEEDED") {
         Some(AgentFileTransferFailureCode::SizeLimitExceeded)
@@ -283,6 +498,14 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
     hash
 }
 
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
 fn unix_ms_to_rfc3339(unix_ms: Option<u128>) -> String {
     let millis = unix_ms.unwrap_or(0);
     let seconds = i64::try_from(millis / 1000).unwrap_or(i64::MAX);
@@ -330,11 +553,15 @@ fn unix_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     use tempfile::tempdir;
 
     use super::{
-        prepare_upload_target_for_transfer, unix_ms_to_rfc3339, upload_target_failure_code,
+        ensure_source_unchanged, prepare_upload_target_for_transfer, put_upload_bytes,
+        read_source_payload, unix_ms_to_rfc3339, upload_target_failure_code,
         validate_local_transfer_source,
     };
     use crate::agent::{AgentFileTransfer, AgentFileTransferFailureCode, AgentRuntime};
@@ -483,6 +710,71 @@ mod tests {
             Some(AgentFileTransferFailureCode::SizeLimitExceeded)
         );
         assert_eq!(upload_target_failure_code("UNCONFIGURED"), None);
+    }
+
+    #[test]
+    fn reads_source_payload_and_computes_sha256() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("hello.txt"), "hello").expect("file");
+        let source =
+            validate_local_transfer_source(root.to_str().expect("root"), "hello.txt", None, None)
+                .expect("source");
+
+        let payload = read_source_payload(&source).expect("payload");
+
+        assert_eq!(payload.size_bytes, 5);
+        assert_eq!(payload.bytes, b"hello");
+        assert_eq!(
+            payload.sha256,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn source_change_is_detected_before_upload_completion() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("report.txt"), "old").expect("file");
+        let source =
+            validate_local_transfer_source(root.to_str().expect("root"), "report.txt", None, None)
+                .expect("source");
+
+        fs::write(root.join("report.txt"), "new content").expect("change file");
+        let error = ensure_source_unchanged(&source).expect_err("source changed");
+
+        assert_eq!(
+            error.failure_code,
+            Some(AgentFileTransferFailureCode::SourceChanged)
+        );
+    }
+
+    #[tokio::test]
+    async fn put_upload_bytes_sends_the_file_body_to_upload_target() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind upload target");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept upload");
+            let mut buffer = [0_u8; 8192];
+            let length = stream.read(&mut buffer).expect("read upload");
+            let request = String::from_utf8_lossy(&buffer[..length]);
+            assert!(request.starts_with("PUT /upload-target HTTP/1.1"));
+            assert!(request.ends_with("hello upload"));
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        });
+
+        put_upload_bytes(
+            &format!("http://{address}/upload-target"),
+            b"hello upload".to_vec(),
+        )
+        .await
+        .expect("put upload");
+        server.join().expect("server thread");
     }
 
     #[test]
