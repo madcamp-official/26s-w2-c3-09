@@ -80,6 +80,10 @@ export type BackgroundRuntimeStatus = {
   last_file_browse_count: number;
   last_file_browse_completed_count: number;
   last_file_browse_failed_count: number;
+  last_file_transfer_poll_unix_ms: number | null;
+  last_file_transfer_count: number;
+  last_file_transfer_uploaded_count: number;
+  last_file_transfer_failed_count: number;
   last_outbox_flush_unix_ms: number | null;
   last_outbox_sent_count: number;
   last_outbox_failed_count: number;
@@ -149,6 +153,26 @@ export type FileBrowseProcessingReport = {
   results: FileBrowseProcessingResult[];
 };
 
+export type FileTransferProcessingStatus = "completed" | "failed" | "skipped";
+
+export type FileTransferProcessingResult = {
+  transfer_id: string;
+  status: FileTransferProcessingStatus;
+  size_bytes: number | null;
+  sha256: string | null;
+  failure_code: string | null;
+  failure_reported: boolean;
+  message: string | null;
+};
+
+export type FileTransferProcessingReport = {
+  inspected_count: number;
+  uploaded_count: number;
+  failed_count: number;
+  skipped_count: number;
+  results: FileTransferProcessingResult[];
+};
+
 export type SyncEvent = {
   event_id: string;
   event_type: string;
@@ -211,6 +235,10 @@ export function processAgentDecisions() {
 
 export function processAgentFileBrowseRequests() {
   return invokeAgentCommand<FileBrowseProcessingReport>("process_agent_file_browse_requests");
+}
+
+export function processAgentFileTransfers() {
+  return invokeAgentCommand<FileTransferProcessingReport>("process_agent_file_transfers");
 }
 
 export function flushAgentOutbox() {

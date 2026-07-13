@@ -126,6 +126,7 @@ pub fn run() {
             commands::agent::process_agent_commands,
             commands::agent::process_agent_decisions,
             commands::agent::process_agent_file_browse_requests,
+            commands::agent::process_agent_file_transfers,
             commands::agent::flush_agent_outbox,
             commands::agent::ensure_agent_room,
             commands::agent::replay_agent_events,

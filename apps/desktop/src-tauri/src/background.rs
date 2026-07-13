@@ -19,12 +19,13 @@ const REALTIME_RECONNECT_SECONDS: u64 = 15;
 /// Each one only wakes the REST loop; the events themselves are never treated as the source of
 /// truth (that stays `/v1/sync/events` replay and command/decision polling).
 #[cfg(feature = "tauri-commands")]
-const REALTIME_WAKE_EVENTS: [&str; 5] = [
+const REALTIME_WAKE_EVENTS: [&str; 6] = [
     "command.available",
     "command.updated",
     "proposal.created",
     "decision.created",
     "file.browse.requested",
+    "file.transfer.requested",
 ];
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -47,6 +48,10 @@ pub struct BackgroundRuntimeStatus {
     pub last_file_browse_count: usize,
     pub last_file_browse_completed_count: usize,
     pub last_file_browse_failed_count: usize,
+    pub last_file_transfer_poll_unix_ms: Option<i64>,
+    pub last_file_transfer_count: usize,
+    pub last_file_transfer_uploaded_count: usize,
+    pub last_file_transfer_failed_count: usize,
     pub last_outbox_flush_unix_ms: Option<i64>,
     pub last_outbox_sent_count: usize,
     pub last_outbox_failed_count: usize,
@@ -98,6 +103,10 @@ impl Default for BackgroundRuntime {
                 last_file_browse_count: 0,
                 last_file_browse_completed_count: 0,
                 last_file_browse_failed_count: 0,
+                last_file_transfer_poll_unix_ms: None,
+                last_file_transfer_count: 0,
+                last_file_transfer_uploaded_count: 0,
+                last_file_transfer_failed_count: 0,
                 last_outbox_flush_unix_ms: None,
                 last_outbox_sent_count: 0,
                 last_outbox_failed_count: 0,
@@ -425,6 +434,30 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
         }
     }
 
+    match crate::file_transfer_processor::process_pending_file_transfers(&agent, &roots).await {
+        Ok(report) => {
+            if report.failed_count > 0 {
+                activity.had_error = true;
+            }
+            update_status(status, |status| {
+                status.last_file_transfer_poll_unix_ms = Some(unix_ms());
+                status.last_file_transfer_count = report.inspected_count;
+                status.last_file_transfer_uploaded_count = report.uploaded_count;
+                status.last_file_transfer_failed_count = report.failed_count;
+                if report.failed_count > 0 {
+                    status.last_error_message =
+                        Some(format!("{} file transfer(s) failed", report.failed_count));
+                }
+            });
+        }
+        Err(error) => {
+            activity.had_error = true;
+            update_status(status, |status| {
+                status.last_error_message = Some(error);
+            });
+        }
+    }
+
     // Deliver everything the command and decision passes just queued (plus any backlog from a
     // previous tick when the network was down). This runs last so a result enqueued moments ago
     // is sent in the same tick when the network is healthy.
@@ -552,6 +585,10 @@ mod tests {
         assert_eq!(status.last_file_browse_count, 0);
         assert_eq!(status.last_file_browse_completed_count, 0);
         assert_eq!(status.last_file_browse_failed_count, 0);
+        assert!(status.last_file_transfer_poll_unix_ms.is_none());
+        assert_eq!(status.last_file_transfer_count, 0);
+        assert_eq!(status.last_file_transfer_uploaded_count, 0);
+        assert_eq!(status.last_file_transfer_failed_count, 0);
         assert!(status.last_outbox_flush_unix_ms.is_none());
         assert_eq!(status.last_outbox_sent_count, 0);
         assert_eq!(status.last_outbox_failed_count, 0);

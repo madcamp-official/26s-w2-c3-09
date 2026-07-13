@@ -18,6 +18,7 @@ import {
   processAgentCommands,
   processAgentDecisions,
   processAgentFileBrowseRequests,
+  processAgentFileTransfers,
   flushAgentOutbox,
   pollAgentCommands,
   pollAgentPairing,
@@ -259,6 +260,24 @@ export function AgentPanel() {
     }
   }
 
+  async function processFileTransfersNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await processAgentFileTransfers();
+      setLastProcessedSummary(
+        `file transfer: ${report.uploaded_count} uploaded, ${report.failed_count} failed, ${report.skipped_count} skipped of ${report.inspected_count}`
+      );
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function flushOutboxNow() {
     setBusy(true);
     setError(null);
@@ -355,6 +374,9 @@ export function AgentPanel() {
           <button disabled={busy} onClick={() => void processFileBrowseNow()}>
             Process file browse
           </button>
+          <button disabled={busy} onClick={() => void processFileTransfersNow()}>
+            Process file transfers
+          </button>
           <button disabled={busy} onClick={() => void flushOutboxNow()}>
             Flush outbox
           </button>
@@ -409,6 +431,12 @@ export function AgentPanel() {
               {background.last_file_browse_count} | failed{" "}
               {background.last_file_browse_failed_count} | poll{" "}
               {formatRuntimeTime(background.last_file_browse_poll_unix_ms)}
+            </small>
+            <small>
+              file transfers {background.last_file_transfer_uploaded_count}/
+              {background.last_file_transfer_count} | failed{" "}
+              {background.last_file_transfer_failed_count} | poll{" "}
+              {formatRuntimeTime(background.last_file_transfer_poll_unix_ms)}
             </small>
             <small>
               outbox sent {background.last_outbox_sent_count} | failed{" "}

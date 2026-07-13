@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::fs_safety::is_link_or_reparse_point;
 use file_engine_cli::path_guard::{PathGuard, PathGuardError};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::agent::{
@@ -58,6 +59,112 @@ pub struct TransferUploadExecutionError {
     pub failure_code: Option<AgentFileTransferFailureCode>,
     pub failure_reported: bool,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct FileTransferProcessingReport {
+    pub inspected_count: usize,
+    pub uploaded_count: usize,
+    pub failed_count: usize,
+    pub skipped_count: usize,
+    pub results: Vec<FileTransferProcessingResult>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct FileTransferProcessingResult {
+    pub transfer_id: String,
+    pub status: FileTransferProcessingStatus,
+    pub size_bytes: Option<u64>,
+    pub sha256: Option<String>,
+    pub failure_code: Option<AgentFileTransferFailureCode>,
+    pub failure_reported: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileTransferProcessingStatus {
+    Completed,
+    Failed,
+    Skipped,
+}
+
+pub async fn process_pending_file_transfers(
+    agent: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<FileTransferProcessingReport, String> {
+    let transfers = agent
+        .pending_file_transfers()
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let mut report = FileTransferProcessingReport {
+        inspected_count: transfers.len(),
+        uploaded_count: 0,
+        failed_count: 0,
+        skipped_count: 0,
+        results: Vec::new(),
+    };
+
+    for transfer in transfers {
+        let transfer_id = transfer.transfer_id.clone();
+        match process_one_transfer(agent, roots, transfer).await {
+            Ok(completed) => {
+                report.uploaded_count += 1;
+                report.results.push(FileTransferProcessingResult {
+                    transfer_id,
+                    status: FileTransferProcessingStatus::Completed,
+                    size_bytes: Some(completed.size_bytes),
+                    sha256: Some(completed.sha256),
+                    failure_code: None,
+                    failure_reported: false,
+                    message: None,
+                });
+            }
+            Err(error) if error.message.contains("not pending") => {
+                report.skipped_count += 1;
+                report.results.push(FileTransferProcessingResult {
+                    transfer_id,
+                    status: FileTransferProcessingStatus::Skipped,
+                    size_bytes: None,
+                    sha256: None,
+                    failure_code: error.failure_code,
+                    failure_reported: error.failure_reported,
+                    message: Some(error.message),
+                });
+            }
+            Err(error) => {
+                report.failed_count += 1;
+                report.results.push(FileTransferProcessingResult {
+                    transfer_id,
+                    status: FileTransferProcessingStatus::Failed,
+                    size_bytes: None,
+                    sha256: None,
+                    failure_code: error.failure_code,
+                    failure_reported: error.failure_reported,
+                    message: Some(error.message),
+                });
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+async fn process_one_transfer(
+    agent: &AgentRuntime,
+    roots: &ManagedRootStore,
+    transfer: AgentFileTransfer,
+) -> Result<CompletedTransferUpload, TransferUploadExecutionError> {
+    let prepared = prepare_upload_target_for_transfer(agent, roots, &transfer)
+        .await
+        .map_err(|error| TransferUploadExecutionError {
+            transfer_id: error.transfer_id,
+            failure_code: error.failure_code,
+            failure_reported: error.failure_reported,
+            message: error.message,
+        })?;
+    upload_prepared_transfer(agent, prepared).await
 }
 
 pub async fn prepare_upload_target_for_transfer(
