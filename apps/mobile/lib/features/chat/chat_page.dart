@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
 import 'readme_command_page.dart';
@@ -17,6 +18,11 @@ abstract interface class ChatGateway {
     int limit = chatMessagePageSize,
   });
   Future<Map<String, dynamic>> sendMessage(String sessionId, String content);
+  Future<Map<String, dynamic>> confirmCommandDraft(
+    String draftId,
+    String idempotencyKey,
+  );
+  Future<Map<String, dynamic>> rejectCommandDraft(String draftId);
 }
 
 const chatMessagePageSize = 30;
@@ -55,6 +61,20 @@ class ApiChatGateway implements ChatGateway {
   @override
   Future<Map<String, dynamic>> sendMessage(String sessionId, String content) =>
       _api.post('/v1/chat-sessions/$sessionId/messages', {'content': content});
+
+  @override
+  Future<Map<String, dynamic>> confirmCommandDraft(
+    String draftId,
+    String idempotencyKey,
+  ) => _api.post(
+    '/v1/command-drafts/$draftId/confirm',
+    const {},
+    idempotencyKey: idempotencyKey,
+  );
+
+  @override
+  Future<Map<String, dynamic>> rejectCommandDraft(String draftId) =>
+      _api.post('/v1/command-drafts/$draftId/reject', const {});
 }
 
 String chatSessionTitle(Map<String, dynamic> session) {
@@ -94,6 +114,23 @@ String chatErrorMessage(Object error) {
   return '채팅 작업을 완료하지 못했습니다.';
 }
 
+String? commandDraftIdFromMessage(Map<String, dynamic> message) {
+  if (message['messageType'] != 'COMMAND_DRAFT') return null;
+  final payload = message['structuredPayload'];
+  if (payload is Map && payload['id'] is String) {
+    return payload['id'] as String;
+  }
+  return null;
+}
+
+String commandDraftStatusFromMessage(Map<String, dynamic> message) {
+  final payload = message['structuredPayload'];
+  if (payload is Map && payload['status'] is String) {
+    return payload['status'] as String;
+  }
+  return 'DRAFT';
+}
+
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key, required this.roomId, this.gateway});
 
@@ -117,6 +154,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _creating = false;
   bool _deleting = false;
   bool _disposed = false;
+  final Set<String> _draftingIds = {};
   int _loadVersion = 0;
   String? _messageCursor;
   bool _hasMoreMessages = false;
@@ -305,6 +343,55 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<void> _confirmCommandDraft(String draftId) async {
+    if (_draftingIds.contains(draftId)) return;
+    setState(() => _draftingIds.add(draftId));
+    try {
+      final result = await _gateway.confirmCommandDraft(
+        draftId,
+        const Uuid().v4(),
+      );
+      if (_disposed) return;
+      _patchDraftMessage(draftId, result['draft']);
+      _showSnack('Command draft confirmed.');
+    } catch (error) {
+      _showSnack(
+        'Command draft confirmation failed: ${chatErrorMessage(error)}',
+      );
+    } finally {
+      if (!_disposed) setState(() => _draftingIds.remove(draftId));
+    }
+  }
+
+  Future<void> _rejectCommandDraft(String draftId) async {
+    if (_draftingIds.contains(draftId)) return;
+    setState(() => _draftingIds.add(draftId));
+    try {
+      final result = await _gateway.rejectCommandDraft(draftId);
+      if (_disposed) return;
+      _patchDraftMessage(draftId, result['draft']);
+      _showSnack('Command draft rejected.');
+    } catch (error) {
+      _showSnack('Command draft rejection failed: ${chatErrorMessage(error)}');
+    } finally {
+      if (!_disposed) setState(() => _draftingIds.remove(draftId));
+    }
+  }
+
+  void _patchDraftMessage(String draftId, Object? draft) {
+    if (draft is! Map) return;
+    final nextPayload = Map<String, dynamic>.from(draft);
+    setState(() {
+      _messages = [
+        for (final message in _messages)
+          if (commandDraftIdFromMessage(message) == draftId)
+            {...message, 'structuredPayload': nextPayload}
+          else
+            message,
+      ];
+    });
+  }
+
   bool _stale(int version) => _disposed || version != _loadVersion;
 
   void _showSnack(String message) {
@@ -489,7 +576,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             ),
           );
         }
-        return _ChatBubble(message: _messages[index]);
+        return _ChatBubble(
+          message: _messages[index],
+          busyDraftIds: _draftingIds,
+          onConfirmDraft: (draftId) => unawaited(_confirmCommandDraft(draftId)),
+          onRejectDraft: (draftId) => unawaited(_rejectCommandDraft(draftId)),
+        );
       },
     );
   }
@@ -580,14 +672,25 @@ class _SessionBar extends StatelessWidget {
 }
 
 class _ChatBubble extends StatelessWidget {
-  const _ChatBubble({required this.message});
+  const _ChatBubble({
+    required this.message,
+    required this.busyDraftIds,
+    required this.onConfirmDraft,
+    required this.onRejectDraft,
+  });
 
   final Map<String, dynamic> message;
+  final Set<String> busyDraftIds;
+  final ValueChanged<String> onConfirmDraft;
+  final ValueChanged<String> onRejectDraft;
 
   @override
   Widget build(BuildContext context) {
     final fromUser = message['senderType'] == 'USER';
     final isDraft = message['messageType'] == 'COMMAND_DRAFT';
+    final draftId = commandDraftIdFromMessage(message);
+    final draftStatus = commandDraftStatusFromMessage(message);
+    final draftBusy = draftId != null && busyDraftIds.contains(draftId);
     return Align(
       alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Card(
@@ -604,6 +707,42 @@ class _ChatBubble extends StatelessWidget {
               if (isDraft)
                 Text('확인 카드', style: Theme.of(context).textTheme.labelMedium),
               Text(message['content'] as String? ?? ''),
+              if (isDraft && draftId != null) ...[
+                const SizedBox(height: 8),
+                if (draftStatus == 'DRAFT')
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      FilledButton(
+                        key: ValueKey('chat-command-draft-confirm-$draftId'),
+                        onPressed: draftBusy
+                            ? null
+                            : () => onConfirmDraft(draftId),
+                        child: draftBusy
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('승인'),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        key: ValueKey('chat-command-draft-reject-$draftId'),
+                        onPressed: draftBusy
+                            ? null
+                            : () => onRejectDraft(draftId),
+                        child: const Text('거절'),
+                      ),
+                    ],
+                  )
+                else
+                  Chip(
+                    key: ValueKey('chat-command-draft-status-$draftId'),
+                    label: Text(draftStatus),
+                  ),
+              ],
             ],
           ),
         ),

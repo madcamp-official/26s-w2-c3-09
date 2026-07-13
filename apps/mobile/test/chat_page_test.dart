@@ -45,6 +45,11 @@ void main() {
           'ASSISTANT',
           '제가 이해한 내용: 정리 명령 초안입니다.',
           messageType: 'COMMAND_DRAFT',
+          structuredPayload: {
+            'id': 'draft-1',
+            'status': 'DRAFT',
+            'commandId': null,
+          },
         ),
         'aiStatus': 'READY',
         'ai': {
@@ -66,8 +71,88 @@ void main() {
     expect(find.text('정리해줘'), findsOneWidget);
     expect(find.text('제가 이해한 내용: 정리 명령 초안입니다.'), findsOneWidget);
     expect(find.text('확인 카드'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('chat-command-draft-confirm-draft-1')),
+      findsOneWidget,
+    );
     expect(gateway.messageLoads, {'s1': 1});
     expect(gateway.sentMessages, ['정리해줘']);
+  });
+
+  testWidgets('confirming a command draft patches the message without reload', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화')],
+      messagesBySession: {
+        's1': [
+          _message(
+            'm-draft',
+            's1',
+            'ASSISTANT',
+            '이 작업을 실행할까요?',
+            messageType: 'COMMAND_DRAFT',
+            structuredPayload: {
+              'id': 'draft-1',
+              'status': 'DRAFT',
+              'commandId': null,
+            },
+          ),
+        ],
+      },
+    );
+
+    await _pumpChat(tester, gateway);
+    await tester.tap(
+      find.byKey(const ValueKey('chat-command-draft-confirm-draft-1')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(gateway.confirmedDraftIds, ['draft-1']);
+    expect(gateway.messageLoads, {'s1': 1});
+    expect(
+      find.byKey(const ValueKey('chat-command-draft-status-draft-1')),
+      findsOneWidget,
+    );
+    expect(find.text('MATERIALIZED'), findsOneWidget);
+  });
+
+  testWidgets('rejecting a command draft patches the message without reload', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화')],
+      messagesBySession: {
+        's1': [
+          _message(
+            'm-draft',
+            's1',
+            'ASSISTANT',
+            '이 작업을 취소할까요?',
+            messageType: 'COMMAND_DRAFT',
+            structuredPayload: {
+              'id': 'draft-1',
+              'status': 'DRAFT',
+              'commandId': null,
+            },
+          ),
+        ],
+      },
+    );
+
+    await _pumpChat(tester, gateway);
+    await tester.tap(
+      find.byKey(const ValueKey('chat-command-draft-reject-draft-1')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(gateway.rejectedDraftIds, ['draft-1']);
+    expect(gateway.messageLoads, {'s1': 1});
+    expect(
+      find.byKey(const ValueKey('chat-command-draft-status-draft-1')),
+      findsOneWidget,
+    );
+    expect(find.text('REJECTED'), findsOneWidget);
   });
 
   testWidgets('load more appends the next message page by cursor', (
@@ -149,6 +234,7 @@ Map<String, dynamic> _message(
   String senderType,
   String content, {
   String messageType = 'TEXT',
+  Map<String, dynamic>? structuredPayload,
 }) => {
   'id': id,
   'roomId': 'room-1',
@@ -156,7 +242,7 @@ Map<String, dynamic> _message(
   'senderType': senderType,
   'messageType': messageType,
   'content': content,
-  'structuredPayload': null,
+  'structuredPayload': structuredPayload,
   'commandId': null,
   'createdAt': '2026-07-14T00:00:00.000Z',
 };
@@ -176,6 +262,8 @@ class _FakeChatGateway implements ChatGateway {
   final Map<String, int> messageLoads = {};
   final List<Map<String, Object?>> messageRequests = [];
   final List<String> sentMessages = [];
+  final List<String> confirmedDraftIds = [];
+  final List<String> rejectedDraftIds = [];
   int createdSessions = 0;
 
   @override
@@ -239,5 +327,29 @@ class _FakeChatGateway implements ChatGateway {
           'aiStatus': 'UNCONFIGURED',
           'ai': {'status': 'UNCONFIGURED', 'code': 'AI_PROVIDER_UNCONFIGURED'},
         };
+  }
+
+  @override
+  Future<Map<String, dynamic>> confirmCommandDraft(
+    String draftId,
+    String idempotencyKey,
+  ) async {
+    confirmedDraftIds.add(draftId);
+    return {
+      'draft': {
+        'id': draftId,
+        'status': 'MATERIALIZED',
+        'commandId': 'command-$draftId',
+      },
+      'command': {'id': 'command-$draftId'},
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> rejectCommandDraft(String draftId) async {
+    rejectedDraftIds.add(draftId);
+    return {
+      'draft': {'id': draftId, 'status': 'REJECTED', 'commandId': null},
+    };
   }
 }
