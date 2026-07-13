@@ -1,83 +1,110 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
-  Inject,
-  NotFoundException,
+  Headers,
   Param,
+  Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
-import { createChatMessageSchema } from '@mousekeeper/contracts';
-import { chatMessages, rooms, type Database } from '@mousekeeper/database';
-import { and, asc, eq } from 'drizzle-orm';
+import {
+  chatMessagesQuerySchema,
+  createChatMessageSchema,
+  createChatSessionSchema,
+  updateChatSessionSchema,
+} from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';
 import type { AuthPrincipal } from '../auth/auth-principal';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
-import { DATABASE } from '../database/database.module';
-import { SyncService } from '../sync/sync.service';
-@Controller('v1/rooms/:roomId/chat')
+import { ChatService } from './chat.service';
+
+@Controller('v1')
 @UseGuards(FirebaseAuthGuard)
 export class ChatController {
-  constructor(
-    @Inject(DATABASE) private readonly db: Database,
-    private readonly sync: SyncService,
-  ) {}
-  private async owned(userId: string, roomId: string) {
-    const room = (
-      await this.db
-        .select()
-        .from(rooms)
-        .where(
-          and(
-            eq(rooms.id, roomId),
-            eq(rooms.userId, userId),
-            eq(rooms.status, 'ACTIVE'),
-          ),
-        )
-        .limit(1)
-    )[0];
-    if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
-  }
-  @Get() async list(
+  constructor(private readonly chat: ChatService) {}
+
+  @Get('rooms/:roomId/chat-sessions')
+  listSessions(
     @CurrentPrincipal() p: AuthPrincipal,
     @Param('roomId') roomId: string,
   ) {
-    await this.owned(p.userId, roomId);
-    return this.db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.roomId, roomId))
-      .orderBy(asc(chatMessages.createdAt))
-      .limit(200);
+    return this.chat.listSessions(p.userId, roomId);
   }
-  @Post() async create(
+
+  @Post('rooms/:roomId/chat-sessions')
+  createSession(
     @CurrentPrincipal() p: AuthPrincipal,
     @Param('roomId') roomId: string,
+    @Body(new ZodValidationPipe(createChatSessionSchema))
+    body: z.infer<typeof createChatSessionSchema>,
+  ) {
+    return this.chat.createSession(p.userId, roomId, body.title);
+  }
+
+  @Patch('chat-sessions/:sessionId')
+  updateSession(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(updateChatSessionSchema))
+    body: z.infer<typeof updateChatSessionSchema>,
+  ) {
+    return this.chat.updateSession(p.userId, sessionId, body.title!);
+  }
+
+  @Delete('chat-sessions/:sessionId')
+  deleteSession(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('sessionId') sessionId: string,
+  ) {
+    return this.chat.deleteSession(p.userId, sessionId);
+  }
+
+  @Get('chat-sessions/:sessionId/messages')
+  listMessages(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('sessionId') sessionId: string,
+    @Query(new ZodValidationPipe(chatMessagesQuerySchema))
+    query: z.infer<typeof chatMessagesQuerySchema>,
+  ) {
+    return this.chat.listMessages(
+      p.userId,
+      sessionId,
+      query.cursor,
+      query.limit,
+    );
+  }
+
+  @Post('chat-sessions/:sessionId/messages')
+  createMessage(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('sessionId') sessionId: string,
     @Body(new ZodValidationPipe(createChatMessageSchema))
     body: z.infer<typeof createChatMessageSchema>,
   ) {
-    await this.owned(p.userId, roomId);
-    const message = await this.db.transaction(async (tx) => {
-      const created = (
-        await tx
-          .insert(chatMessages)
-          .values({ roomId, senderType: 'USER', content: body.content })
-          .returning()
-      )[0]!;
-      await this.sync.append(tx, {
-        userId: p.userId,
-        deviceId: null,
-        roomId,
-        eventType: 'chat.message.created',
-        aggregateType: 'chat_message',
-        aggregateId: created.id,
-        payload: { messageId: created.id, senderType: created.senderType },
-      });
-      return created;
-    });
-    return { message, assistant: null, aiStatus: 'UNCONFIGURED' as const };
+    return this.chat.createMessage(p.userId, sessionId, body.content);
+  }
+
+  @Get('rooms/:roomId/chat')
+  listLegacyRoomMessages(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('roomId') roomId: string,
+  ) {
+    return this.chat.listLegacyRoomMessages(p.userId, roomId);
+  }
+
+  @Post('rooms/:roomId/chat')
+  createLegacyRoomMessage(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('roomId') roomId: string,
+    @Headers('idempotency-key') _unusedLegacyKey: string | undefined,
+    @Body(new ZodValidationPipe(createChatMessageSchema))
+    body: z.infer<typeof createChatMessageSchema>,
+  ) {
+    return this.chat.createLegacyRoomMessage(p.userId, roomId, body.content);
   }
 }

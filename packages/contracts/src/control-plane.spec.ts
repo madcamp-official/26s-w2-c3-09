@@ -15,6 +15,10 @@ import {
   deviceRevokedEventPayloadSchema,
   roomRemovedEventPayloadSchema,
   MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION,
+  chatMessagesQuerySchema,
+  commandDraftSummarySchema,
+  createChatSessionSchema,
+  updateChatSessionSchema,
 } from "./control-plane";
 
 declare function require(path: string): unknown;
@@ -391,6 +395,40 @@ describe("file transfer failure contract", () => {
       failFileTransferSchema.safeParse({
         failureCode: "ARBITRARY_PROVIDER_ERROR",
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat session contracts", () => {
+  it("validates session mutations and bounded message pagination", () => {
+    expect(
+      createChatSessionSchema.parse({ title: "  Inbox cleanup  " }),
+    ).toEqual({ title: "Inbox cleanup" });
+    expect(updateChatSessionSchema.safeParse({}).success).toBe(false);
+    expect(updateChatSessionSchema.parse({ title: "Reports" })).toEqual({
+      title: "Reports",
+    });
+    expect(chatMessagesQuerySchema.parse({ limit: "25" })).toEqual({
+      limit: 25,
+    });
+    expect(chatMessagesQuerySchema.safeParse({ limit: "101" }).success).toBe(
+      false,
+    );
+  });
+
+  it("validates command draft summaries without command arguments or secrets", () => {
+    const draft = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+      intent: "RENAME",
+      confirmationSummary: "Rename reports/old.pdf to final.pdf",
+      status: "DRAFT",
+      expiresAt: "2026-07-13T01:02:03.000Z",
+      commandId: null,
+    };
+
+    expect(commandDraftSummarySchema.parse(draft)).toEqual(draft);
+    expect(
+      commandDraftSummarySchema.safeParse({ ...draft, arguments: {} }).success,
     ).toBe(false);
   });
 });

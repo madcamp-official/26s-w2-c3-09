@@ -876,7 +876,7 @@ paths:
             { schema: { $ref: "#/components/schemas/UpdateCharacter" } }
       responses:
         "200": { description: Updated appearance and room theme preferences }
-  /v1/rooms/{roomId}/chat:
+  /v1/rooms/{roomId}/chat-sessions:
     parameters:
       - {
           in: path,
@@ -886,8 +886,82 @@ paths:
         }
     get:
       responses:
+        "200":
+          { description: Active chat sessions for the owned room, newest first }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateChatSession" } }
+      responses:
+        "201": { description: Chat session created }
+        "409":
+          {
+            description: CHAT_SESSION_LIMIT_REACHED with the existing active sessions,
+          }
+  /v1/chat-sessions/{sessionId}:
+    parameters:
+      - {
+          in: path,
+          name: sessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    patch:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/UpdateChatSession" } }
+      responses:
+        "200": { description: Chat session title updated }
+    delete:
+      responses:
+        "200": { description: Chat session soft-deleted }
+  /v1/chat-sessions/{sessionId}/messages:
+    parameters:
+      - {
+          in: path,
+          name: sessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      parameters:
+        - { in: query, name: cursor, schema: { type: string, format: uuid } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
+          }
+      responses:
+        "200": { description: Session messages after the optional cursor }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateChatMessage" } }
+      responses:
+        "201":
+          {
+            description: User message persisted; AI remains UNCONFIGURED without a provider,
+          }
+  /v1/rooms/{roomId}/chat:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      deprecated: true
+      responses:
         "200": { description: Up to 200 persisted room chat messages }
     post:
+      deprecated: true
       requestBody:
         required: true
         content:
@@ -1588,12 +1662,110 @@ components:
             accessory: { type: string, enum: [none, scarf] }
             animationsEnabled: { type: boolean }
         roomTheme: { type: [string, "null"], enum: [warm, forest, null] }
+    ChatSession:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          title,
+          summary,
+          status,
+          createdAt,
+          updatedAt,
+          deletedAt,
+          messagePreview,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        summary: { type: [string, "null"] }
+        status: { type: string, enum: [ACTIVE, DELETED] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: [string, "null"], format: date-time }
+        messagePreview: { type: string, maxLength: 120 }
+    CreateChatSession:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+    UpdateChatSession:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
     CreateChatMessage:
       type: object
       additionalProperties: false
       required: [content]
       properties:
         content: { type: string, minLength: 1, maxLength: 2000 }
+    ChatMessage:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          sessionId,
+          senderType,
+          messageType,
+          content,
+          structuredPayload,
+          commandId,
+          createdAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        sessionId: { type: [string, "null"], format: uuid }
+        senderType: { type: string, enum: [USER, ASSISTANT, SYSTEM] }
+        messageType:
+          {
+            type: string,
+            enum: [TEXT, COMMAND_DRAFT, RULE_DRAFT, EXECUTION_RESULT],
+          }
+        content: { type: string, minLength: 1 }
+        structuredPayload: { type: [object, "null"] }
+        commandId: { type: [string, "null"], format: uuid }
+        createdAt: { type: string, format: date-time }
+    CommandDraftSummary:
+      type: object
+      additionalProperties: false
+      required: [id, intent, confirmationSummary, status, expiresAt, commandId]
+      properties:
+        id: { type: string, format: uuid }
+        intent:
+          {
+            type: string,
+            enum:
+              [
+                SCAN,
+                CREATE_RULE,
+                ANALYZE,
+                README,
+                RENAME,
+                MOVE,
+                ORGANIZE,
+                CREATE,
+                TRASH,
+                FIND,
+                DOWNLOAD,
+                UPLOAD,
+              ],
+          }
+        confirmationSummary: { type: string, minLength: 1, maxLength: 4000 }
+        status:
+          {
+            type: string,
+            enum: [DRAFT, APPROVED, REJECTED, EXPIRED, MATERIALIZED],
+          }
+        expiresAt: { type: string, format: date-time }
+        commandId: { type: [string, "null"], format: uuid }
     EventEnvelope:
       type: object
       additionalProperties: false

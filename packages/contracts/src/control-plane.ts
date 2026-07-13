@@ -646,9 +646,54 @@ export const updateCharacterSchema = z
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, "empty update");
+
+export const chatSessionStatusSchema = z.enum(["ACTIVE", "DELETED"]);
+export const chatMessageSenderSchema = z.enum(["USER", "ASSISTANT", "SYSTEM"]);
+export const chatMessageTypeSchema = z.enum([
+  "TEXT",
+  "COMMAND_DRAFT",
+  "RULE_DRAFT",
+  "EXECUTION_RESULT",
+]);
+export const commandDraftStatusSchema = z.enum([
+  "DRAFT",
+  "APPROVED",
+  "REJECTED",
+  "EXPIRED",
+  "MATERIALIZED",
+]);
+export const createChatSessionSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict();
+export const updateChatSessionSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, "empty update");
 export const createChatMessageSchema = z
   .object({ content: z.string().trim().min(1).max(2000) })
   .strict();
+export const chatMessagesQuerySchema = z
+  .object({
+    cursor: uuidSchema.optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .strict();
+export const commandDraftSummarySchema = z
+  .object({
+    id: uuidSchema,
+    intent: commandIntentSchema,
+    confirmationSummary: z.string().min(1).max(4000),
+    status: commandDraftStatusSchema,
+    expiresAt: z.iso.datetime(),
+    commandId: uuidSchema.nullable(),
+  })
+  .strict();
+export const confirmCommandDraftSchema = z.object({}).strict();
+export const rejectCommandDraftSchema = z.object({}).strict();
 export const updateSmartCachePolicySchema = z
   .object({
     enabled: z.boolean(),
