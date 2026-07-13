@@ -59,6 +59,49 @@ void main() {
     expect(find.text('확장자 [.pdf] · 버전 1'), findsOneWidget);
   });
 
+  testWidgets('creating an expanded DSL rule can use size and trash action', (
+    tester,
+  ) async {
+    final gateway = _FakeRuleGateway([]);
+
+    await _pumpRules(tester, gateway);
+    await tester.tap(find.text('규칙 추가'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('rule-name-field')),
+      '작은 파일 휴지통',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('rule-condition-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('파일 크기 이하').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('rule-condition-value-field')),
+      '1048576',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('rule-action-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('휴지통').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('rule-destination-field')), findsNothing);
+    await tester.tap(find.text('저장'));
+    await tester.pumpAndSettle();
+
+    expect(gateway.listLoads, 1);
+    expect(gateway.createBodies.single['definition'], {
+      'match': 'ALL',
+      'conditions': [
+        {'field': 'sizeBytes', 'operator': 'LTE', 'value': 1048576},
+      ],
+      'action': {'type': 'TRASH'},
+    });
+    expect(find.text('작은 파일 휴지통'), findsOneWidget);
+    expect(find.text('크기 LTE 1048576 bytes · 버전 1'), findsOneWidget);
+  });
+
   test('upsertRule replaces existing rule and keeps priority order', () {
     final result = upsertRule([
       _rule('later', 'Later', priority: 100, createdAt: '2026-07-14T00:02:00Z'),
@@ -69,6 +112,41 @@ void main() {
     expect(result.first['name'], 'Updated');
     expect(result.first['version'], 2);
   });
+
+  test(
+    'ruleConditionBody and ruleActionBody build expanded contract payloads',
+    () {
+      expect(
+        ruleConditionBody(
+          conditionId: 'fileKind',
+          rawValue: '',
+          fileKindValue: 'DIRECTORY',
+        ),
+        {'field': 'fileKind', 'operator': 'EQ', 'value': 'DIRECTORY'},
+      );
+      expect(
+        ruleConditionBody(
+          conditionId: 'createdAgeDaysGt',
+          rawValue: '7',
+          fileKindValue: 'FILE',
+        ),
+        {'field': 'createdAgeDays', 'operator': 'GT', 'value': 7},
+      );
+      expect(
+        ruleConditionBody(
+          conditionId: 'sizeBytesGte',
+          rawValue: 'not-a-number',
+          fileKindValue: 'FILE',
+        ),
+        isNull,
+      );
+      expect(
+        ruleActionBody(actionType: 'CREATE_DIR', rawPath: 'Archive/Reports'),
+        {'type': 'CREATE_DIR', 'relativePath': 'Archive/Reports'},
+      );
+      expect(ruleActionBody(actionType: 'MOVE', rawPath: ''), isNull);
+    },
+  );
 }
 
 Future<void> _pumpRules(WidgetTester tester, _FakeRuleGateway gateway) async {
@@ -133,14 +211,7 @@ class _FakeRuleGateway implements RuleGateway {
   ) async {
     createBodies.add(Map<String, dynamic>.from(body));
     final created = {
-      ..._rule(
-        'created-${createBodies.length}',
-        body['name'] as String,
-        extension:
-            (((body['definition'] as Map)['conditions'] as List).first
-                    as Map)['value'][0]
-                as String,
-      ),
+      ..._rule('created-${createBodies.length}', body['name'] as String),
       ...body,
     };
     rules.add(created);

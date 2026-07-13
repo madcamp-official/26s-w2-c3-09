@@ -529,3 +529,10 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - action은 기존 `MOVE`, `QUARANTINE`을 유지하면서 `TRASH`, `CREATE_DIR`을 추가했다.
 - `relativePath` 조건과 `CREATE_DIR.relativePath`는 기존 `relativePathSchema`를 사용해 절대 경로, `..`, 예약명, unsafe segment를 계약 단계에서 거절한다.
 - 이 단계는 서버/API/AI draft가 받을 수 있는 안전 계약 확장이다. 실제 Desktop rule evaluator의 전체 실행 연결은 별도 A-side integration 대상이다.
+
+## 2026-07-14 — 모바일 확장 Rule DSL 폼
+
+- 모바일 규칙 생성/수정 dialog에서 `extension`, legacy `ageDays`뿐 아니라 `modifiedAgeDays`, `createdAgeDays`, `sizeBytes`, `relativePath`, `fileKind`, `name` 조건을 선택할 수 있게 했다.
+- action 선택도 `MOVE`, `TRASH`, `CREATE_DIR`, legacy `QUARANTINE`으로 확장했다. `TRASH`/`QUARANTINE`은 목적지 입력을 숨기고, `MOVE`/`CREATE_DIR`만 상대 경로를 요구한다.
+- 모바일은 직접 JSON을 흩뿌리지 않고 `ruleConditionBody`, `ruleActionBody`를 통해 서버 계약 형태로 payload를 만든다.
+- 확장 DSL 폼은 test-scope fake gateway로 `sizeBytes LTE + TRASH`, `fileKind`, `createdAgeDays`, `CREATE_DIR` payload를 검증했다.

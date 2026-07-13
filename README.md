@@ -123,7 +123,7 @@ Tauri Desktop
 - PostgreSQL/Drizzle 17개 migration과 Redis/Valkey local compose
 - pairing, device, room, heartbeat/presence, command/proposal/decision/execution API
 - Socket.IO `/realtime`, idempotency, audit, cursor replay
-- Flutter home/room/rule partial-update/proposal/result/chat session/files/smart-cache UI와 Drift cache/outbox
+- Flutter home/room/rule partial-update·expanded DSL form/proposal/result/chat session/files/smart-cache UI와 Drift cache/outbox
 - P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
 - FCM token API·outbox·worker 전송과 모바일 foreground/background 수신 경로
 - worker, AWS EC2 systemd/Nginx 구성, Render blueprint, 실제 backup/restore drill 및 안전 문서

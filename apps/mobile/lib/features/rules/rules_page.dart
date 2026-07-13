@@ -80,6 +80,208 @@ String ruleMutationErrorMessage(Object error) {
   return '규칙 작업을 완료하지 못했습니다.';
 }
 
+class RuleConditionOption {
+  const RuleConditionOption({
+    required this.id,
+    required this.label,
+    required this.field,
+    required this.operator,
+    required this.valueLabel,
+    this.numeric = false,
+    this.fileKind = false,
+  });
+
+  final String id;
+  final String label;
+  final String field;
+  final String operator;
+  final String valueLabel;
+  final bool numeric;
+  final bool fileKind;
+}
+
+const ruleConditionOptions = [
+  RuleConditionOption(
+    id: 'extension',
+    label: '확장자',
+    field: 'extension',
+    operator: 'IN',
+    valueLabel: '확장자 (.pdf, .jpg)',
+  ),
+  RuleConditionOption(
+    id: 'ageDays',
+    label: '지난 일수(기존)',
+    field: 'ageDays',
+    operator: 'GTE',
+    valueLabel: '며칠 이상 지난 파일',
+    numeric: true,
+  ),
+  RuleConditionOption(
+    id: 'modifiedAgeDaysGte',
+    label: '수정일 기준 이상',
+    field: 'modifiedAgeDays',
+    operator: 'GTE',
+    valueLabel: '수정 후 며칠 이상',
+    numeric: true,
+  ),
+  RuleConditionOption(
+    id: 'modifiedAgeDaysGt',
+    label: '수정일 기준 초과',
+    field: 'modifiedAgeDays',
+    operator: 'GT',
+    valueLabel: '수정 후 며칠 초과',
+    numeric: true,
+  ),
+  RuleConditionOption(
+    id: 'createdAgeDaysGte',
+    label: '생성일 기준 이상',
+    field: 'createdAgeDays',
+    operator: 'GTE',
+    valueLabel: '생성 후 며칠 이상',
+    numeric: true,
+  ),
+  RuleConditionOption(
+    id: 'createdAgeDaysGt',
+    label: '생성일 기준 초과',
+    field: 'createdAgeDays',
+    operator: 'GT',
+    valueLabel: '생성 후 며칠 초과',
+    numeric: true,
+  ),
+  RuleConditionOption(
+    id: 'sizeBytesGte',
+    label: '파일 크기 이상',
+    field: 'sizeBytes',
+    operator: 'GTE',
+    valueLabel: '크기 byte 이상',
+    numeric: true,
+  ),
+  RuleConditionOption(
+    id: 'sizeBytesLte',
+    label: '파일 크기 이하',
+    field: 'sizeBytes',
+    operator: 'LTE',
+    valueLabel: '크기 byte 이하',
+    numeric: true,
+  ),
+  RuleConditionOption(
+    id: 'relativePathStartsWith',
+    label: '상대 경로 시작',
+    field: 'relativePath',
+    operator: 'STARTS_WITH',
+    valueLabel: '상대 경로 prefix',
+  ),
+  RuleConditionOption(
+    id: 'fileKind',
+    label: '파일 종류',
+    field: 'fileKind',
+    operator: 'EQ',
+    valueLabel: '파일 또는 폴더',
+    fileKind: true,
+  ),
+  RuleConditionOption(
+    id: 'nameContains',
+    label: '이름 포함',
+    field: 'name',
+    operator: 'CONTAINS',
+    valueLabel: '포함할 이름',
+  ),
+  RuleConditionOption(
+    id: 'nameStartsWith',
+    label: '이름 시작',
+    field: 'name',
+    operator: 'STARTS_WITH',
+    valueLabel: '시작 문자열',
+  ),
+  RuleConditionOption(
+    id: 'nameEndsWith',
+    label: '이름 끝',
+    field: 'name',
+    operator: 'ENDS_WITH',
+    valueLabel: '끝 문자열',
+  ),
+];
+
+const ruleActionLabels = {
+  'MOVE': '이동',
+  'TRASH': '휴지통',
+  'CREATE_DIR': '폴더 만들기',
+  'QUARANTINE': '격리(기존)',
+};
+
+RuleConditionOption ruleConditionOption(String id) =>
+    ruleConditionOptions.firstWhere(
+      (option) => option.id == id,
+      orElse: () => ruleConditionOptions.first,
+    );
+
+String ruleConditionIdFrom(Map<String, dynamic> condition) {
+  final field = condition['field'];
+  final operator = condition['operator'];
+  return ruleConditionOptions
+      .firstWhere(
+        (option) => option.field == field && option.operator == operator,
+        orElse: () => ruleConditionOptions.first,
+      )
+      .id;
+}
+
+Map<String, dynamic>? ruleConditionBody({
+  required String conditionId,
+  required String rawValue,
+  required String fileKindValue,
+}) {
+  final option = ruleConditionOption(conditionId);
+  if (option.fileKind) {
+    return {
+      'field': option.field,
+      'operator': option.operator,
+      'value': fileKindValue,
+    };
+  }
+  final trimmed = rawValue.trim();
+  if (trimmed.isEmpty) return null;
+  if (option.id == 'extension') {
+    final values = trimmed
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    if (values.isEmpty) return null;
+    return {
+      'field': option.field,
+      'operator': option.operator,
+      'value': values,
+    };
+  }
+  if (option.numeric) {
+    final value = int.tryParse(trimmed);
+    if (value == null) return null;
+    return {'field': option.field, 'operator': option.operator, 'value': value};
+  }
+  return {'field': option.field, 'operator': option.operator, 'value': trimmed};
+}
+
+Map<String, dynamic>? ruleActionBody({
+  required String actionType,
+  required String rawPath,
+}) {
+  final trimmed = rawPath.trim();
+  return switch (actionType) {
+    'MOVE' when trimmed.isNotEmpty => {
+      'type': 'MOVE',
+      'destinationTemplate': trimmed,
+    },
+    'CREATE_DIR' when trimmed.isNotEmpty => {
+      'type': 'CREATE_DIR',
+      'relativePath': trimmed,
+    },
+    'TRASH' => {'type': 'TRASH'},
+    'QUARANTINE' => {'type': 'QUARANTINE'},
+    _ => null,
+  };
+}
+
 class RulesPage extends ConsumerStatefulWidget {
   const RulesPage({super.key, required this.roomId, this.gateway});
 
@@ -174,22 +376,32 @@ class _RulesPageState extends ConsumerState<RulesPage> {
     final action = definition['action'] is Map
         ? Map<String, dynamic>.from(definition['action'] as Map)
         : <String, dynamic>{};
-    final initialCondition = firstCondition['field'] == 'ageDays'
-        ? 'ageDays'
-        : 'extension';
+    final initialCondition = ruleConditionIdFrom(firstCondition);
     final initialValue = firstCondition['value'];
+    final initialActionType = ruleActionLabels.containsKey(action['type'])
+        ? action['type'] as String
+        : 'MOVE';
     final name = TextEditingController(
       text: existing?['name'] as String? ?? '',
     );
     final conditionValue = TextEditingController(
       text: initialValue is List
           ? initialValue.join(', ')
+          : firstCondition['field'] == 'fileKind'
+          ? ''
           : initialValue?.toString() ?? '',
     );
     final destination = TextEditingController(
-      text: action['destinationTemplate'] as String? ?? 'Archive',
+      text:
+          action['destinationTemplate'] as String? ??
+          action['relativePath'] as String? ??
+          'Archive',
     );
     var condition = initialCondition;
+    var fileKindValue = firstCondition['value'] == 'DIRECTORY'
+        ? 'DIRECTORY'
+        : 'FILE';
+    var actionType = initialActionType;
     String? formError;
     final saved = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -216,35 +428,77 @@ class _RulesPageState extends ConsumerState<RulesPage> {
                 ],
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
+                  key: const ValueKey('rule-condition-field'),
                   initialValue: condition,
                   decoration: const InputDecoration(labelText: '조건'),
-                  items: const [
-                    DropdownMenuItem(value: 'extension', child: Text('확장자')),
-                    DropdownMenuItem(value: 'ageDays', child: Text('지난 일수')),
+                  items: [
+                    for (final option in ruleConditionOptions)
+                      DropdownMenuItem(
+                        value: option.id,
+                        child: Text(option.label),
+                      ),
                   ],
                   onChanged: (value) {
                     if (value != null) setDialogState(() => condition = value);
                   },
                 ),
                 const SizedBox(height: 12),
-                TextField(
-                  key: const ValueKey('rule-condition-value-field'),
-                  controller: conditionValue,
-                  keyboardType: condition == 'ageDays'
-                      ? TextInputType.number
-                      : TextInputType.text,
-                  decoration: InputDecoration(
-                    labelText: condition == 'ageDays'
-                        ? '며칠 이상 지난 파일'
-                        : '확장자 (.pdf, .jpg)',
+                if (ruleConditionOption(condition).fileKind)
+                  DropdownButtonFormField<String>(
+                    key: const ValueKey('rule-file-kind-field'),
+                    initialValue: fileKindValue,
+                    decoration: const InputDecoration(labelText: '파일 종류'),
+                    items: const [
+                      DropdownMenuItem(value: 'FILE', child: Text('파일')),
+                      DropdownMenuItem(value: 'DIRECTORY', child: Text('폴더')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setDialogState(() => fileKindValue = value);
+                      }
+                    },
+                  )
+                else
+                  TextField(
+                    key: const ValueKey('rule-condition-value-field'),
+                    controller: conditionValue,
+                    keyboardType: ruleConditionOption(condition).numeric
+                        ? TextInputType.number
+                        : TextInputType.text,
+                    decoration: InputDecoration(
+                      labelText: ruleConditionOption(condition).valueLabel,
+                    ),
                   ),
-                ),
                 const SizedBox(height: 12),
-                TextField(
-                  key: const ValueKey('rule-destination-field'),
-                  controller: destination,
-                  decoration: const InputDecoration(labelText: '이동할 상대 폴더'),
+                DropdownButtonFormField<String>(
+                  key: const ValueKey('rule-action-field'),
+                  initialValue: actionType,
+                  decoration: const InputDecoration(labelText: '동작'),
+                  items: [
+                    for (final entry in ruleActionLabels.entries)
+                      DropdownMenuItem(
+                        value: entry.key,
+                        child: Text(entry.value),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      setDialogState(() => actionType = value);
+                    }
+                  },
                 ),
+                if (actionType == 'MOVE' || actionType == 'CREATE_DIR') ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const ValueKey('rule-destination-field'),
+                    controller: destination,
+                    decoration: InputDecoration(
+                      labelText: actionType == 'CREATE_DIR'
+                          ? '만들 상대 폴더'
+                          : '이동할 상대 폴더',
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -258,31 +512,27 @@ class _RulesPageState extends ConsumerState<RulesPage> {
                 final rawName = name.text.trim();
                 final rawDestination = destination.text.trim();
                 final rawValue = conditionValue.text.trim();
-                if (rawName.isEmpty ||
-                    rawDestination.isEmpty ||
-                    rawValue.isEmpty) {
+                if (rawName.isEmpty) {
                   setDialogState(() {
-                    formError = '규칙 이름, 조건, 목적지를 모두 입력해 주세요.';
+                    formError = '규칙 이름을 입력해 주세요.';
                   });
                   return;
                 }
-                final conditionBody = condition == 'ageDays'
-                    ? <String, dynamic>{
-                        'field': 'ageDays',
-                        'operator': 'GTE',
-                        'value': int.tryParse(rawValue),
-                      }
-                    : <String, dynamic>{
-                        'field': 'extension',
-                        'operator': 'IN',
-                        'value': rawValue
-                            .split(',')
-                            .map((value) => value.trim().toLowerCase())
-                            .where((value) => value.isNotEmpty)
-                            .toList(),
-                      };
-                if (conditionBody['value'] == null) {
+                final conditionBody = ruleConditionBody(
+                  conditionId: condition,
+                  rawValue: rawValue,
+                  fileKindValue: fileKindValue,
+                );
+                final actionBody = ruleActionBody(
+                  actionType: actionType,
+                  rawPath: rawDestination,
+                );
+                if (conditionBody == null) {
                   setDialogState(() => formError = '조건 값을 확인해 주세요.');
+                  return;
+                }
+                if (actionBody == null) {
+                  setDialogState(() => formError = '동작과 상대 경로를 확인해 주세요.');
                   return;
                 }
                 final body = <String, dynamic>{
@@ -290,10 +540,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
                   'definition': {
                     'match': 'ALL',
                     'conditions': [conditionBody],
-                    'action': {
-                      'type': 'MOVE',
-                      'destinationTemplate': rawDestination,
-                    },
+                    'action': actionBody,
                   },
                   'priority': existing?['priority'] as int? ?? 100,
                   'enabled': existing?['enabled'] as bool? ?? true,
@@ -350,7 +597,23 @@ class _RulesPageState extends ConsumerState<RulesPage> {
     if (condition['field'] == 'ageDays') {
       return '${condition['value']}일 이상 지난 파일';
     }
-    return '파일 이름 조건';
+    if (condition['field'] == 'modifiedAgeDays') {
+      return '수정 후 ${condition['value']}일 ${condition['operator']}';
+    }
+    if (condition['field'] == 'createdAgeDays') {
+      return '생성 후 ${condition['value']}일 ${condition['operator']}';
+    }
+    if (condition['field'] == 'sizeBytes') {
+      return '크기 ${condition['operator']} ${condition['value']} bytes';
+    }
+    if (condition['field'] == 'relativePath') {
+      return '경로가 ${condition['value']}로 시작';
+    }
+    if (condition['field'] == 'fileKind') return '종류 ${condition['value']}';
+    if (condition['field'] == 'name') {
+      return '이름 ${condition['operator']} ${condition['value']}';
+    }
+    return '구조화된 규칙';
   }
 
   @override
