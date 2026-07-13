@@ -102,6 +102,81 @@ void main() {
     expect(find.text('크기 LTE 1048576 bytes · 버전 1'), findsOneWidget);
   });
 
+  testWidgets('AI rule draft UNCONFIGURED does not create a fake rule', (
+    tester,
+  ) async {
+    final gateway = _FakeRuleGateway([]);
+    gateway.nextDraftResult = {
+      'status': 'UNCONFIGURED',
+      'code': 'AI_PROVIDER_UNCONFIGURED',
+    };
+
+    await _pumpRules(tester, gateway);
+    await tester.enterText(
+      find.byKey(const ValueKey('rule-draft-instruction-field')),
+      'Move old PDFs',
+    );
+    await tester.tap(find.byKey(const ValueKey('rule-draft-submit')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.createDraftInstructions, ['Move old PDFs']);
+    expect(gateway.listLoads, 1);
+    expect(gateway.createBodies, isEmpty);
+    expect(
+      find.text('AI rule draft provider is UNCONFIGURED.'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('rule-draft-confirm')), findsNothing);
+  });
+
+  testWidgets('READY AI rule draft confirms into a rule without full reload', (
+    tester,
+  ) async {
+    final gateway = _FakeRuleGateway([]);
+    gateway.nextDraftResult = {
+      'status': 'READY',
+      'kind': 'RULE_DRAFT',
+      'draft': {
+        'id': 'draft-1',
+        'roomId': 'room-1',
+        'name': 'Old PDFs',
+        'definition': {
+          'match': 'ALL',
+          'conditions': [
+            {
+              'field': 'extension',
+              'operator': 'IN',
+              'value': ['.pdf'],
+            },
+          ],
+          'action': {'type': 'MOVE', 'destinationTemplate': 'Archive'},
+        },
+        'explanation': 'Move old PDFs after explicit approval.',
+        'ambiguities': [],
+        'status': 'DRAFT',
+        'expiresAt': '2026-07-14T00:00:00.000Z',
+        'ruleId': null,
+      },
+    };
+
+    await _pumpRules(tester, gateway);
+    await tester.enterText(
+      find.byKey(const ValueKey('rule-draft-instruction-field')),
+      'Move old PDFs',
+    );
+    await tester.tap(find.byKey(const ValueKey('rule-draft-submit')));
+    await tester.pumpAndSettle();
+    expect(find.text('Old PDFs'), findsOneWidget);
+    expect(find.text('Move old PDFs after explicit approval.'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('rule-draft-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.confirmedDraftIds, ['draft-1']);
+    expect(gateway.listLoads, 1);
+    expect(find.text('확장자 [.pdf] · 버전 1'), findsOneWidget);
+  });
+
   test('upsertRule replaces existing rule and keeps priority order', () {
     final result = upsertRule([
       _rule('later', 'Later', priority: 100, createdAt: '2026-07-14T00:02:00Z'),
@@ -196,6 +271,13 @@ class _FakeRuleGateway implements RuleGateway {
   final List<Map<String, dynamic>> rules;
   final List<Map<String, dynamic>> createBodies = [];
   final List<Map<String, dynamic>> updateBodies = [];
+  final List<String> createDraftInstructions = [];
+  final List<String> confirmedDraftIds = [];
+  final List<String> rejectedDraftIds = [];
+  Map<String, dynamic> nextDraftResult = {
+    'status': 'UNCONFIGURED',
+    'code': 'AI_PROVIDER_UNCONFIGURED',
+  };
   int listLoads = 0;
 
   @override
@@ -234,5 +316,47 @@ class _FakeRuleGateway implements RuleGateway {
     };
     rules[index] = updated;
     return updated;
+  }
+
+  @override
+  Future<Map<String, dynamic>> createRuleDraft(
+    String roomId,
+    String instruction,
+  ) async {
+    createDraftInstructions.add(instruction);
+    return Map<String, dynamic>.from(nextDraftResult);
+  }
+
+  @override
+  Future<Map<String, dynamic>> confirmRuleDraft(
+    String draftId,
+    String idempotencyKey,
+  ) async {
+    confirmedDraftIds.add(draftId);
+    final draft = Map<String, dynamic>.from(nextDraftResult['draft'] as Map);
+    final rule = {
+      ..._rule('rule-from-$draftId', draft['name'] as String),
+      'definition': draft['definition'],
+      'priority': 100,
+      'enabled': true,
+      'version': 1,
+    };
+    rules.add(rule);
+    return {
+      'draft': {...draft, 'status': 'MATERIALIZED', 'ruleId': rule['id']},
+      'rule': rule,
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> rejectRuleDraft(String draftId) async {
+    rejectedDraftIds.add(draftId);
+    final draftRaw = nextDraftResult['draft'];
+    final draft = draftRaw is Map
+        ? Map<String, dynamic>.from(draftRaw)
+        : <String, dynamic>{'id': draftId};
+    return {
+      'draft': {...draft, 'status': 'REJECTED', 'ruleId': null},
+    };
   }
 }

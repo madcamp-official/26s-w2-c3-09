@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
 
@@ -15,6 +16,15 @@ abstract interface class RuleGateway {
     String ruleId,
     Map<String, dynamic> body,
   );
+  Future<Map<String, dynamic>> createRuleDraft(
+    String roomId,
+    String instruction,
+  );
+  Future<Map<String, dynamic>> confirmRuleDraft(
+    String draftId,
+    String idempotencyKey,
+  );
+  Future<Map<String, dynamic>> rejectRuleDraft(String draftId);
 }
 
 class ApiRuleGateway implements RuleGateway {
@@ -37,6 +47,26 @@ class ApiRuleGateway implements RuleGateway {
     String ruleId,
     Map<String, dynamic> body,
   ) => _api.patch('/v1/rules/$ruleId', body);
+
+  @override
+  Future<Map<String, dynamic>> createRuleDraft(
+    String roomId,
+    String instruction,
+  ) => _api.post('/v1/rooms/$roomId/rule-drafts', {'instruction': instruction});
+
+  @override
+  Future<Map<String, dynamic>> confirmRuleDraft(
+    String draftId,
+    String idempotencyKey,
+  ) => _api.post(
+    '/v1/rule-drafts/$draftId/confirm',
+    const {},
+    idempotencyKey: idempotencyKey,
+  );
+
+  @override
+  Future<Map<String, dynamic>> rejectRuleDraft(String draftId) =>
+      _api.post('/v1/rule-drafts/$draftId/reject', const {});
 }
 
 List<Map<String, dynamic>> upsertRule(
@@ -294,10 +324,13 @@ class RulesPage extends ConsumerStatefulWidget {
 
 class _RulesPageState extends ConsumerState<RulesPage> {
   List<Map<String, dynamic>> _rules = const [];
+  Map<String, dynamic>? _pendingDraft;
   Object? _error;
   bool _loading = true;
   bool _refreshing = false;
+  bool _drafting = false;
   final Set<String> _updatingRuleIds = {};
+  final TextEditingController _draftInstruction = TextEditingController();
   bool _disposed = false;
   int _loadVersion = 0;
 
@@ -314,6 +347,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
   void dispose() {
     _disposed = true;
     _loadVersion++;
+    _draftInstruction.dispose();
     super.dispose();
   }
 
@@ -575,6 +609,80 @@ class _RulesPageState extends ConsumerState<RulesPage> {
     }
   }
 
+  Future<void> _createRuleDraft() async {
+    final instruction = _draftInstruction.text.trim();
+    if (instruction.isEmpty || _drafting) return;
+    setState(() => _drafting = true);
+    try {
+      final result = await _gateway.createRuleDraft(widget.roomId, instruction);
+      if (_disposed) return;
+      final status = result['status'];
+      if (status == 'UNCONFIGURED') {
+        _showSnack('AI rule draft provider is UNCONFIGURED.');
+        return;
+      }
+      if (status == 'INVALID') {
+        _showSnack('AI rule draft was rejected by schema validation.');
+        return;
+      }
+      final draft = result['draft'];
+      if (status == 'READY' && draft is Map) {
+        setState(() {
+          _pendingDraft = Map<String, dynamic>.from(draft);
+          _draftInstruction.clear();
+        });
+        return;
+      }
+      _showSnack('Rule draft response was not recognized.');
+    } catch (error) {
+      _showSnack('Rule draft failed: ${ruleMutationErrorMessage(error)}');
+    } finally {
+      if (!_disposed) setState(() => _drafting = false);
+    }
+  }
+
+  Future<void> _confirmRuleDraft() async {
+    final draft = _pendingDraft;
+    final draftId = draft?['id'] as String?;
+    if (draftId == null || _drafting) return;
+    setState(() => _drafting = true);
+    try {
+      final result = await _gateway.confirmRuleDraft(
+        draftId,
+        const Uuid().v4(),
+      );
+      final rule = result['rule'];
+      if (!_disposed && rule is Map) {
+        setState(() {
+          _rules = upsertRule(_rules, Map<String, dynamic>.from(rule));
+          _pendingDraft = null;
+        });
+      }
+    } catch (error) {
+      _showSnack(
+        'Rule draft confirmation failed: ${ruleMutationErrorMessage(error)}',
+      );
+    } finally {
+      if (!_disposed) setState(() => _drafting = false);
+    }
+  }
+
+  Future<void> _rejectRuleDraft() async {
+    final draftId = _pendingDraft?['id'] as String?;
+    if (draftId == null || _drafting) return;
+    setState(() => _drafting = true);
+    try {
+      await _gateway.rejectRuleDraft(draftId);
+      if (!_disposed) setState(() => _pendingDraft = null);
+    } catch (error) {
+      _showSnack(
+        'Rule draft rejection failed: ${ruleMutationErrorMessage(error)}',
+      );
+    } finally {
+      if (!_disposed) setState(() => _drafting = false);
+    }
+  }
+
   bool _stale(int version) => _disposed || version != _loadVersion;
 
   void _showSnack(String message) {
@@ -667,9 +775,11 @@ class _RulesPageState extends ConsumerState<RulesPage> {
       return RefreshIndicator(
         onRefresh: () => _loadRules(manual: true),
         child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
           physics: const AlwaysScrollableScrollPhysics(),
-          children: const [
-            SizedBox(height: 240),
+          children: [
+            _draftComposer(),
+            const SizedBox(height: 160),
             Center(child: Text('등록된 규칙이 없습니다.')),
           ],
         ),
@@ -679,9 +789,15 @@ class _RulesPageState extends ConsumerState<RulesPage> {
       onRefresh: () => _loadRules(manual: true),
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-        itemCount: _rules.length,
+        itemCount: _rules.length + 1,
         itemBuilder: (context, index) {
-          final rule = _rules[index];
+          if (index == 0) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _draftComposer(),
+            );
+          }
+          final rule = _rules[index - 1];
           final ruleId = rule['id'] as String?;
           final updating = ruleId != null && _updatingRuleIds.contains(ruleId);
           return Card(
@@ -700,6 +816,74 @@ class _RulesPageState extends ConsumerState<RulesPage> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _draftComposer() {
+    final draft = _pendingDraft;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Natural language rule draft',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              key: const ValueKey('rule-draft-instruction-field'),
+              controller: _draftInstruction,
+              minLines: 1,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Example: move PDFs older than 30 days to Archive',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                key: const ValueKey('rule-draft-submit'),
+                onPressed: _drafting ? null : _createRuleDraft,
+                icon: _drafting
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.auto_awesome),
+                label: const Text('Draft with AI'),
+              ),
+            ),
+            if (draft != null) ...[
+              const Divider(height: 28),
+              Text(
+                draft['name'] as String? ?? 'Rule draft',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              Text(draft['explanation'] as String? ?? ''),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  FilledButton(
+                    key: const ValueKey('rule-draft-confirm'),
+                    onPressed: _drafting ? null : _confirmRuleDraft,
+                    child: const Text('Confirm'),
+                  ),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    key: const ValueKey('rule-draft-reject'),
+                    onPressed: _drafting ? null : _rejectRuleDraft,
+                    child: const Text('Reject'),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
