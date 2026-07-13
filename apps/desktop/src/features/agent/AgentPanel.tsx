@@ -46,7 +46,6 @@ export function AgentPanel() {
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
-  const [replayMotion, setReplayMotion] = useState<HousemouseMotion | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
