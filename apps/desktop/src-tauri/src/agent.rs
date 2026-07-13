@@ -153,6 +153,43 @@ pub enum AgentFileBrowseFailureCode {
     OutsideManagedRoot,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentFileTransfer {
+    pub transfer_id: String,
+    pub room_id: String,
+    pub source_relative_path: String,
+    pub status: String,
+    pub expires_at: String,
+    pub size_bytes: Option<u64>,
+    pub sha256: Option<String>,
+    pub failure_code: Option<AgentFileTransferFailureCode>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileTransferSourceVersion {
+    pub file_id: String,
+    pub size_bytes: u64,
+    pub modified_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentFileTransferUploadTarget {
+    pub transfer_id: String,
+    pub upload_url: String,
+    pub expires_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AgentFileTransferFailureCode {
+    SourceNotFound,
+    SourceChanged,
+    OutsideManagedRoot,
+    SizeLimitExceeded,
+    ChecksumMismatch,
+}
+
 /// Connection parameters for the realtime Socket.IO client. Intentionally not `Serialize`: the
 /// device token must never leave the process through a Tauri command or a serialized log line.
 pub struct RealtimeCredentials {
@@ -800,6 +837,118 @@ impl AgentRuntime {
         response
     }
 
+    pub async fn pending_file_transfers(&self) -> Result<Vec<AgentFileTransfer>, AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<FileTransferResponse>>(
+                self.http
+                    .get(format!(
+                        "{base_url}/v1/devices/{}/file-transfers/pending",
+                        credential.device_id
+                    ))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(validate_file_transfers);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn request_file_transfer_upload_target(
+        &self,
+        transfer_id: String,
+        source_version: AgentFileTransferSourceVersion,
+    ) -> Result<AgentFileTransferUploadTarget, AgentError> {
+        validate_opaque_value("file transfer id", &transfer_id, 200)?;
+        validate_source_version(&source_version)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<FileTransferUploadTargetResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-transfers/{transfer_id}/upload-target"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({ "sourceVersion": source_version })),
+            )
+            .await
+            .and_then(|response| validate_upload_target_response(&transfer_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn complete_file_transfer_upload(
+        &self,
+        transfer_id: String,
+        idempotency_key: String,
+        size_bytes: u64,
+        sha256: String,
+    ) -> Result<AgentFileTransfer, AgentError> {
+        validate_opaque_value("file transfer id", &transfer_id, 200)?;
+        validate_opaque_value(
+            "file transfer completion idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        if size_bytes == 0 {
+            return Err(validation_error(
+                "completed file transfer sizeBytes must be positive",
+            ));
+        }
+        validate_sha256(&sha256)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<FileTransferResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-transfers/{transfer_id}/complete-upload"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({ "sizeBytes": size_bytes, "sha256": sha256 })),
+            )
+            .await
+            .and_then(validate_file_transfer_response)
+            .and_then(|transfer| validate_transfer_id_match(&transfer_id, transfer));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn fail_file_transfer(
+        &self,
+        transfer_id: String,
+        failure_code: AgentFileTransferFailureCode,
+    ) -> Result<AgentFileTransfer, AgentError> {
+        validate_opaque_value("file transfer id", &transfer_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<FileTransferResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-transfers/{transfer_id}/failure"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({ "failureCode": failure_code })),
+            )
+            .await
+            .and_then(validate_file_transfer_response)
+            .and_then(|transfer| validate_transfer_id_match(&transfer_id, transfer));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     /// Claims an approved decision for local execution. Uses the decision id as the
     /// idempotency key so a retry after a crash or network failure cannot create a second
     /// execution for the same approval.
@@ -1130,6 +1279,27 @@ struct FileBrowseRequestResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct FileTransferResponse {
+    id: String,
+    room_id: String,
+    source_relative_path: String,
+    status: String,
+    expires_at: String,
+    size_bytes: Option<u64>,
+    sha256: Option<String>,
+    failure_code: Option<AgentFileTransferFailureCode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferUploadTargetResponse {
+    transfer_id: String,
+    upload_url: String,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExecutionResponse {
     id: String,
     status: String,
@@ -1381,6 +1551,112 @@ fn validate_file_browse_request(
         relative_directory: response.relative_directory,
         cursor: response.cursor,
     })
+}
+
+fn validate_file_transfers(
+    responses: Vec<FileTransferResponse>,
+) -> Result<Vec<AgentFileTransfer>, AgentError> {
+    responses
+        .into_iter()
+        .map(validate_file_transfer_response)
+        .collect()
+}
+
+fn validate_file_transfer_response(
+    response: FileTransferResponse,
+) -> Result<AgentFileTransfer, AgentError> {
+    if response.id.is_empty()
+        || response.room_id.is_empty()
+        || response.source_relative_path.is_empty()
+        || response.source_relative_path.len() > 1024
+        || response.expires_at.is_empty()
+        || !matches!(
+            response.status.as_str(),
+            "REQUESTED" | "UPLOADING" | "READY" | "FAILED" | "COMPLETED" | "CANCELLED" | "EXPIRED"
+        )
+        || response
+            .sha256
+            .as_ref()
+            .is_some_and(|sha256| !is_valid_sha256(sha256))
+    {
+        return Err(invalid_response_error(
+            "file transfer failed response validation",
+        ));
+    }
+    Ok(AgentFileTransfer {
+        transfer_id: response.id,
+        room_id: response.room_id,
+        source_relative_path: response.source_relative_path,
+        status: response.status,
+        expires_at: response.expires_at,
+        size_bytes: response.size_bytes,
+        sha256: response.sha256,
+        failure_code: response.failure_code,
+    })
+}
+
+fn validate_transfer_id_match(
+    expected_transfer_id: &str,
+    transfer: AgentFileTransfer,
+) -> Result<AgentFileTransfer, AgentError> {
+    if transfer.transfer_id != expected_transfer_id {
+        return Err(invalid_response_error(
+            "file transfer response did not match the requested transfer id",
+        ));
+    }
+    Ok(transfer)
+}
+
+fn validate_upload_target_response(
+    expected_transfer_id: &str,
+    response: FileTransferUploadTargetResponse,
+) -> Result<AgentFileTransferUploadTarget, AgentError> {
+    if response.transfer_id != expected_transfer_id || response.expires_at.is_empty() {
+        return Err(invalid_response_error(
+            "file transfer upload target failed response validation",
+        ));
+    }
+    let url = Url::parse(&response.upload_url)
+        .map_err(|_| invalid_response_error("file transfer upload target URL is invalid"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(invalid_response_error(
+            "file transfer upload target must be an http(s) URL",
+        ));
+    }
+    Ok(AgentFileTransferUploadTarget {
+        transfer_id: response.transfer_id,
+        upload_url: response.upload_url,
+        expires_at: response.expires_at,
+    })
+}
+
+fn validate_source_version(version: &AgentFileTransferSourceVersion) -> Result<(), AgentError> {
+    if version.file_id.is_empty()
+        || version.file_id.len() > 512
+        || version.size_bytes == 0
+        || version.modified_at.is_empty()
+    {
+        return Err(validation_error(
+            "file transfer sourceVersion failed validation",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sha256(value: &str) -> Result<(), AgentError> {
+    if !is_valid_sha256(value) {
+        return Err(validation_error(
+            "file transfer sha256 must be 64 lowercase hex characters",
+        ));
+    }
+    Ok(())
+}
+
+fn is_valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase())
 }
 
 fn validate_proposal_item(
@@ -1856,6 +2132,94 @@ mod tests {
             decision.items[0].source_relative_path.as_deref(),
             Some("a.pdf")
         );
+    }
+
+    #[tokio::test]
+    async fn pending_file_transfers_maps_the_control_plane_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/devices/device-1/file-transfers/pending",
+            r#"[{
+                "id":"transfer-1",
+                "roomId":"room-1",
+                "desktopDeviceId":"device-1",
+                "sourceRelativePath":"docs/report.pdf",
+                "sourceVersion":null,
+                "status":"REQUESTED",
+                "failureCode":null,
+                "sizeBytes":null,
+                "sha256":null,
+                "expiresAt":"2026-07-13T01:00:00.000Z",
+                "completedAt":null,
+                "createdAt":"2026-07-13T00:00:00.000Z"
+            }]"#,
+            |request| {
+                assert!(
+                    request.starts_with("GET /v1/devices/device-1/file-transfers/pending HTTP/1.1")
+                );
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let transfers = runtime
+            .pending_file_transfers()
+            .await
+            .expect("pending transfers");
+        server.join().expect("server thread");
+
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0].transfer_id, "transfer-1");
+        assert_eq!(transfers[0].source_relative_path, "docs/report.pdf");
+        assert_eq!(transfers[0].status, "REQUESTED");
+    }
+
+    #[tokio::test]
+    async fn upload_target_uses_validated_source_version_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/agent/file-transfers/transfer-1/upload-target",
+            r#"{"transferId":"transfer-1","uploadUrl":"http://127.0.0.1:9000/bucket/object?signature=ok","expiresAt":"2026-07-13T01:00:00.000Z"}"#,
+            |request| {
+                assert!(request.starts_with(
+                    "POST /v1/agent/file-transfers/transfer-1/upload-target HTTP/1.1"
+                ));
+                assert!(request.contains(r#""fileId":"hm:abc""#));
+                assert!(request.contains(r#""sizeBytes":42"#));
+                assert!(request.contains(r#""modifiedAt":"2026-07-13T00:00:00.000Z""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let target = runtime
+            .request_file_transfer_upload_target(
+                "transfer-1".to_string(),
+                super::AgentFileTransferSourceVersion {
+                    file_id: "hm:abc".to_string(),
+                    size_bytes: 42,
+                    modified_at: "2026-07-13T00:00:00.000Z".to_string(),
+                },
+            )
+            .await
+            .expect("upload target");
+        server.join().expect("server thread");
+
+        assert_eq!(target.transfer_id, "transfer-1");
+        assert!(target.upload_url.starts_with("http://127.0.0.1:9000/"));
     }
 
     #[tokio::test]

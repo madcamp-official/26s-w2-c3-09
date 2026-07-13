@@ -4,6 +4,7 @@ pub mod command_processor;
 pub mod commands;
 pub mod execution_processor;
 pub mod file_browse_processor;
+pub mod file_transfer_processor;
 pub mod outbox_processor;
 pub mod overlay;
 pub mod storage;
