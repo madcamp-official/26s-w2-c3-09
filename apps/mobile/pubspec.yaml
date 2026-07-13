@@ -51,6 +51,7 @@ dependencies:
   socket_io_client: ^3.1.6
   housemouse_character_assets:
     path: ../../packages/character-assets
+  firebase_messaging: ^16.4.1
 
 dev_dependencies:
   flutter_test:

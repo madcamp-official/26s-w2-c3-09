@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/notifications/push_notifications.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../auth/auth_controller.dart';
 import '../auth/pairing_page.dart';
@@ -41,16 +42,13 @@ class _HomePageState extends ConsumerState<HomePage> {
       if (previous != null) ref.invalidate(homeControllerProvider);
     });
     final state = ref.watch(homeControllerProvider);
+    final pushNotifications = ref.watch(pushNotificationsProvider);
     final realtimeCharacterKind = ref.watch(realtimeCharacterKindProvider);
     return Scaffold(
       appBar: AppBar(
         title: const Text('HOUSEMOUSE'),
         actions: [
-          IconButton(
-            onPressed: () =>
-                ref.read(authControllerProvider.notifier).signOut(),
-            icon: const Icon(Icons.logout),
-          ),
+          IconButton(onPressed: _signOut, icon: const Icon(Icons.logout)),
         ],
       ),
       body: state.when(
@@ -64,6 +62,7 @@ class _HomePageState extends ConsumerState<HomePage> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              PushNotificationStatusCard(state: pushNotifications),
               if (data.isOffline) ...[
                 const OfflineCacheBanner(),
                 const SizedBox(height: 12),
@@ -239,6 +238,18 @@ class _HomePageState extends ConsumerState<HomePage> {
     };
   }
 
+  Future<void> _signOut() async {
+    try {
+      await ref.read(pushNotificationsProvider.notifier).unregister();
+      await ref.read(authControllerProvider.notifier).signOut();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('로그아웃 준비 실패: $error')));
+    }
+  }
+
   String _rootAliasLabel(Object? value) {
     final alias = value is String ? value : '';
     return alias.startsWith('root:') || alias.isEmpty ? '관리 폴더 연결됨' : alias;
@@ -273,6 +284,49 @@ class _HomePageState extends ConsumerState<HomePage> {
       }
     }
   }
+}
+
+class PushNotificationStatusCard extends StatelessWidget {
+  const PushNotificationStatusCard({super.key, required this.state});
+
+  final AsyncValue<PushNotificationRegistration> state;
+
+  @override
+  Widget build(BuildContext context) => state.when(
+    loading: () => const Card(
+      child: ListTile(
+        leading: CircularProgressIndicator(),
+        title: Text('알림 연결 중'),
+      ),
+    ),
+    error: (error, _) => Card(
+      color: const Color(0xFFFFEBEE),
+      child: ListTile(
+        leading: const Icon(Icons.notifications_off_outlined),
+        title: const Text('푸시 알림을 연결하지 못했어요'),
+        subtitle: Text('$error'),
+      ),
+    ),
+    data: (registration) => switch (registration.status) {
+      PushNotificationStatus.active => const SizedBox.shrink(),
+      PushNotificationStatus.permissionDenied => const Card(
+        color: Color(0xFFFFF3E0),
+        child: ListTile(
+          leading: Icon(Icons.notifications_off_outlined),
+          title: Text('알림 권한이 꺼져 있어요'),
+          subtitle: Text('휴대폰 설정에서 HOUSEMOUSE 알림을 허용해 주세요.'),
+        ),
+      ),
+      PushNotificationStatus.unconfigured => Card(
+        color: const Color(0xFFFFF3E0),
+        child: ListTile(
+          leading: const Icon(Icons.notifications_off_outlined),
+          title: const Text('푸시 알림 미설정'),
+          subtitle: Text(registration.errorCode ?? 'UNCONFIGURED'),
+        ),
+      ),
+    },
+  );
 }
 
 class HomeConnectionError extends StatelessWidget {

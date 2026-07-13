@@ -44,7 +44,10 @@ class RealtimeNoticeController extends Notifier<RealtimeNotice?> {
   @override
   RealtimeNotice? build() => null;
 
-  void emit(RealtimeNotice notice) => state = notice;
+  void emit(RealtimeNotice notice) {
+    if (state?.eventId == notice.eventId) return;
+    state = notice;
+  }
 }
 
 RealtimeNotice? realtimeNoticeFor(String event, Object? data) {
