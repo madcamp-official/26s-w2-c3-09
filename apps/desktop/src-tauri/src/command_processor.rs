@@ -33,6 +33,7 @@ const USER_REQUESTED_RENAME_REASON: &str = "USER_REQUESTED_RENAME";
 const USER_REQUESTED_MOVE_REASON: &str = "USER_REQUESTED_MOVE";
 const USER_REQUESTED_TRASH_REASON: &str = "USER_REQUESTED_TRASH";
 const USER_REQUESTED_CREATE_DIR_REASON: &str = "USER_REQUESTED_CREATE_DIR";
+const USER_REQUESTED_CREATE_FILE_REASON: &str = "USER_REQUESTED_CREATE_FILE";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CommandProcessingReport {
@@ -167,6 +168,7 @@ pub enum AgentProposalActionType {
     Move,
     Quarantine,
     CreateDir,
+    CreateFile,
     ReadmeWrite,
 }
 
@@ -286,7 +288,7 @@ async fn process_create_command(
         ));
     }
 
-    let local_report = build_create_dir_proposal_report(&managed_root.root, &payload)?;
+    let local_report = build_create_proposal_report(&managed_root.root, &payload)?;
     let submission = build_agent_proposal_submission(command, local_report, 1)?;
     let item_count = submission.items.len();
     enqueue_proposal(outbox, &submission)?;
@@ -475,17 +477,27 @@ fn parse_create_payload(command: &AgentCommand) -> Result<CreateCommandPayload, 
         .map_err(|error| format!("invalid create payload: {error}"))
 }
 
-fn build_create_dir_proposal_report(
+fn build_create_proposal_report(
     root: &str,
     payload: &CreateCommandPayload,
 ) -> Result<ProposalReport, String> {
-    if payload.kind != "DIRECTORY" {
-        return Err("CREATE currently supports DIRECTORY only".to_string());
-    }
-    if payload.content.is_some() {
+    let is_directory = match payload.kind.as_str() {
+        "DIRECTORY" => true,
+        "FILE" => false,
+        _ => return Err("CREATE kind must be FILE or DIRECTORY".to_string()),
+    };
+    if is_directory && payload.content.is_some() {
         return Err("CREATE DIRECTORY must not include file content".to_string());
     }
-    let relative_path = normalize_remote_directory_target(&payload.relative_path)?;
+    if !is_directory && payload.content.as_deref().unwrap_or_default() != "" {
+        return Err("CREATE FILE currently supports empty files only".to_string());
+    }
+
+    let relative_path = if is_directory {
+        normalize_remote_directory_target(&payload.relative_path)?
+    } else {
+        normalize_remote_file_source(&payload.relative_path)?
+    };
     let parent = parent_relative_directory(&relative_path);
     let guard = PathGuard::new(root).map_err(|error| error.to_string())?;
     ensure_existing_directory_is_safe(&guard, parent)?;
@@ -495,7 +507,11 @@ fn build_create_dir_proposal_report(
     } else {
         ProposalStatus::Ready
     };
-    let action = ProposalAction::CreateDir;
+    let action = if is_directory {
+        ProposalAction::CreateDir
+    } else {
+        ProposalAction::CreateFile
+    };
 
     Ok(ProposalReport {
         root: guard.root().display().to_string(),
@@ -507,7 +523,11 @@ fn build_create_dir_proposal_report(
             content: None,
             source_size_bytes: 0,
             source_modified_unix_ms: None,
-            reason: USER_REQUESTED_CREATE_DIR_REASON.to_string(),
+            reason: if is_directory {
+                USER_REQUESTED_CREATE_DIR_REASON.to_string()
+            } else {
+                USER_REQUESTED_CREATE_FILE_REASON.to_string()
+            },
             status,
         }],
     })
@@ -725,6 +745,7 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
         ProposalAction::Move => AgentProposalActionType::Move,
         ProposalAction::Trash => AgentProposalActionType::Quarantine,
         ProposalAction::CreateDir => AgentProposalActionType::CreateDir,
+        ProposalAction::CreateFile => AgentProposalActionType::CreateFile,
         ProposalAction::ReadmeWrite => AgentProposalActionType::ReadmeWrite,
     };
     let conflict_state = match proposal.status {
@@ -737,12 +758,14 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
         action_type,
         source_relative_path: match proposal.action {
             ProposalAction::Move | ProposalAction::Trash => Some(proposal.from.clone()),
-            ProposalAction::CreateDir | ProposalAction::ReadmeWrite => None,
+            ProposalAction::CreateDir
+            | ProposalAction::CreateFile
+            | ProposalAction::ReadmeWrite => None,
         },
         destination_relative_path: match proposal.action {
             ProposalAction::Move => Some(proposal.to.clone()),
             ProposalAction::Trash => None,
-            ProposalAction::CreateDir => Some(proposal.to.clone()),
+            ProposalAction::CreateDir | ProposalAction::CreateFile => Some(proposal.to.clone()),
             ProposalAction::ReadmeWrite => Some("README.md".to_string()),
         },
         reason_code: reason_code(proposal),
@@ -769,11 +792,15 @@ fn reason_code(proposal: &Proposal) -> String {
     if proposal.reason == USER_REQUESTED_CREATE_DIR_REASON {
         return USER_REQUESTED_CREATE_DIR_REASON.to_string();
     }
+    if proposal.reason == USER_REQUESTED_CREATE_FILE_REASON {
+        return USER_REQUESTED_CREATE_FILE_REASON.to_string();
+    }
 
     match proposal.action {
         ProposalAction::Move => "RULE_MOVE_BY_EXTENSION",
         ProposalAction::Trash => "RULE_QUARANTINE",
         ProposalAction::CreateDir => "RULE_CREATE_DIR",
+        ProposalAction::CreateFile => "CREATE_FILE",
         ProposalAction::ReadmeWrite => "README_WRITE",
     }
     .to_string()
@@ -1037,13 +1064,13 @@ mod tests {
     use crate::storage::outbox::OutboxStore;
 
     use super::{
-        build_agent_proposal_submission, build_create_dir_proposal_report,
-        build_move_proposal_report, build_rename_proposal_report, build_trash_proposal_report,
-        parse_organize_payload, process_commands, resolve_proposal, validate_relative_scope,
-        AgentCommand, AgentProposalActionType, AgentProposalConflictState, CreateCommandPayload,
+        build_agent_proposal_submission, build_create_proposal_report, build_move_proposal_report,
+        build_rename_proposal_report, build_trash_proposal_report, parse_organize_payload,
+        process_commands, resolve_proposal, validate_relative_scope, AgentCommand,
+        AgentProposalActionType, AgentProposalConflictState, CreateCommandPayload,
         MoveCommandPayload, OrganizeFilesPayload, RenameCommandPayload, TrashCommandPayload,
-        USER_REQUESTED_CREATE_DIR_REASON, USER_REQUESTED_MOVE_REASON, USER_REQUESTED_RENAME_REASON,
-        USER_REQUESTED_TRASH_REASON,
+        USER_REQUESTED_CREATE_DIR_REASON, USER_REQUESTED_CREATE_FILE_REASON,
+        USER_REQUESTED_MOVE_REASON, USER_REQUESTED_RENAME_REASON, USER_REQUESTED_TRASH_REASON,
     };
 
     fn command(payload: serde_json::Value) -> AgentCommand {
@@ -1439,7 +1466,7 @@ mod tests {
             content: None,
         };
 
-        let report = build_create_dir_proposal_report(&root.to_string_lossy(), &payload)
+        let report = build_create_proposal_report(&root.to_string_lossy(), &payload)
             .expect("create dir proposal");
 
         assert!(!root.join("archive/reports").exists());
@@ -1483,7 +1510,7 @@ mod tests {
             content: None,
         };
 
-        let report = build_create_dir_proposal_report(&root.to_string_lossy(), &payload)
+        let report = build_create_proposal_report(&root.to_string_lossy(), &payload)
             .expect("create dir proposal");
         let submission =
             build_agent_proposal_submission(&command(json!({"maxProposals": 1})), report, 1)
@@ -1501,23 +1528,13 @@ mod tests {
         let root = temp.path().join("root");
         std::fs::create_dir_all(&root).expect("root");
 
-        let file_create = CreateCommandPayload {
-            root_id: "root:archive".to_string(),
-            kind: "FILE".to_string(),
-            relative_path: "note.txt".to_string(),
-            content: None,
-        };
-        let error = build_create_dir_proposal_report(&root.to_string_lossy(), &file_create)
-            .expect_err("reject file");
-        assert!(error.contains("DIRECTORY only"));
-
         let with_content = CreateCommandPayload {
             root_id: "root:archive".to_string(),
             kind: "DIRECTORY".to_string(),
             relative_path: "reports".to_string(),
             content: Some("nope".to_string()),
         };
-        let error = build_create_dir_proposal_report(&root.to_string_lossy(), &with_content)
+        let error = build_create_proposal_report(&root.to_string_lossy(), &with_content)
             .expect_err("reject content");
         assert!(error.contains("must not include file content"));
 
@@ -1527,9 +1544,66 @@ mod tests {
             relative_path: "missing/reports".to_string(),
             content: None,
         };
-        let error = build_create_dir_proposal_report(&root.to_string_lossy(), &missing_parent)
+        let error = build_create_proposal_report(&root.to_string_lossy(), &missing_parent)
             .expect_err("reject missing parent");
         assert!(error.contains("does not exist"));
+    }
+
+    #[test]
+    fn create_file_command_builds_an_empty_file_proposal_without_touching_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("notes")).expect("notes parent");
+
+        let payload = CreateCommandPayload {
+            root_id: "root:notes".to_string(),
+            kind: "FILE".to_string(),
+            relative_path: "notes/todo.txt".to_string(),
+            content: None,
+        };
+
+        let report =
+            build_create_proposal_report(&root.to_string_lossy(), &payload).expect("create file");
+
+        assert!(!root.join("notes/todo.txt").exists());
+        assert_eq!(report.proposals[0].action, ProposalAction::CreateFile);
+        assert_eq!(report.proposals[0].from, "");
+        assert_eq!(report.proposals[0].to, "notes/todo.txt");
+        assert_eq!(
+            report.proposals[0].reason,
+            USER_REQUESTED_CREATE_FILE_REASON
+        );
+
+        let submission =
+            build_agent_proposal_submission(&command(json!({"maxProposals": 1})), report, 1)
+                .expect("submission");
+        assert_eq!(
+            submission.items[0].action_type,
+            AgentProposalActionType::CreateFile
+        );
+        assert_eq!(submission.items[0].source_relative_path, None);
+        assert_eq!(
+            submission.items[0].destination_relative_path.as_deref(),
+            Some("notes/todo.txt")
+        );
+    }
+
+    #[test]
+    fn create_file_command_rejects_non_empty_content() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("notes")).expect("notes parent");
+
+        let payload = CreateCommandPayload {
+            root_id: "root:notes".to_string(),
+            kind: "FILE".to_string(),
+            relative_path: "notes/todo.txt".to_string(),
+            content: Some("write me".to_string()),
+        };
+
+        let error = build_create_proposal_report(&root.to_string_lossy(), &payload)
+            .expect_err("reject content");
+        assert!(error.contains("empty files only"));
     }
 
     #[test]

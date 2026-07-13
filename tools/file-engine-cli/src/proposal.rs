@@ -37,6 +37,7 @@ pub enum ProposalAction {
     Move,
     Trash,
     CreateDir,
+    CreateFile,
     ReadmeWrite,
 }
 
@@ -152,6 +153,7 @@ impl ProposalAction {
             ProposalAction::Move => "move",
             ProposalAction::Trash => "trash",
             ProposalAction::CreateDir => "create_dir",
+            ProposalAction::CreateFile => "create_file",
             ProposalAction::ReadmeWrite => "readme_write",
         }
     }

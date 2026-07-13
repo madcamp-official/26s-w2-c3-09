@@ -443,7 +443,13 @@ export const updateCommandStatusSchema = z
 export const proposalItemSchema = z
   .object({
     itemOrder: z.number().int().nonnegative(),
-    actionType: z.enum(["MOVE", "QUARANTINE", "CREATE_DIR", "README_WRITE"]),
+    actionType: z.enum([
+      "MOVE",
+      "QUARANTINE",
+      "CREATE_DIR",
+      "CREATE_FILE",
+      "README_WRITE",
+    ]),
     sourceRelativePath: relativePathSchema.nullable(),
     destinationRelativePath: relativePathSchema.nullable(),
     reasonCode: z.string().min(1).max(100),

@@ -2299,7 +2299,7 @@ fn validate_proposal_item(
         || item.reason_code.is_empty()
         || !matches!(
             item.action_type.as_str(),
-            "MOVE" | "QUARANTINE" | "CREATE_DIR" | "README_WRITE"
+            "MOVE" | "QUARANTINE" | "CREATE_DIR" | "CREATE_FILE" | "README_WRITE"
         )
         || !matches!(
             item.conflict_state.as_str(),

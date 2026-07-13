@@ -1544,7 +1544,10 @@ components:
       properties:
         itemOrder: { type: integer, minimum: 0 }
         actionType:
-          { type: string, enum: [MOVE, QUARANTINE, CREATE_DIR, README_WRITE] }
+          {
+            type: string,
+            enum: [MOVE, QUARANTINE, CREATE_DIR, CREATE_FILE, README_WRITE],
+          }
         sourceRelativePath: { type: [string, "null"], maxLength: 1024 }
         destinationRelativePath: { type: [string, "null"], maxLength: 1024 }
         reasonCode: { type: string, minLength: 1, maxLength: 100 }

@@ -92,6 +92,7 @@ fn undo_with_filter(
                 JournalAction::Move
                     | JournalAction::Trash
                     | JournalAction::CreateDir
+                    | JournalAction::CreateFile
                     | JournalAction::ReadmeWrite
             )
             || undone_operation_ids.contains(&entry.operation_id)
@@ -101,6 +102,20 @@ fn undo_with_filter(
 
         if entry.action == JournalAction::CreateDir {
             match undo_create_dir(&guard, &store, entry)? {
+                Ok(result) => {
+                    undone_count += 1;
+                    results.push(result);
+                }
+                Err(reason) => {
+                    skipped_count += 1;
+                    results.push(skipped_result(entry, Some(reason)));
+                }
+            }
+            continue;
+        }
+
+        if entry.action == JournalAction::CreateFile {
+            match undo_create_file(&guard, &store, entry)? {
                 Ok(result) => {
                     undone_count += 1;
                     results.push(result);
@@ -212,6 +227,58 @@ fn undo_with_filter(
     })
 }
 
+fn undo_create_file(
+    guard: &PathGuard,
+    store: &JournalStore,
+    entry: &JournalEntry,
+) -> Result<Result<UndoResult, String>, UndoError> {
+    let target = guard.root().join(&entry.to);
+    if !target.exists() {
+        store
+            .append(&undo_entry(entry, JournalStatus::Undone))
+            .map_err(UndoError::Journal)?;
+        return Ok(Ok(UndoResult {
+            from: entry.to.clone(),
+            to: entry.from.clone(),
+            status: UndoStatus::Undone,
+            reason: Some("created file is already missing; recorded recovered undo".to_string()),
+        }));
+    }
+    if !target.is_file() {
+        return Ok(Err(
+            "created path is no longer a file; refusing undo".to_string()
+        ));
+    }
+    if fs::metadata(&target)
+        .map(|metadata| metadata.len())
+        .unwrap_or(1)
+        != 0
+    {
+        return Ok(Err(
+            "created file is no longer empty; refusing to delete user data".to_string(),
+        ));
+    }
+
+    store
+        .append(&undo_entry(entry, JournalStatus::UndoPlanned))
+        .map_err(UndoError::Journal)?;
+    fs::remove_file(&target).map_err(|error| UndoError::Move {
+        from: target.clone(),
+        to: target.clone(),
+        message: error.to_string(),
+    })?;
+    store
+        .append(&undo_entry(entry, JournalStatus::Undone))
+        .map_err(UndoError::Journal)?;
+
+    Ok(Ok(UndoResult {
+        from: entry.to.clone(),
+        to: entry.from.clone(),
+        status: UndoStatus::Undone,
+        reason: None,
+    }))
+}
+
 fn undo_create_dir(
     guard: &PathGuard,
     store: &JournalStore,
@@ -233,7 +300,7 @@ fn undo_create_dir(
     }
     if !target.is_dir() {
         return Ok(Err(
-            "created path is no longer a directory; refusing undo".to_string(),
+            "created path is no longer a directory; refusing undo".to_string()
         ));
     }
     if fs::read_dir(&target)
@@ -382,9 +449,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::execute::execute_root;
-    use crate::proposal::{
-        proposal_id, Proposal, ProposalAction, ProposalReport, ProposalStatus,
-    };
+    use crate::proposal::{proposal_id, Proposal, ProposalAction, ProposalReport, ProposalStatus};
 
     use super::undo_root;
 
@@ -460,7 +525,11 @@ mod tests {
         fs::create_dir_all(root.join("archive")).expect("archive parent");
         let action = ProposalAction::CreateDir;
         let proposal = ProposalReport {
-            root: root.canonicalize().expect("canonical").display().to_string(),
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
             proposals: vec![Proposal {
                 proposal_id: proposal_id(&action, "", "archive/reports"),
                 action,
@@ -481,5 +550,42 @@ mod tests {
         assert_eq!(report.undone_count, 0);
         assert_eq!(report.skipped_count, 1);
         assert!(root.join("archive/reports/keep.txt").exists());
+    }
+
+    #[test]
+    fn refuses_to_undo_created_file_when_it_is_not_empty() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("notes")).expect("notes parent");
+        let action = ProposalAction::CreateFile;
+        let proposal = ProposalReport {
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "notes/todo.txt"),
+                action,
+                from: String::new(),
+                to: "notes/todo.txt".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                reason: "USER_REQUESTED_CREATE_FILE".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+        crate::execute::execute_proposals(&root, proposal).expect("execute create file");
+        fs::write(root.join("notes/todo.txt"), "user data").expect("user data");
+
+        let report = undo_root(&root).expect("undo create file");
+
+        assert_eq!(report.undone_count, 0);
+        assert_eq!(report.skipped_count, 1);
+        assert_eq!(
+            fs::read_to_string(root.join("notes/todo.txt")).expect("file"),
+            "user data"
+        );
     }
 }

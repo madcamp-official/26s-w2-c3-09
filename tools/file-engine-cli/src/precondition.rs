@@ -100,6 +100,7 @@ fn precheck_proposal(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
 
     match proposal.action {
         ProposalAction::CreateDir => return precheck_create_dir(guard, proposal),
+        ProposalAction::CreateFile => return precheck_create_file(guard, proposal),
         ProposalAction::ReadmeWrite => return precheck_readme_write(guard, proposal),
         ProposalAction::Move | ProposalAction::Trash => {}
     }
@@ -174,6 +175,44 @@ fn precheck_create_dir(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult
             proposal,
             PrecheckStatus::DestinationExists,
             Some("directory already exists; execution must not overwrite it".to_string()),
+        );
+    }
+
+    result(proposal, PrecheckStatus::Ready, None)
+}
+
+fn precheck_create_file(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
+    if proposal.to.is_empty() || proposal.to == "." || proposal.to == ".." {
+        return result(
+            proposal,
+            PrecheckStatus::RejectedPath,
+            Some("CREATE_FILE target must be a relative file path".to_string()),
+        );
+    }
+    if proposal.content.as_deref().unwrap_or_default() != "" {
+        return result(
+            proposal,
+            PrecheckStatus::RejectedPath,
+            Some("CREATE_FILE currently supports empty files only".to_string()),
+        );
+    }
+
+    let target = match guard.resolve_for_create(&proposal.to) {
+        Ok(target) => target,
+        Err(error) => {
+            return result(
+                proposal,
+                PrecheckStatus::RejectedPath,
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    if target.exists() {
+        return result(
+            proposal,
+            PrecheckStatus::DestinationExists,
+            Some("file already exists; execution must not overwrite it".to_string()),
         );
     }
 

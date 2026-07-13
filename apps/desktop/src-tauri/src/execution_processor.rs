@@ -206,6 +206,7 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
         "MOVE" => ProposalAction::Move,
         "QUARANTINE" => ProposalAction::Trash,
         "CREATE_DIR" => ProposalAction::CreateDir,
+        "CREATE_FILE" => ProposalAction::CreateFile,
         "README_WRITE" => ProposalAction::ReadmeWrite,
         other => {
             return Err(format!(
@@ -219,7 +220,7 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
             .source_relative_path
             .clone()
             .ok_or_else(|| format!("proposal item {} is missing a source path", item.item_order))?,
-        ProposalAction::CreateDir => String::new(),
+        ProposalAction::CreateDir | ProposalAction::CreateFile => String::new(),
         ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
@@ -231,12 +232,14 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
             )
         })?,
         ProposalAction::Trash => TRASH_DIR.to_string(),
-        ProposalAction::CreateDir => item.destination_relative_path.clone().ok_or_else(|| {
-            format!(
-                "proposal item {} is missing a destination path",
-                item.item_order
-            )
-        })?,
+        ProposalAction::CreateDir | ProposalAction::CreateFile => {
+            item.destination_relative_path.clone().ok_or_else(|| {
+                format!(
+                    "proposal item {} is missing a destination path",
+                    item.item_order
+                )
+            })?
+        }
         ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
@@ -403,6 +406,50 @@ mod tests {
         let undo = undo_operation(root, &history.operations[0].operation_id).expect("undo");
         assert_eq!(undo.undone_count, 1);
         assert!(!root.join("Archive/Reports").exists());
+    }
+
+    #[test]
+    fn delegated_create_file_executes_empty_file_and_stays_undoable() {
+        use file_engine_cli::journal::{read_operation_history, JournalAction};
+        use file_engine_cli::undo::undo_operation;
+
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("Notes")).expect("notes parent");
+
+        let item = AgentProposalItemRecord {
+            item_order: 0,
+            action_type: "CREATE_FILE".to_string(),
+            source_relative_path: None,
+            destination_relative_path: Some("Notes/todo.txt".to_string()),
+            reason_code: "USER_REQUESTED_CREATE_FILE".to_string(),
+            precondition: json!({}),
+            conflict_state: "NONE".to_string(),
+        };
+
+        let report =
+            build_local_proposal_report(root, &[item]).expect("local create file proposal");
+        let application = DecisionApplication {
+            approved: report,
+            rejected: Vec::new(),
+        };
+        let execute_report =
+            execute_decision_application(root, application).expect("execute create file");
+        let history = read_operation_history(root).expect("history");
+
+        assert_eq!(execute_report.executed_count, 1);
+        assert_eq!(
+            fs::metadata(root.join("Notes/todo.txt"))
+                .expect("created file")
+                .len(),
+            0
+        );
+        assert_eq!(history.operations[0].action, JournalAction::CreateFile);
+        assert!(history.operations[0].can_undo);
+
+        let undo = undo_operation(root, &history.operations[0].operation_id).expect("undo");
+        assert_eq!(undo.undone_count, 1);
+        assert!(!root.join("Notes/todo.txt").exists());
     }
 
     #[test]
