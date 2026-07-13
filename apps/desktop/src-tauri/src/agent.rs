@@ -28,6 +28,7 @@ pub enum AgentConnectionState {
     Offline,
     Connecting,
     Online,
+    Revoked,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -1288,6 +1289,15 @@ impl AgentRuntime {
     }
 
     fn record_error(&self, error: AgentError, connection_state: AgentConnectionState) {
+        if error.is_terminal_pairing_failure() {
+            let _ = self.credentials.delete();
+            let mut state = self.state.lock().expect("agent state mutex poisoned");
+            state.credential = None;
+            state.state = AgentConnectionState::Revoked;
+            state.last_error = Some(error);
+            return;
+        }
+
         let mut state = self.state.lock().expect("agent state mutex poisoned");
         state.state = connection_state;
         state.last_error = Some(error);
@@ -2166,6 +2176,13 @@ impl AgentError {
     pub fn is_transient(&self) -> bool {
         matches!(self.code, AgentErrorCode::TransportUnavailable)
     }
+
+    pub fn is_terminal_pairing_failure(&self) -> bool {
+        matches!(
+            self.code,
+            AgentErrorCode::Unauthenticated | AgentErrorCode::Forbidden
+        )
+    }
 }
 
 impl std::error::Error for AgentError {}
@@ -2408,6 +2425,44 @@ mod tests {
             runtime.connection_status().state,
             AgentConnectionState::Online
         );
+    }
+
+    #[tokio::test]
+    async fn auth_failure_revokes_local_pairing_and_realtime_credentials() {
+        let (server_url, server) = one_shot_error_server(
+            "/v1/devices/device-1/heartbeat",
+            "HTTP/1.1 403 Forbidden",
+            r#"{"code":"DEVICE_REVOKED","message":"device revoked"}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/devices/device-1/heartbeat HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+            },
+        );
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .heartbeat("ONLINE_IDLE".to_string())
+            .await
+            .expect_err("revoked devices must fail heartbeat");
+        server.join().expect("server thread");
+
+        let status = runtime.connection_status();
+        assert_eq!(error.code, AgentErrorCode::Forbidden);
+        assert_eq!(status.state, AgentConnectionState::Revoked);
+        assert_eq!(status.device_id, None);
+        assert_eq!(status.last_error_code, Some(AgentErrorCode::Forbidden));
+        assert_eq!(status.last_error_message.as_deref(), Some("device revoked"));
+        assert!(runtime.realtime_credentials().is_none());
+        assert!(store.load().expect("credential store").is_none());
     }
 
     #[tokio::test]
@@ -2707,6 +2762,36 @@ mod tests {
             inspect(&request);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn one_shot_error_server<F>(
+        expected_path: &'static str,
+        status_line: &'static str,
+        response_body: &'static str,
+        inspect: F,
+    ) -> (String, thread::JoinHandle<()>)
+    where
+        F: FnOnce(&str) + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buffer = [0_u8; 8192];
+            let length = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..length]);
+            assert!(request.contains(expected_path));
+            inspect(&request);
+            let response = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 response_body.len(),
                 response_body
             );

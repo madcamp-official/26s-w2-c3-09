@@ -6,7 +6,7 @@ declare global {
   }
 }
 
-export type AgentConnectionState = "unconfigured" | "offline" | "connecting" | "online";
+export type AgentConnectionState = "unconfigured" | "offline" | "connecting" | "online" | "revoked";
 
 export type AgentErrorCode =
   | "UNCONFIGURED"
