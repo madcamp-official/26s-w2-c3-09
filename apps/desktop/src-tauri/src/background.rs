@@ -12,6 +12,8 @@ use tokio::time::{interval, Duration};
 #[cfg(feature = "tauri-commands")]
 const BACKGROUND_TICK_SECONDS: u64 = 5;
 #[cfg(feature = "tauri-commands")]
+const BACKGROUND_RECONCILE_EVERY_TICKS: u64 = 3;
+#[cfg(feature = "tauri-commands")]
 const AUTO_CLEANUP_INTERVAL_MS: i64 = 15 * 1000;
 /// Delay before retrying the realtime Socket.IO connection after a failed initial connect. The
 /// REST background loop keeps working the whole time, so this only affects push responsiveness.
@@ -280,7 +282,7 @@ async fn run_background_loop(
     stop_signal: watch::Sender<bool>,
 ) {
     if matches!(
-        run_background_tick(&app, &status).await,
+        run_background_tick(&app, &status, BackgroundTickMode::HeartbeatAndReconcile).await,
         BackgroundTickOutcome::Stop
     ) {
         let _ = stop_signal.send(true);
@@ -289,26 +291,31 @@ async fn run_background_loop(
 
     let mut ticker = interval(Duration::from_secs(BACKGROUND_TICK_SECONDS));
     ticker.tick().await;
+    let mut scheduled_tick_count = 0_u64;
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                scheduled_tick_count = scheduled_tick_count.saturating_add(1);
                 if matches!(
-                    run_background_tick(&app, &status).await,
+                    run_background_tick(
+                        &app,
+                        &status,
+                        scheduled_tick_mode(scheduled_tick_count),
+                    ).await,
                     BackgroundTickOutcome::Stop
                 ) {
                     let _ = stop_signal.send(true);
                     break;
                 }
             }
-            // A realtime notification arrived: run the same REST pass immediately instead of
-            // waiting for the next interval. The event is only a signal; the tick below is what
-            // actually reconciles state over REST.
+            // A realtime notification reconciles work immediately without sending an extra
+            // heartbeat. The five-second scheduled heartbeat remains the sole liveness cadence.
             _ = wake.notified() => {
                 update_status(&status, |status| {
                     status.last_realtime_signal_unix_ms = Some(unix_ms());
                 });
                 if matches!(
-                    run_background_tick(&app, &status).await,
+                    run_background_tick(&app, &status, BackgroundTickMode::ReconcileOnly).await,
                     BackgroundTickOutcome::Stop
                 ) {
                     let _ = stop_signal.send(true);
@@ -388,9 +395,38 @@ enum BackgroundTickOutcome {
 }
 
 #[cfg(feature = "tauri-commands")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackgroundTickMode {
+    HeartbeatOnly,
+    ReconcileOnly,
+    HeartbeatAndReconcile,
+}
+
+#[cfg(feature = "tauri-commands")]
+impl BackgroundTickMode {
+    fn sends_heartbeat(self) -> bool {
+        !matches!(self, Self::ReconcileOnly)
+    }
+
+    fn reconciles(self) -> bool {
+        !matches!(self, Self::HeartbeatOnly)
+    }
+}
+
+#[cfg(feature = "tauri-commands")]
+fn scheduled_tick_mode(tick: u64) -> BackgroundTickMode {
+    if tick % BACKGROUND_RECONCILE_EVERY_TICKS == 0 {
+        BackgroundTickMode::HeartbeatAndReconcile
+    } else {
+        BackgroundTickMode::HeartbeatOnly
+    }
+}
+
+#[cfg(feature = "tauri-commands")]
 async fn run_background_tick(
     app: &tauri::AppHandle,
     status: &Arc<Mutex<BackgroundRuntimeStatus>>,
+    mode: BackgroundTickMode,
 ) -> BackgroundTickOutcome {
     use tauri::{Emitter, Manager};
 
@@ -405,52 +441,58 @@ async fn run_background_tick(
     // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
     let mut activity = crate::overlay::OverlayActivity::default();
 
-    let device_id_before_heartbeat = agent.connection_status().device_id;
-    match agent.heartbeat("ONLINE_IDLE".to_string()).await {
-        Ok(_) => update_status(status, |status| {
-            status.state = BackgroundRuntimeState::Running;
-            status.last_heartbeat_unix_ms = Some(unix_ms());
-            status.last_error_message = None;
-        }),
-        Err(error) => {
-            let is_confirmed_device_revoked = error.is_confirmed_device_revoked();
-            let error_message = error.to_string();
-            if is_confirmed_device_revoked {
-                let _ = crate::commands::agent::apply_local_device_revoked(
-                    &agent,
-                    &sync_store,
-                    &roots,
-                    &watchers,
-                )
-                .await;
-                if let Some(device_id) = device_id_before_heartbeat {
-                    let _ = sync_store.clear_device(&device_id).await;
-                    // The structured DEVICE_REVOKED verdict is authoritative even when the
-                    // revoked token can no longer fetch replay. Wake the UI so it starts a fresh
-                    // pairing session instead of waiting for its periodic status refresh.
-                    let _ = app.emit("desktop-device-revoked", device_id);
+    if mode.sends_heartbeat() {
+        let device_id_before_heartbeat = agent.connection_status().device_id;
+        match agent.heartbeat("ONLINE_IDLE".to_string()).await {
+            Ok(_) => update_status(status, |status| {
+                status.state = BackgroundRuntimeState::Running;
+                status.last_heartbeat_unix_ms = Some(unix_ms());
+                status.last_error_message = None;
+            }),
+            Err(error) => {
+                let is_confirmed_device_revoked = error.is_confirmed_device_revoked();
+                let error_message = error.to_string();
+                if is_confirmed_device_revoked {
+                    let _ = crate::commands::agent::apply_local_device_revoked(
+                        &agent,
+                        &sync_store,
+                        &roots,
+                        &watchers,
+                    )
+                    .await;
+                    if let Some(device_id) = device_id_before_heartbeat {
+                        let _ = sync_store.clear_device(&device_id).await;
+                        // The structured DEVICE_REVOKED verdict is authoritative even when the
+                        // revoked token can no longer fetch replay. Wake the UI so it starts a fresh
+                        // pairing session instead of waiting for its periodic status refresh.
+                        let _ = app.emit("desktop-device-revoked", device_id);
+                    }
+                    mark_suspended(status, DEVICE_REVOKED_REASON);
+                } else {
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error_message);
+                    });
                 }
-                mark_suspended(status, DEVICE_REVOKED_REASON);
-            } else {
-                update_status(status, |status| {
-                    status.last_error_message = Some(error_message);
-                });
+                // Heartbeat failure means we are offline; tell the overlay so the character can
+                // reflect it, then stop this pass.
+                emit_overlay_activity(
+                    app,
+                    crate::overlay::OverlayActivity {
+                        had_error: true,
+                        ..crate::overlay::OverlayActivity::default()
+                    },
+                );
+                return if is_confirmed_device_revoked {
+                    BackgroundTickOutcome::Stop
+                } else {
+                    BackgroundTickOutcome::Continue
+                };
             }
-            // Heartbeat failure means we are offline; tell the overlay so the character can reflect
-            // it, then stop this pass.
-            emit_overlay_activity(
-                app,
-                crate::overlay::OverlayActivity {
-                    had_error: true,
-                    ..crate::overlay::OverlayActivity::default()
-                },
-            );
-            return if is_confirmed_device_revoked {
-                BackgroundTickOutcome::Stop
-            } else {
-                BackgroundTickOutcome::Continue
-            };
         }
+    }
+
+    if !mode.reconciles() {
+        return BackgroundTickOutcome::Continue;
     }
 
     if let Some(device_id) = agent.connection_status().device_id {
@@ -856,7 +898,20 @@ fn unix_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tauri-commands")]
+    use super::{scheduled_tick_mode, BackgroundTickMode};
     use super::{BackgroundRuntime, BackgroundRuntimeState};
+
+    #[cfg(feature = "tauri-commands")]
+    #[test]
+    fn scheduled_ticks_keep_heartbeats_frequent_and_reconcile_every_fifteen_seconds() {
+        assert_eq!(scheduled_tick_mode(1), BackgroundTickMode::HeartbeatOnly);
+        assert_eq!(scheduled_tick_mode(2), BackgroundTickMode::HeartbeatOnly);
+        assert_eq!(
+            scheduled_tick_mode(3),
+            BackgroundTickMode::HeartbeatAndReconcile
+        );
+    }
 
     #[test]
     fn starts_suspended_until_transport_exists() {
