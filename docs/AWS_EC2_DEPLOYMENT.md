@@ -4,7 +4,7 @@
 
 ## 확인된 현재 상태
 
-2026-07-13 기준 공용 DNS `8.8.8.8`, `1.1.1.1`은 `mousekeeper.madcamp-kaist.org`를 `13.237.248.194`로 해석한다. Nginx는 80을 HTTPS로 redirect하고 443에서 유효한 인증서를 제공한다. 외부 `/health`와 `/ready`는 모두 `200`이며, API 3000·PostgreSQL 5432·Valkey 6379는 외부에서 닫혀 있다. Object storage bucket과 IAM role이 없어 worker는 `UNCONFIGURED` 정지 상태다.
+2026-07-13 기준 공용 DNS `8.8.8.8`, `1.1.1.1`은 `mousekeeper.madcamp-kaist.org`를 `13.237.248.194`로 해석한다. Nginx는 80을 HTTPS로 redirect하고 443에서 유효한 인증서를 제공한다. 외부 `/health`와 `/ready`는 모두 `200`이며, API 3000·PostgreSQL 5432·Valkey 6379는 외부에서 닫혀 있다. Private S3 bucket은 EC2 IAM role로만 접근하며 LIST·PUT·HEAD·GET·DELETE smoke test를 통과했다. Object lifecycle worker도 systemd에서 실행 중이다.
 
 Windows 로컬 DNS가 이전 NXDOMAIN을 보관하면 다음으로 확인한다.
 

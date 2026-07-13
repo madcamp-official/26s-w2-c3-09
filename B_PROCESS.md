@@ -442,3 +442,12 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - worker: EC2 IAM role credential chain, 완전한 static credential pair, 불완전 pair 거절 3 tests 통과.
 - Flutter: `flutter analyze` 0건, 23 tests 통과.
 - 배포 bootstrap은 bucket과 EC2 IAM role 또는 완전한 static credential pair가 함께 확인될 때만 worker를 켠다. 그 전에는 `UNCONFIGURED` 정지를 유지한다.
+
+## 2026-07-13 — Private S3와 lifecycle worker 활성화
+
+- Private S3 bucket과 `HouseMouseEc2S3Role`을 연결하고 장기 access key 없이 AWS SDK default credential chain을 사용했다.
+- 첫 권한 검사에서 identity policy 누락을 `s3:ListBucket`, `s3:PutObject` `AccessDenied`로 확인했다. 반쪽 설정을 유지하지 않고 server 환경을 즉시 `UNCONFIGURED`로 복원하고 worker를 정지했다.
+- 최소 권한 policy 수정 후 `transfers/` prefix에서 LIST → PUT → HEAD → GET → DELETE와 삭제 후 404를 실제 검증했다. 임시 object와 검사 스크립트는 모두 삭제했다.
+- Worker 첫 운영 시작에서 `tsx` CJS 변환이 top-level `await`를 거절하는 문제를 발견했다. 진입점을 명시적 `start()` 함수로 감싸 `2902a88`에 수정·배포했다.
+- Worker는 수정 후 30초 주기를 두 번 이상 통과해 `active`를 유지했고 최근 warning/error가 없었다. API도 `/health=ok`, `/ready=ready`를 유지한다.
+- 원시 object 연산과 worker 기동은 완료됐지만, A FileTransfer를 통한 upload/download/checksum/ACK/TTL 삭제 전체 흐름은 아직 다음 E2E 대상이다.

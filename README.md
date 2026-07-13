@@ -119,7 +119,7 @@ Tauri Desktop
 - P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
 - worker, AWS EC2 systemd/Nginx 구성, Render blueprint, backup/restore 및 안전 문서
 
-AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`까지 운영 검증됐다. 실제 private S3 bucket/IAM role이 없어 object lifecycle worker는 정지 상태이며, Rive asset, Android release keystore, Sentry가 없는 기능도 `UNCONFIGURED` 또는 검증 대기 상태다.
+AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`까지 운영 검증됐다. Private S3 bucket과 최소 권한 EC2 IAM role의 LIST/PUT/HEAD/GET/DELETE를 검증했고 object lifecycle worker도 운영 중이다. Rive asset, Android release keystore, Sentry가 없는 기능은 계속 `UNCONFIGURED` 또는 검증 대기 상태다.
 
 ### Phase별 판정
 
@@ -129,10 +129,10 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | 1 로그인·페어링·Presence | REST 경로 구현 | 실제 mobile claim E2E와 Socket.IO 알림 client |
 | 2 관리 폴더·스캔·청결도 | room 등록 연결 | 실제 snapshot 동기화 |
 | 3 규칙·명령·제안 | 양쪽 코드 구현, 통합 전 | 서버 command를 Rust proposal로 변환해 왕복 |
-| 4 실행·Undo·README·파일 전달 | 부분 구현 | README와 A FileTransfer, 실제 storage E2E |
+| 4 실행·Undo·README·파일 전달 | private S3 object 연산 검증 | README와 A FileTransfer를 통한 실제 전송·TTL E2E |
 | 5 캐릭터·채팅 | skeleton/metadata | Rive asset, 실제 overlay window, AI provider 선택 |
 | 6 오프라인·재접속 | Desktop cursor/replay 구현 | durable outbox, Socket.IO 재접속과 reconnect E2E |
-| 7 하드닝·배포 | EC2 Nginx·HTTPS·systemd API·PostgreSQL·Valkey 운영 검증 | S3 worker, updater, release signing |
+| 7 하드닝·배포 | EC2 API·PostgreSQL·Valkey·private S3 worker 운영 검증 | updater, release signing |
 | 8 P1 스마트 캐시 | B control plane만 선행 | P0 안정화 뒤 A usage scoring/upload/stale 처리 |
 
 ## 검증 기록 (`2026-07-13`)
@@ -157,6 +157,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | Android ↔ server | SM S901N `adb reverse` 연결, devices/rooms/presence API `200` 확인 |
 | Managed root ↔ mobile room | Desktop `POST /v1/rooms` `201`, 자동 동기화 계약 test 통과 |
 | AWS production | DNS·TLS·HTTP→HTTPS·`/health=ok`·`/ready=ready` 통과, 3000·5432·6379 외부 차단 |
+| AWS S3 production | EC2 IAM role로 LIST·PUT·HEAD·GET·DELETE 및 삭제 후 404 통과, worker 30초 주기 무오류 실행 |
 
 CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 Tauri feature check를 실행한다.
 
@@ -166,8 +167,8 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 2. Socket.IO는 새 데이터 알림으로만 연결하고, 실패 시 현재 REST cursor replay로 복구한다. 전송 실패 event는 SQLite durable outbox에 적재한다.
 3. 첫 P0 vertical slice(command → proposal → mobile approval → journaled execute → result → undo)를 한 managed root로 연결한다.
 4. A의 FileTransfer validation/chunk/SHA-256/cancel/source-change를 B의 transfer session에 연결한다.
-5. AWS EC2 API 배포는 완료됐다. private S3 bucket과 최소 권한 IAM role을 연결한 뒤 worker를 활성화한다.
-6. 실제 private S3 bucket에서 IAM role로 PUT/HEAD/GET/delete/TTL lifecycle E2E를 수행한다.
+5. AWS EC2 API·private S3·IAM role·worker 배포는 완료됐다. A FileTransfer와 연결해 upload/download/checksum/ACK/TTL 삭제 E2E를 수행한다.
+6. 실제 전송 E2E가 안정화되면 cache object의 quota/reservation/delete lifecycle을 검증한다.
 7. updater와 Windows release signing을 마무리한다.
 8. Rive·FCM·Sentry를 마무리한다. P1 스마트 캐시는 두 P0 slice가 안정화된 뒤 진행한다.
 

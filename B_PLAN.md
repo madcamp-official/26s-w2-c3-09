@@ -389,6 +389,8 @@ Firebase
 
 이 값이 없을 때는 fake provider나 debug signing fallback을 추가하지 않는다. 해당 기능은 차단 상태로 유지하고 필요한 입력과 검증하지 못한 범위를 문서에 기록한다.
 
+2026-07-13 기준 5번의 private AWS S3 bucket·EC2 IAM role object 접근과 7번의 AWS EC2 API/worker 배포는 제공·검증됐다. S3 bucket lifecycle 정책과 실제 FileTransfer TTL 삭제 E2E는 아직 별도 검증 대상이다.
+
 ## 6. 기본 시연 범위
 
 - 플랫폼: Android + Windows Desktop
