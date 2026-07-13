@@ -6,7 +6,8 @@ use file_engine_cli::fs_safety::is_link_or_reparse_point;
 use file_engine_cli::path_guard::{PathGuard, PathGuardError};
 
 use crate::agent::{
-    AgentFileTransfer, AgentFileTransferFailureCode, AgentFileTransferSourceVersion, AgentRuntime,
+    AgentFileTransfer, AgentFileTransferFailureCode, AgentFileTransferSourceVersion,
+    AgentFileTransferUploadTarget, AgentRuntime,
 };
 use crate::storage::managed_roots::ManagedRootStore;
 
@@ -23,6 +24,82 @@ pub struct ValidatedTransferSource {
 pub struct TransferSourceValidationError {
     pub failure_code: AgentFileTransferFailureCode,
     pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedTransferUpload {
+    pub source: ValidatedTransferSource,
+    pub upload_target: AgentFileTransferUploadTarget,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransferUploadPreparationError {
+    pub transfer_id: String,
+    pub failure_code: Option<AgentFileTransferFailureCode>,
+    pub failure_reported: bool,
+    pub message: String,
+}
+
+pub async fn prepare_upload_target_for_transfer(
+    agent: &AgentRuntime,
+    roots: &ManagedRootStore,
+    transfer: &AgentFileTransfer,
+) -> Result<PreparedTransferUpload, TransferUploadPreparationError> {
+    if transfer.status != "REQUESTED" {
+        return Err(TransferUploadPreparationError {
+            transfer_id: transfer.transfer_id.clone(),
+            failure_code: None,
+            failure_reported: false,
+            message: format!("file transfer is not pending: {}", transfer.status),
+        });
+    }
+
+    let source = match validate_transfer_source_for_request(agent, roots, transfer).await {
+        Ok(source) => source,
+        Err(error) => {
+            let failure_reported = agent
+                .fail_file_transfer(transfer.transfer_id.clone(), error.failure_code.clone())
+                .await
+                .is_ok();
+            return Err(TransferUploadPreparationError {
+                transfer_id: transfer.transfer_id.clone(),
+                failure_code: Some(error.failure_code),
+                failure_reported,
+                message: error.message,
+            });
+        }
+    };
+
+    let upload_target = match agent
+        .request_file_transfer_upload_target(
+            transfer.transfer_id.clone(),
+            source.source_version.clone(),
+        )
+        .await
+    {
+        Ok(upload_target) => upload_target,
+        Err(error) => {
+            let failure_code = upload_target_failure_code(&error.message);
+            let failure_reported = match failure_code.clone() {
+                Some(code) => agent
+                    .fail_file_transfer(transfer.transfer_id.clone(), code)
+                    .await
+                    .is_ok(),
+                None => false,
+            };
+            return Err(TransferUploadPreparationError {
+                transfer_id: transfer.transfer_id.clone(),
+                failure_code,
+                failure_reported,
+                message: error.to_string(),
+            });
+        }
+    };
+
+    Ok(PreparedTransferUpload {
+        source,
+        upload_target,
+    })
 }
 
 pub async fn validate_transfer_source_for_request(
@@ -116,6 +193,14 @@ pub fn validate_local_transfer_source(
         resolved_path: resolved,
         source_version,
     })
+}
+
+fn upload_target_failure_code(message: &str) -> Option<AgentFileTransferFailureCode> {
+    if message.contains("SIZE_LIMIT_EXCEEDED") {
+        Some(AgentFileTransferFailureCode::SizeLimitExceeded)
+    } else {
+        None
+    }
 }
 
 fn validate_relative_path_shape(path: &str) -> Result<(), TransferSourceValidationError> {
@@ -248,8 +333,12 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{unix_ms_to_rfc3339, validate_local_transfer_source};
-    use crate::agent::AgentFileTransferFailureCode;
+    use super::{
+        prepare_upload_target_for_transfer, unix_ms_to_rfc3339, upload_target_failure_code,
+        validate_local_transfer_source,
+    };
+    use crate::agent::{AgentFileTransfer, AgentFileTransferFailureCode, AgentRuntime};
+    use crate::storage::managed_roots::ManagedRootStore;
 
     #[test]
     fn validates_existing_file_and_builds_source_version() {
@@ -361,6 +450,39 @@ mod tests {
             error.failure_code,
             AgentFileTransferFailureCode::OutsideManagedRoot
         );
+    }
+
+    #[tokio::test]
+    async fn skips_non_requested_transfer_before_network_or_filesystem_work() {
+        let agent = AgentRuntime::default();
+        let roots = ManagedRootStore::default();
+        let transfer = AgentFileTransfer {
+            transfer_id: "transfer-1".to_string(),
+            room_id: "room-1".to_string(),
+            source_relative_path: "docs/report.pdf".to_string(),
+            status: "UPLOADING".to_string(),
+            expires_at: "2026-07-13T00:00:00.000Z".to_string(),
+            size_bytes: None,
+            sha256: None,
+            failure_code: None,
+        };
+
+        let error = prepare_upload_target_for_transfer(&agent, &roots, &transfer)
+            .await
+            .expect_err("non-requested transfer is skipped");
+
+        assert!(error.failure_code.is_none());
+        assert!(!error.failure_reported);
+        assert!(error.message.contains("not pending"));
+    }
+
+    #[test]
+    fn maps_size_limit_upload_target_rejection_to_transfer_failure_code() {
+        assert_eq!(
+            upload_target_failure_code("TRANSPORT_UNAVAILABLE: SIZE_LIMIT_EXCEEDED"),
+            Some(AgentFileTransferFailureCode::SizeLimitExceeded)
+        );
+        assert_eq!(upload_target_failure_code("UNCONFIGURED"), None);
     }
 
     #[test]
