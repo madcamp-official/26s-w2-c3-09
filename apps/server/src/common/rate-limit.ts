@@ -3,8 +3,14 @@ import type { FastifyInstance } from 'fastify';
 import Redis from 'ioredis';
 
 const WINDOW_SECONDS = 60;
+const PAIRING_STATUS_PATH = /^\/v1\/pairing-sessions\/[^/]+\/status\/?$/;
 
-export function requestLimit(path: string) {
+function isPairingStatusRequest(method: string, path: string) {
+  return method.toUpperCase() === 'GET' && PAIRING_STATUS_PATH.test(path);
+}
+
+export function requestLimit(path: string, method = 'GET') {
+  if (isPairingStatusRequest(method, path)) return 60;
   if (path.startsWith('/v1/pairing-sessions')) return 10;
   if (path.includes('/file-transfers')) return 30;
   return 120;
@@ -15,13 +21,16 @@ export function rateLimitKey(
   ip: string,
   path: string,
   window: number,
+  method = 'GET',
 ) {
   const subject = createHmac('sha256', secret).update(ip).digest('hex');
-  const scope = path.startsWith('/v1/pairing-sessions')
-    ? 'pairing'
-    : path.includes('/file-transfers')
-      ? 'transfers'
-      : 'api';
+  const scope = isPairingStatusRequest(method, path)
+    ? 'pairing-status'
+    : path.startsWith('/v1/pairing-sessions')
+      ? 'pairing'
+      : path.includes('/file-transfers')
+        ? 'transfers'
+        : 'api';
   return `rate-limit:${scope}:${window}:${subject}`;
 }
 
@@ -34,9 +43,9 @@ export async function registerRateLimit(
   server.addHook('onRequest', async (request, reply) => {
     const path = request.url.split('?', 1)[0] ?? request.url;
     if (path === '/health') return;
-    const limit = requestLimit(path);
+    const limit = requestLimit(path, request.method);
     const window = Math.floor(Date.now() / (WINDOW_SECONDS * 1000));
-    const key = rateLimitKey(secret, request.ip, path, window);
+    const key = rateLimitKey(secret, request.ip, path, window, request.method);
     const result = await redis
       .multi()
       .incr(key)

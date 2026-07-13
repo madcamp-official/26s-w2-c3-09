@@ -37,7 +37,7 @@ import {
 } from "../character/characterMotion";
 
 const backgroundRefreshIntervalMs = 15_000;
-const pairingPollIntervalMs = 10_000;
+const pairingPollIntervalMs = 2_000;
 
 const connectionStateLabels: Record<string, string> = {
   unconfigured: "페어링 필요",
