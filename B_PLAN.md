@@ -7,7 +7,7 @@
 최종 완료 기준은 다음과 같다.
 
 - Android ↔ Server ↔ Desktop P0 핵심 흐름을 실제 환경에서 시연한다.
-- Firebase 인증·FCM, private object storage, Render 배포를 실제 설정으로 검증한다.
+- Firebase 인증·FCM, private object storage, AWS EC2 배포를 실제 설정으로 검증한다.
 - P0 파일 탐색·다운로드·checksum·TTL 삭제를 완료한다.
 - P1 스마트 캐시의 opt-in·quota·암호화·freshness·삭제 보장을 완료한다.
 - signed Android AAB와 반복 가능한 E2E·발표 문서를 완성한다.
@@ -302,9 +302,10 @@ Firebase
 
 ### 7단계 — 배포·Release·관측
 
-#### 7.1 Render 배포
+#### 7.1 AWS EC2 배포
 
-- PostgreSQL, Redis, server, worker를 배포한다.
+- PostgreSQL, Redis/Valkey, server, worker를 EC2 또는 같은 VPC의 관리형 서비스에 배포한다.
+- Nginx가 loopback의 API를 proxy하고 TLS 인증서로 443을 제공하도록 구성한다.
 - migration은 배포 전 단일 실행으로 적용한다.
 - readiness가 DB와 Redis 의존성을 실제 확인하도록 한다.
 - production CORS와 WebSocket origin을 허용된 origin으로 제한한다.
@@ -354,7 +355,7 @@ Firebase
 #### 문서와 발표 자료
 
 - 루트 README에 주제, 역할, 일정, 구조도, API, 실행법, 기술 스택을 작성한다.
-- Firebase, object storage, Render, Android release 설정 절차를 작성한다.
+- Firebase, object storage, AWS EC2, Android release 설정 절차를 작성한다.
 - 정상 흐름과 주요 실패 흐름의 데모 영상 또는 캡처를 준비한다.
 - B 담당 구현과 A 연동 경계를 명시한다.
 - 외부 설정이 없어 검증하지 못한 항목은 `UNCONFIGURED` 또는 차단 상태로 정확히 기록한다.
@@ -383,7 +384,7 @@ Firebase
 4. 실제 Rive asset과 artboard/state machine/input 명세
 5. Private S3-compatible endpoint, bucket, credentials, encryption/lifecycle 정책
 6. Android release keystore path, alias, password
-7. Render 운영 권한과 production secret
+7. AWS EC2 운영 권한, IAM role과 production secret
 8. Sentry project와 DSN
 
 이 값이 없을 때는 fake provider나 debug signing fallback을 추가하지 않는다. 해당 기능은 차단 상태로 유지하고 필요한 입력과 검증하지 못한 범위를 문서에 기록한다.

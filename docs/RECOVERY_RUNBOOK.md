@@ -6,7 +6,7 @@
 
 1. `pnpm typecheck`, `pnpm test`, `pnpm build`를 통과시킨다.
 2. `flutter analyze`, `flutter test`와 Android release signing 설정을 확인한다.
-3. Render secret에 Firebase service account, object storage, `WEB_ORIGIN`을 입력한다.
+3. EC2의 root 소유 환경 파일 또는 AWS secret 주입 절차로 Firebase service account, object storage, `WEB_ORIGIN`을 입력한다.
 4. `SMART_CACHE_ENABLED=false`를 P0 기본값으로 유지한다.
 5. pre-deploy migration이 성공한 뒤에만 새 server/worker를 시작한다.
 6. `/health` liveness와 PostgreSQL·Valkey를 직접 확인하는 `/ready` readiness, worker deletion job 처리를 확인한다.
