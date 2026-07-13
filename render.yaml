@@ -37,14 +37,6 @@ services:
         value: "104857600"
       - key: FILE_TRANSFER_TTL_SECONDS
         value: "600"
-      - key: FCM_ENABLED
-        value: "false"
-      - key: FIREBASE_PROJECT_ID
-        sync: false
-      - key: FIREBASE_CLIENT_EMAIL
-        sync: false
-      - key: FIREBASE_PRIVATE_KEY
-        sync: false
       - key: SMART_CACHE_ENABLED
         value: "false"
       - key: SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES
@@ -83,6 +75,14 @@ services:
         sync: false
       - key: FILE_TRANSFER_TTL_SECONDS
         value: "600"
+      - key: FCM_ENABLED
+        value: "false"
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
 
   - type: keyvalue
     name: housemouse-key-value
