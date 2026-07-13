@@ -1,5 +1,5 @@
 {
-  "name": "@housemouse/contracts",
+  "name": "@mousekeeper/contracts",
   "version": "0.1.0",
   "private": true,
   "type": "commonjs",

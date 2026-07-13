@@ -9,8 +9,8 @@ use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-const SERVER_BASE_URL_ENV: &str = "HOUSEMOUSE_SERVER_BASE_URL";
-const KEYRING_SERVICE: &str = "com.housemouse.desktop";
+const SERVER_BASE_URL_ENV: &str = "MOUSEKEEPER_SERVER_BASE_URL";
+const KEYRING_SERVICE: &str = "com.mousekeeper.desktop";
 const KEYRING_ACCOUNT: &str = "device-token";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -1344,7 +1344,7 @@ impl AgentRuntime {
     {
         let response = request.send().await.map_err(|_| AgentError {
             code: AgentErrorCode::TransportUnavailable,
-            message: "cannot reach the HouseMouse server".to_string(),
+            message: "cannot reach the MouseKeeper server".to_string(),
         })?;
         let status = response.status();
         if !status.is_success() {
@@ -1360,7 +1360,7 @@ impl AgentRuntime {
     async fn send_empty(&self, request: reqwest::RequestBuilder) -> Result<(), AgentError> {
         let response = request.send().await.map_err(|_| AgentError {
             code: AgentErrorCode::TransportUnavailable,
-            message: "cannot reach the HouseMouse server".to_string(),
+            message: "cannot reach the MouseKeeper server".to_string(),
         })?;
         let status = response.status();
         if !status.is_success() {
@@ -2197,7 +2197,7 @@ fn http_error(status: StatusCode, server_error: Option<ServerErrorResponse>) -> 
     };
     let message = server_error
         .and_then(|body| body.message.or(body.code))
-        .unwrap_or_else(|| format!("HouseMouse server request failed with HTTP {status}"));
+        .unwrap_or_else(|| format!("MouseKeeper server request failed with HTTP {status}"));
     AgentError { code, message }
 }
 
@@ -2363,7 +2363,7 @@ mod tests {
             credential: Mutex::new(Some(DeviceCredential {
                 server_base_url: "http://127.0.0.1:3000".to_string(),
                 device_id: "device-1".to_string(),
-                device_token: "hm_device_secret".to_string(),
+                device_token: "mk_device_secret".to_string(),
             })),
         };
         let paired = AgentRuntime::for_test(Some("http://127.0.0.1:3000"), Arc::new(store));
@@ -2371,7 +2371,7 @@ mod tests {
             .realtime_credentials()
             .expect("paired runtime exposes realtime credentials");
         assert_eq!(credentials.base_url, "http://127.0.0.1:3000");
-        assert_eq!(credentials.device_token, "hm_device_secret");
+        assert_eq!(credentials.device_token, "mk_device_secret");
     }
 
     #[test]
@@ -2452,7 +2452,7 @@ mod tests {
     async fn claimed_pairing_is_saved_without_returning_the_token() {
         let (server_url, server) = one_shot_json_server(
             "/v1/pairing-sessions/session-1/status?nonce=nonce-1",
-            r#"{"status":"CLAIMED","deviceId":"device-1","deviceToken":"hm_device_secret"}"#,
+            r#"{"status":"CLAIMED","deviceId":"device-1","deviceToken":"mk_device_secret"}"#,
             |request| {
                 assert!(request.starts_with(
                     "GET /v1/pairing-sessions/session-1/status?nonce=nonce-1 HTTP/1.1"
@@ -2471,14 +2471,14 @@ mod tests {
         assert_eq!(status.device_id.as_deref(), Some("device-1"));
         assert!(!serde_json::to_string(&status)
             .expect("status json")
-            .contains("hm_device_secret"));
+            .contains("mk_device_secret"));
         assert_eq!(
             store
                 .load()
                 .expect("credential")
                 .expect("saved")
                 .device_token,
-            "hm_device_secret"
+            "mk_device_secret"
         );
     }
 

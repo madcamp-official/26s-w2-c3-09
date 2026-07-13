@@ -7,8 +7,8 @@ import {
   Patch,
   UseGuards,
 } from '@nestjs/common';
-import { updateCharacterSchema } from '@housemouse/contracts';
-import { characterProfiles, type Database } from '@housemouse/database';
+import { updateCharacterSchema } from '@mousekeeper/contracts';
+import { characterProfiles, type Database } from '@mousekeeper/database';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';

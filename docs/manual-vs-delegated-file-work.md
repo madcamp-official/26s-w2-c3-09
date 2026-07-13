@@ -1,6 +1,6 @@
 # Manual vs Delegated File Work
 
-HOUSEMOUSE desktop has two file-operation modes. They must stay separate.
+MOUSEKEEPER desktop has two file-operation modes. They must stay separate.
 
 ## Manual Tools
 
@@ -48,7 +48,7 @@ The desktop-local "Auto approve proposals" policy (`apps/desktop/src-tauri/src/s
 
 The three file actions are normalized so a manual operation and its delegated equivalent behave identically at the journal layer, and so create/write can never be delegated:
 
-- **Trash → `QUARANTINE`.** Both the manual `trash_file` and a proposal-executed trash go through the same `file_engine_cli::trash::trash_file`, so both write the identical recoverable layout (`.housemouse_trash/<op>/file` plus an `original.json` sidecar) and journal a `Trash` action. `command_processor.rs` maps local `Trash → QUARANTINE`; `execution_processor.rs` maps `QUARANTINE → Trash`. Verified by `execute::tests::proposal_trash_matches_direct_trash_on_disk_structure`.
+- **Trash → `QUARANTINE`.** Both the manual `trash_file` and a proposal-executed trash go through the same `file_engine_cli::trash::trash_file`, so both write the identical recoverable layout (`.mousekeeper_trash/<op>/file` plus an `original.json` sidecar) and journal a `Trash` action. `command_processor.rs` maps local `Trash → QUARANTINE`; `execution_processor.rs` maps `QUARANTINE → Trash`. Verified by `execute::tests::proposal_trash_matches_direct_trash_on_disk_structure`.
 - **Rename → `MOVE`.** A rename is a move whose destination is a sibling of the source (`folder/old.txt -> folder/new.txt`). The manual `rename_file` already journals a `Move`, and a delegated rename arrives as a `MOVE` proposal item that `execution_processor.rs` executes through the same move path — so both are journaled as `Move` and stay undoable. No separate rename action exists. Verified by `execution_processor::tests::delegated_rename_executes_as_a_journaled_move`.
 - **Create is manual-only.** `create_file` is a local manual tool. `CREATE_DIR` remains refused for delegated execution. The only delegated write exception is `README_WRITE`, which is constrained to root-level `README.md`, requires approved content in the proposal snapshot, rechecks the live README precondition, journals before writing, and stays undoable. Arbitrary delegated writes remain outside the MVP. Verified by `execution_processor::tests::delegated_create_dir_is_refused` and `execution_processor::tests::delegated_readme_write_executes_and_stays_undoable`.
 

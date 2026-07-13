@@ -93,7 +93,7 @@ pub fn watch_root_changes(
     })
 }
 
-/// Ignores events where every touched path is inside HouseMouse bookkeeping folders:
+/// Ignores events where every touched path is inside MouseKeeper bookkeeping folders:
 /// journal writes and trash metadata should not themselves look like user file changes.
 fn is_relevant(event: &Event) -> bool {
     event.paths.iter().any(|path| {
@@ -228,10 +228,10 @@ mod tests {
     }
 
     #[test]
-    fn ignores_changes_confined_to_the_housemouse_state_dir() {
+    fn ignores_changes_confined_to_the_mousekeeper_state_dir() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
-        let state_dir = root.join(".housemouse");
+        let state_dir = root.join(".mousekeeper");
         fs::create_dir_all(&state_dir).expect("create state dir");
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -254,13 +254,13 @@ mod tests {
     }
 
     #[test]
-    fn ignores_events_confined_to_the_housemouse_trash_dir() {
+    fn ignores_events_confined_to_the_mousekeeper_trash_dir() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         let event = Event::new(EventKind::Modify(ModifyKind::Data(
             notify::event::DataChange::Content,
         )))
-        .add_path(root.join(".housemouse_trash").join("trash-1").join("file"));
+        .add_path(root.join(".mousekeeper_trash").join("trash-1").join("file"));
 
         assert!(!is_relevant(&event));
     }

@@ -1,8 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/core/sync/mutation_queue.dart';
-import 'package:housemouse/storage/app_database.dart';
+import 'package:mousekeeper/core/sync/mutation_queue.dart';
+import 'package:mousekeeper/storage/app_database.dart';
 
 void main() {
   late AppDatabase database;

@@ -1,4 +1,4 @@
-# HOUSEMOUSE 운영·복구 Runbook
+# MOUSEKEEPER 운영·복구 Runbook
 
 이 문서는 B 담당 영역인 API, worker, PostgreSQL, Valkey, object storage의 배포와 복구 절차를 정의한다. 실제 secret이나 사용자 파일 경로는 문서와 로그에 기록하지 않는다.
 
@@ -15,19 +15,19 @@
 
 ## PostgreSQL 백업
 
-AWS EC2에서는 root만 읽을 수 있는 `/var/backups/housemouse`에 매일 custom-format backup을 만든다. systemd timer의 최근 실행과 다음 실행 시각은 다음처럼 확인한다.
+AWS EC2에서는 root만 읽을 수 있는 `/var/backups/mousekeeper`에 매일 custom-format backup을 만든다. systemd timer의 최근 실행과 다음 실행 시각은 다음처럼 확인한다.
 
 ```bash
-sudo systemctl list-timers housemouse-postgres-backup.timer
-sudo systemctl status housemouse-postgres-backup.service --no-pager
+sudo systemctl list-timers mousekeeper-postgres-backup.timer
+sudo systemctl status mousekeeper-postgres-backup.service --no-pager
 ```
 
 수동 백업과 운영 DB를 변경하지 않는 임시 DB 복원 훈련은 다음 순서다. 복원 훈련은 필수 schema를 확인한 뒤 임시 DB를 항상 삭제한다.
 
 ```bash
-sudo /usr/local/sbin/housemouse-backup-postgres
-sudo /usr/local/sbin/housemouse-restore-postgres-drill \
-  /var/backups/housemouse/housemouse-<UTC timestamp>.dump
+sudo /usr/local/sbin/mousekeeper-backup-postgres
+sudo /usr/local/sbin/mousekeeper-restore-postgres-drill \
+  /var/backups/mousekeeper/mousekeeper-<UTC timestamp>.dump
 ```
 
 이 백업은 EC2 EBS 장애까지 보호하는 off-instance backup이 아니다. 별도 암호화 백업 저장소와 권한이 확정되기 전에는 외부 업로드를 성공으로 가장하지 않는다.

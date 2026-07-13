@@ -9,7 +9,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePo
 
 use crate::journal::STATE_DIR;
 
-pub const DB_FILE: &str = "housemouse.db";
+pub const DB_FILE: &str = "mousekeeper.db";
 
 /// The engine's public API is synchronous, but sqlx is async. Rather than turn every
 /// analyze/propose/execute/undo signature async (and force tokio on the CLI and the Tauri
@@ -72,7 +72,7 @@ pub fn open_pool_at(db_path: &Path) -> Result<SqlitePool, DbError> {
 }
 
 /// Opens (creating if needed) the per-root SQLite database and applies the file-engine schema.
-/// Each root carries its own `.housemouse/housemouse.db`, matching how the journal already
+/// Each root carries its own `.mousekeeper/mousekeeper.db`, matching how the journal already
 /// lives inside the managed root rather than in a shared app-level file.
 pub fn open_root_db(root: &Path) -> Result<SqlitePool, DbError> {
     let db_path = db_path_for_root(root);

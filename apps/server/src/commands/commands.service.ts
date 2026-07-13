@@ -8,8 +8,8 @@ import {
 import {
   createCommandSchema,
   updateCommandStatusSchema,
-} from '@housemouse/contracts';
-import { commands, devices, rooms, type Database } from '@housemouse/database';
+} from '@mousekeeper/contracts';
+import { commands, devices, rooms, type Database } from '@mousekeeper/database';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module';

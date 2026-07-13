@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/core/observability/sentry_privacy.dart';
+import 'package:mousekeeper/core/observability/sentry_privacy.dart';
 import 'package:sentry_flutter/sentry_flutter.dart';
 
 void main() {

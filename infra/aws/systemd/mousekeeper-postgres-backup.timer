@@ -1,11 +1,11 @@
 [Unit]
-Description=Run HOUSEMOUSE PostgreSQL backup daily
+Description=Run MOUSEKEEPER PostgreSQL backup daily
 
 [Timer]
 OnCalendar=*-*-* 03:20:00 UTC
 RandomizedDelaySec=30m
 Persistent=true
-Unit=housemouse-postgres-backup.service
+Unit=mousekeeper-postgres-backup.service
 
 [Install]
 WantedBy=timers.target

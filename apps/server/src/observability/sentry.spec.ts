@@ -23,7 +23,7 @@ describe('Sentry privacy boundary', () => {
               frames: [
                 {
                   filename: 'main.ts',
-                  abs_path: '/opt/housemouse/apps/server/main.ts',
+                  abs_path: '/opt/mousekeeper/apps/server/main.ts',
                   vars: { token: 'secret' },
                 },
               ],
@@ -37,7 +37,7 @@ describe('Sentry privacy boundary', () => {
     expect(encoded).not.toContain('private-token');
     expect(encoded).not.toContain('secret.txt');
     expect(encoded).not.toContain('private file content');
-    expect(encoded).not.toContain('/opt/housemouse');
+    expect(encoded).not.toContain('/opt/mousekeeper');
     expect(scrubbed.message).toContain('[REDACTED_PATH]');
   });
 });

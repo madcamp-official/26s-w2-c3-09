@@ -7,7 +7,7 @@ import {
   rooms,
   syncEvents,
   users,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { SyncService } from '../sync/sync.service';
@@ -23,7 +23,7 @@ const describeObjectStorage =
   databaseUrl &&
   redisUrl &&
   hasObjectStorage &&
-  process.env.HOUSEMOUSE_RUN_OBJECT_STORAGE_E2E === 'true'
+  process.env.MOUSEKEEPER_RUN_OBJECT_STORAGE_E2E === 'true'
     ? describe
     : describe.skip;
 
@@ -87,7 +87,7 @@ describeObjectStorage('FileTransfer production object lifecycle', () => {
 
   it('uploads, verifies, downloads, acknowledges, and deletes the object', async () => {
     const content = Buffer.from(
-      `housemouse-transfer-object-e2e:${randomUUID()}`,
+      `mousekeeper-transfer-object-e2e:${randomUUID()}`,
       'utf8',
     );
     const sha256 = createHash('sha256').update(content).digest('hex');

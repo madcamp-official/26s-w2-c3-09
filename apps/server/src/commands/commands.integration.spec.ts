@@ -6,15 +6,15 @@ import {
   rooms,
   syncEvents,
   users,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { eq } from 'drizzle-orm';
-import { eventEnvelopeSchema } from '@housemouse/contracts';
+import { eventEnvelopeSchema } from '@mousekeeper/contracts';
 import { CommandsService } from './commands.service';
 import { SyncService } from '../sync/sync.service';
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeDatabase =
-  databaseUrl && process.env.HOUSEMOUSE_RUN_DB_TESTS === 'true'
+  databaseUrl && process.env.MOUSEKEEPER_RUN_DB_TESTS === 'true'
     ? describe
     : describe.skip;
 

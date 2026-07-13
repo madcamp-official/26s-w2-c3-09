@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { createProposalSchema } from '@housemouse/contracts';
+import { createProposalSchema } from '@mousekeeper/contracts';
 import {
   auditEvents,
   commands,
@@ -14,7 +14,7 @@ import {
   proposals,
   rooms,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module';

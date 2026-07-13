@@ -1,6 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/features/files/files_page.dart';
+import 'package:mousekeeper/features/files/files_page.dart';
 
 void main() {
   test('다음 페이지 실패 전에는 기존 READY page를 지우지 않는다', () {

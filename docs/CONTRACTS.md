@@ -1,6 +1,6 @@
 # Contracts
 
-Shared API and event contracts for HOUSEMOUSE.
+Shared API and event contracts for MOUSEKEEPER.
 
 ## Command Contract
 

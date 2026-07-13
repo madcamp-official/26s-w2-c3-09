@@ -1,4 +1,4 @@
-import { commandStatusSchema } from '@housemouse/contracts';
+import { commandStatusSchema } from '@mousekeeper/contracts';
 import { z } from 'zod';
 
 const commandSchema = z.object({ id: z.uuid(), intent: z.string(), payload: z.record(z.string(), z.unknown()), status: commandStatusSchema });

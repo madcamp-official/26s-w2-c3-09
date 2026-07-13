@@ -1,4 +1,4 @@
-import { commandStatusSchema } from '@housemouse/contracts';
+import { commandStatusSchema } from '@mousekeeper/contracts';
 import { z } from 'zod';
 type Status = z.infer<typeof commandStatusSchema>;
 

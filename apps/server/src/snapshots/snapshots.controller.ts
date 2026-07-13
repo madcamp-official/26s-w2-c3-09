@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
-import { createRoomSnapshotSchema } from '@housemouse/contracts';
+import { createRoomSnapshotSchema } from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { AgentOnly } from '../auth/agent-only.decorator';
 import { requireAgentDevice } from '../auth/agent-device';

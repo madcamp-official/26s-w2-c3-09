@@ -192,7 +192,7 @@ pub fn default_rule_set() -> RuleSet {
     }
 }
 
-/// Loads a root's rule set from `.housemouse/rules.json`, falling back to the default preset
+/// Loads a root's rule set from `.mousekeeper/rules.json`, falling back to the default preset
 /// when the file is absent. A present-but-invalid file is a hard error: we refuse to silently
 /// ignore user/LLM rules and fall back, since that would hide a real misconfiguration.
 pub fn load_rule_set_for_root(root: impl AsRef<Path>) -> Result<RuleSet, RuleError> {
@@ -418,7 +418,7 @@ mod tests {
     fn loads_and_validates_custom_rules_file() {
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path();
-        let state_dir = root.join(".housemouse");
+        let state_dir = root.join(".mousekeeper");
         std::fs::create_dir_all(&state_dir).expect("create state dir");
         std::fs::write(
             state_dir.join("rules.json"),
@@ -435,7 +435,7 @@ mod tests {
     fn invalid_rules_file_is_a_hard_error() {
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path();
-        let state_dir = root.join(".housemouse");
+        let state_dir = root.join(".mousekeeper");
         std::fs::create_dir_all(&state_dir).expect("create state dir");
         std::fs::write(
             state_dir.join("rules.json"),

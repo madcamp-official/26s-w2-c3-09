@@ -59,10 +59,10 @@ importers:
       '@fastify/cors':
         specifier: ^11.3.0
         version: 11.3.0
-      '@housemouse/contracts':
+      '@mousekeeper/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@housemouse/database':
+      '@mousekeeper/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@nestjs/common':
@@ -195,7 +195,7 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.1009.0
         version: 3.1084.0
-      '@housemouse/database':
+      '@mousekeeper/database':
         specifier: workspace:*
         version: link:../../packages/database
       '@sentry/node':
@@ -264,7 +264,7 @@ importers:
 
   tools/desktop-agent-simulator:
     dependencies:
-      '@housemouse/contracts':
+      '@mousekeeper/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       zod:

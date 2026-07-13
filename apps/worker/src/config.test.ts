@@ -3,9 +3,9 @@ import test from "node:test";
 import { loadWorkerConfig } from "./config";
 
 const base = {
-  DATABASE_URL: "postgresql://housemouse@localhost:5432/housemouse",
+  DATABASE_URL: "postgresql://mousekeeper@localhost:5432/mousekeeper",
   OBJECT_STORAGE_REGION: "ap-southeast-2",
-  OBJECT_STORAGE_BUCKET: "housemouse-private",
+  OBJECT_STORAGE_BUCKET: "mousekeeper-private",
   FILE_TRANSFER_TTL_SECONDS: "600",
   FCM_ENABLED: "false",
 };
@@ -28,7 +28,7 @@ test("worker accepts enabled FCM with a service account path", () => {
   const config = loadWorkerConfig({
     ...base,
     FCM_ENABLED: "true",
-    FIREBASE_SERVICE_ACCOUNT_PATH: "/etc/housemouse/firebase.json",
+    FIREBASE_SERVICE_ACCOUNT_PATH: "/etc/mousekeeper/firebase.json",
   });
   assert.equal(config.FCM_ENABLED, true);
 });

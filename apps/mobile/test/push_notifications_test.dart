@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/core/notifications/push_notifications.dart';
+import 'package:mousekeeper/core/notifications/push_notifications.dart';
 
 void main() {
   test('validated FCM data becomes a foreground notice', () {

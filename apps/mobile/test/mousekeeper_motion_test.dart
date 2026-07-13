@@ -1,49 +1,52 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/features/character/housemouse_motion.dart';
-import 'package:housemouse_character_assets/character_assets.dart';
+import 'package:mousekeeper/features/character/mousekeeper_motion.dart';
+import 'package:mousekeeper_character_assets/character_assets.dart';
 
 void main() {
   test('server character kinds map to the intended PNG motion', () {
     expect(
-      housemouseMotionForCharacterKind('WAITING_APPROVAL'),
-      HousemouseMotion.considering,
+      mousekeeperMotionForCharacterKind('WAITING_APPROVAL'),
+      MouseKeeperMotion.considering,
     );
-    expect(housemouseMotionForCharacterKind('SUCCESS'), HousemouseMotion.clean);
     expect(
-      housemouseMotionForCharacterKind('ERROR'),
-      HousemouseMotion.fighting,
+      mousekeeperMotionForCharacterKind('SUCCESS'),
+      MouseKeeperMotion.clean,
+    );
+    expect(
+      mousekeeperMotionForCharacterKind('ERROR'),
+      MouseKeeperMotion.fighting,
     );
   });
 
   test('offline takes priority over stale execution results', () {
-    final motion = housemouseMotionForHome(
+    final motion = mousekeeperMotionForHome(
       isOffline: false,
       presences: const ['OFFLINE'],
       executionStatuses: const ['SUCCEEDED'],
       hasPendingProposal: false,
       realtimeCharacterKind: 'SUCCESS',
     );
-    expect(motion, HousemouseMotion.sleeping);
+    expect(motion, MouseKeeperMotion.sleeping);
   });
 
   test('active execution and pending approval use live state motions', () {
     expect(
-      housemouseMotionForHome(
+      mousekeeperMotionForHome(
         isOffline: false,
         presences: const ['ONLINE_EXECUTING'],
         executionStatuses: const [],
         hasPendingProposal: false,
       ),
-      HousemouseMotion.working,
+      MouseKeeperMotion.working,
     );
     expect(
-      housemouseMotionForHome(
+      mousekeeperMotionForHome(
         isOffline: false,
         presences: const ['ONLINE_IDLE'],
         executionStatuses: const [],
         hasPendingProposal: true,
       ),
-      HousemouseMotion.considering,
+      MouseKeeperMotion.considering,
     );
   });
 }

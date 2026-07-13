@@ -36,7 +36,7 @@ describe('loadEnvironment', () => {
   });
 
   it('loads Firebase credentials from an external service account file', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'housemouse-firebase-'));
+    const directory = mkdtempSync(join(tmpdir(), 'mousekeeper-firebase-'));
     const path = join(directory, 'service-account.json');
     writeFileSync(
       path,

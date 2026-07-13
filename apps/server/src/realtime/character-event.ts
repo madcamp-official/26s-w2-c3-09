@@ -1,4 +1,4 @@
-import type { EventEnvelope } from '@housemouse/contracts';
+import type { EventEnvelope } from '@mousekeeper/contracts';
 
 type CharacterKind =
   'ANALYZING' | 'WAITING_APPROVAL' | 'WORKING' | 'SUCCESS' | 'ERROR';

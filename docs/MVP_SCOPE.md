@@ -1,6 +1,6 @@
-# HOUSEMOUSE MVP 범위
+# MOUSEKEEPER MVP 범위
 
-이 문서는 `HOUSEMOUSE_PLAN.md`의 B(Product & Cloud) 구현 경계를 짧게 고정한다. 파일 시스템 변경 엔진은 A 영역이고, B 영역은 사용자의 요청·승인·결과를 안전하게 전달하고 표시하는 control plane이다.
+이 문서는 `MOUSEKEEPER_PLAN.md`의 B(Product & Cloud) 구현 경계를 짧게 고정한다. 파일 시스템 변경 엔진은 A 영역이고, B 영역은 사용자의 요청·승인·결과를 안전하게 전달하고 표시하는 control plane이다.
 
 ## P0 출시 범위
 

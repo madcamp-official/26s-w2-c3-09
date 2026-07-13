@@ -1,6 +1,6 @@
 import type { AgentConnectionStatus, SyncEvent } from "../agent/agentApi";
 
-export type HousemouseMotion =
+export type MouseKeeperMotion =
   | "clean"
   | "considering"
   | "fighting"
@@ -10,7 +10,7 @@ export type HousemouseMotion =
   | "walk"
   | "working";
 
-export const housemouseMotionUrls: Record<HousemouseMotion, string> = {
+export const mousekeeperMotionUrls: Record<MouseKeeperMotion, string> = {
   clean: new URL("../../../../../packages/character-assets/mouse_clean.png", import.meta.url).href,
   considering: new URL(
     "../../../../../packages/character-assets/mouse_considering.png",
@@ -37,9 +37,9 @@ export function motionForAgent(input: {
   connection: AgentConnectionStatus | null;
   pairing: boolean;
   commandStatuses: string[];
-  replayMotion: HousemouseMotion | null;
+  replayMotion: MouseKeeperMotion | null;
   localError: boolean;
-}): HousemouseMotion {
+}): MouseKeeperMotion {
   const statuses = new Set(input.commandStatuses);
   if (statuses.has("FAILED")) return "fighting";
   if (statuses.has("ANALYZING") || statuses.has("WAITING_APPROVAL")) return "considering";
@@ -52,7 +52,7 @@ export function motionForAgent(input: {
   return "sleeping";
 }
 
-export function motionFromSyncEvents(events: SyncEvent[]): HousemouseMotion | null {
+export function motionFromSyncEvents(events: SyncEvent[]): MouseKeeperMotion | null {
   for (const event of [...events].reverse()) {
     const payload = asRecord(event.payload);
     if (event.event_type === "proposal.created") return "considering";

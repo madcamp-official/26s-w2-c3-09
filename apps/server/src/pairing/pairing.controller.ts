@@ -10,7 +10,7 @@ import {
 import {
   claimPairingSessionSchema,
   createPairingSessionSchema,
-} from '@housemouse/contracts';
+} from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';
 import type { AuthPrincipal } from '../auth/auth-principal';

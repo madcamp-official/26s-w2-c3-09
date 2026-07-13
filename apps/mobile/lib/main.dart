@@ -37,7 +37,7 @@ Future<void> _initializeAndRun({
     }
   }
   final app = ProviderScope(
-    child: HousemouseApp(configurationError: configurationError),
+    child: MouseKeeperApp(configurationError: configurationError),
   );
   runApp(sentryEnabled ? SentryWidget(child: app) : app);
 }

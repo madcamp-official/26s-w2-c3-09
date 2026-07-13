@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.local/contracts/events/command.schema.json",
+  "$id": "https://mousekeeper.local/contracts/events/command.schema.json",
   "title": "Command",
   "description": "Durable server-to-desktop command. A command requests analysis, browse, transfer, or approved execution; the desktop must still validate managed-root boundaries and live file preconditions before any local mutation.",
   "type": "object",

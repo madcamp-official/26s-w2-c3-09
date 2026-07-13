@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.local/contracts/events/file-browse.schema.json",
+  "$id": "https://mousekeeper.local/contracts/events/file-browse.schema.json",
   "title": "FileBrowseResult",
   "description": "Desktop-to-server response for a browse_files command. Entries expose managed-root-relative metadata only.",
   "type": "object",

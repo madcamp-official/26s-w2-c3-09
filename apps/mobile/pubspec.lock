@@ -480,13 +480,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.2"
-  housemouse_character_assets:
-    dependency: "direct main"
-    description:
-      path: "../../packages/character-assets"
-      relative: true
-    source: path
-    version: "0.1.0"
   http:
     dependency: transitive
     description:
@@ -615,6 +608,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.0"
+  mousekeeper_character_assets:
+    dependency: "direct main"
+    description:
+      path: "../../packages/character-assets"
+      relative: true
+    source: path
+    version: "0.1.0"
   native_toolchain_c:
     dependency: transitive
     description:

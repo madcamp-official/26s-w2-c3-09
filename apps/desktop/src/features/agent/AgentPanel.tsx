@@ -29,8 +29,8 @@ import {
   updateAgentCommandStatus
 } from "./agentApi";
 import {
-  HousemouseMotion,
-  housemouseMotionUrls,
+  MouseKeeperMotion,
+  mousekeeperMotionUrls,
   motionForAgent,
   motionFromSyncEvents
 } from "../character/characterMotion";
@@ -42,13 +42,13 @@ const pairingPollIntervalMs = 10_000;
 export function AgentPanel() {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
   const [background, setBackground] = useState<BackgroundRuntimeStatus | null>(null);
-  const [deviceName, setDeviceName] = useState("HouseMouse Desktop");
+  const [deviceName, setDeviceName] = useState("MouseKeeper Desktop");
   const [pairing, setPairing] = useState<PairingSession | null>(null);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
   const [smartCacheRoomId, setSmartCacheRoomId] = useState("");
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
-  const [replayMotion, setReplayMotion] = useState<HousemouseMotion | null>(null);
+  const [replayMotion, setReplayMotion] = useState<MouseKeeperMotion | null>(null);
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
@@ -376,13 +376,13 @@ export function AgentPanel() {
         <div className="mascot-heading">
           <img
             className={`mascot-image motion-${mascotMotion}`}
-            src={housemouseMotionUrls[mascotMotion]}
-            alt={`HouseMouse ${mascotMotion}`}
+            src={mousekeeperMotionUrls[mascotMotion]}
+            alt={`MouseKeeper ${mascotMotion}`}
           />
           <div>
             <h2>Desktop Agent connection</h2>
             <p className="path-text">
-              {connection?.server_base_url ?? "HOUSEMOUSE_SERVER_BASE_URL is not configured"}
+              {connection?.server_base_url ?? "MOUSEKEEPER_SERVER_BASE_URL is not configured"}
             </p>
           </div>
         </div>
@@ -519,7 +519,7 @@ export function AgentPanel() {
             disabled={busy}
             onChange={(event) => void changeAutostart(event.target.checked)}
           />
-          Start Housemouse when I sign in to this computer
+          Start MouseKeeper when I sign in to this computer
         </label>
       ) : null}
 
@@ -533,7 +533,7 @@ export function AgentPanel() {
                 size={156}
                 level="M"
                 includeMargin
-                aria-label="HouseMouse pairing QR code"
+                aria-label="MouseKeeper pairing QR code"
               />
             ) : null}
             <div className="pairing-code-copy">
@@ -598,7 +598,7 @@ function errorMessage(cause: unknown) {
 
 function pairingQrPayload(pairing: PairingSession, serverBaseUrl: string) {
   return JSON.stringify({
-    type: "housemouse_pairing",
+    type: "mousekeeper_pairing",
     version: 1,
     code: pairing.code,
     sessionId: pairing.session_id,

@@ -9,7 +9,7 @@ use tauri::{
 #[cfg(feature = "tauri-commands")]
 const MAIN_WINDOW_LABEL: &str = "main";
 #[cfg(feature = "tauri-commands")]
-const TRAY_ID: &str = "housemouse-main-tray";
+const TRAY_ID: &str = "mousekeeper-main-tray";
 #[cfg(feature = "tauri-commands")]
 const MENU_OPEN_MANAGER: &str = "open_manager";
 #[cfg(feature = "tauri-commands")]
@@ -49,7 +49,7 @@ pub fn install_tray(app: &App) -> Result<(), String> {
     .map_err(|error| format!("cannot create tray menu: {error}"))?;
 
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip("Housemouse")
+        .tooltip("MouseKeeper")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {

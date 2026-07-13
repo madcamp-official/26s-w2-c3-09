@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.local/contracts/events/auto-approval-policy.schema.json",
+  "$id": "https://mousekeeper.local/contracts/events/auto-approval-policy.schema.json",
   "title": "AutoApprovalPolicy",
   "description": "User-granted scoped policy that lets the desktop auto-approve safe proposal actions. This does not bypass local prechecks, journaling, or undo.",
   "type": "object",

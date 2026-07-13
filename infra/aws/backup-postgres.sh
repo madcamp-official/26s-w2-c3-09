@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BACKUP_DIR=/var/backups/housemouse
-RETENTION_DAYS="${HOUSEMOUSE_BACKUP_RETENTION_DAYS:-7}"
-COMPOSE_FILE=/opt/housemouse/infra/aws/compose.yaml
-ENV_FILE=/etc/housemouse/infra.env
+BACKUP_DIR=/var/backups/mousekeeper
+RETENTION_DAYS="${MOUSEKEEPER_BACKUP_RETENTION_DAYS:-7}"
+COMPOSE_FILE=/opt/mousekeeper/infra/aws/compose.yaml
+ENV_FILE=/etc/mousekeeper/infra.env
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo 'Run this script as root.' >&2
   exit 1
 fi
 if ! [[ "${RETENTION_DAYS}" =~ ^[1-9][0-9]*$ ]]; then
-  echo 'UNCONFIGURED: HOUSEMOUSE_BACKUP_RETENTION_DAYS' >&2
+  echo 'UNCONFIGURED: MOUSEKEEPER_BACKUP_RETENTION_DAYS' >&2
   exit 1
 fi
 
 install -d -o root -g root -m 0700 "${BACKUP_DIR}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-final_path="${BACKUP_DIR}/housemouse-${timestamp}.dump"
-temporary_path="$(mktemp "${BACKUP_DIR}/.housemouse-${timestamp}.XXXXXX.dump")"
+final_path="${BACKUP_DIR}/mousekeeper-${timestamp}.dump"
+temporary_path="$(mktemp "${BACKUP_DIR}/.mousekeeper-${timestamp}.XXXXXX.dump")"
 trap 'rm -f "${temporary_path}"' EXIT
 
 compose=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
 "${compose[@]}" exec -T postgres pg_dump \
-  --username=housemouse \
-  --dbname=housemouse \
+  --username=mousekeeper \
+  --dbname=mousekeeper \
   --format=custom \
   --no-owner \
   --no-privileges >"${temporary_path}"
@@ -40,7 +40,7 @@ mv "${temporary_path}" "${final_path}"
 trap - EXIT
 
 # Deletion is deliberately constrained to this fixed root-only backup directory.
-find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'housemouse-*.dump' \
+find "${BACKUP_DIR}" -maxdepth 1 -type f -name 'mousekeeper-*.dump' \
   -mtime "+${RETENTION_DAYS}" -delete
 
 checksum="$(sha256sum "${final_path}" | cut -d ' ' -f 1)"

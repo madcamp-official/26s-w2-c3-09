@@ -141,6 +141,6 @@ final appDatabaseProvider = Provider<AppDatabase>((ref) {
 LazyDatabase _openConnection() => LazyDatabase(() async {
   final directory = await getApplicationSupportDirectory();
   return NativeDatabase.createInBackground(
-    File(p.join(directory.path, 'housemouse.sqlite')),
+    File(p.join(directory.path, 'mousekeeper.sqlite')),
   );
 });

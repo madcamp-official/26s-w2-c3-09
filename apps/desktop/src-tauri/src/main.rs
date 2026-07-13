@@ -1,6 +1,6 @@
 #[cfg(feature = "tauri-commands")]
 fn main() {
-    housemouse_desktop::run();
+    mousekeeper_desktop::run();
 }
 
 #[cfg(not(feature = "tauri-commands"))]

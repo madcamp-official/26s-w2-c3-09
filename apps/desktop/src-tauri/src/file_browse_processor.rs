@@ -213,7 +213,7 @@ fn map_browse_error(error: BrowseError) -> BuildFileBrowseError {
 
 fn is_remotely_browsable(entry: &BrowseEntry) -> bool {
     let name = entry.name.to_ascii_lowercase();
-    if name == ".housemouse" || name == ".housemouse_trash" {
+    if name == ".mousekeeper" || name == ".mousekeeper_trash" {
         return false;
     }
     if name.ends_with(".tmp")

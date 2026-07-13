@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.local/contracts/events/execution-result.schema.json",
+  "$id": "https://mousekeeper.local/contracts/events/execution-result.schema.json",
   "title": "ExecutionResult",
   "description": "Desktop-to-server result for an apply_decisions command. Results must reflect actual local precondition checks and journaled operations.",
   "type": "object",

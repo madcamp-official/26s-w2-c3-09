@@ -7,7 +7,7 @@ import {
   rooms,
   syncEvents,
   users,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { SyncService } from '../sync/sync.service';
@@ -23,7 +23,7 @@ const describeDatabase =
   databaseUrl &&
   redisUrl &&
   hasStorageConfig &&
-  process.env.HOUSEMOUSE_RUN_DB_TESTS === 'true'
+  process.env.MOUSEKEEPER_RUN_DB_TESTS === 'true'
     ? describe
     : describe.skip;
 

@@ -8,13 +8,13 @@ import {
   completeFileBrowseSchema,
   createFileBrowseRequestSchema,
   failFileBrowseSchema,
-} from '@housemouse/contracts';
+} from '@mousekeeper/contracts';
 import {
   devices,
   fileBrowseRequests,
   rooms,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import Redis from 'ioredis';

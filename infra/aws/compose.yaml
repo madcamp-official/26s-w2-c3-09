@@ -1,4 +1,4 @@
-name: housemouse-production
+name: mousekeeper-production
 
 services:
   postgres:

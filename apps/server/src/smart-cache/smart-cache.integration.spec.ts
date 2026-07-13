@@ -14,7 +14,7 @@ import {
   smartCachePolicies,
   syncEvents,
   users,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
 import type { AuthPrincipal } from '../auth/auth-principal';
@@ -36,7 +36,7 @@ const describeDatabase =
   databaseUrl &&
   redisUrl &&
   hasStorageConfig &&
-  process.env.HOUSEMOUSE_RUN_DB_TESTS === 'true' &&
+  process.env.MOUSEKEEPER_RUN_DB_TESTS === 'true' &&
   process.env.SMART_CACHE_ENABLED === 'true'
     ? describe
     : describe.skip;

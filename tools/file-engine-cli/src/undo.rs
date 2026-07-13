@@ -230,7 +230,7 @@ fn undo_readme_write(
         }
     } else {
         return Ok(Err(
-            "README write backup is missing; refusing undo".to_string(),
+            "README write backup is missing; refusing undo".to_string()
         ));
     }
 

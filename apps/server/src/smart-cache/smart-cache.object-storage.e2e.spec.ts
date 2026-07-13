@@ -17,7 +17,7 @@ import {
   smartCachePolicies,
   syncEvents,
   users,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { SyncService } from '../sync/sync.service';
@@ -34,7 +34,7 @@ const describeObjectStorage =
   redisUrl &&
   hasObjectStorage &&
   process.env.SMART_CACHE_ENABLED === 'true' &&
-  process.env.HOUSEMOUSE_RUN_OBJECT_STORAGE_E2E === 'true'
+  process.env.MOUSEKEEPER_RUN_OBJECT_STORAGE_E2E === 'true'
     ? describe
     : describe.skip;
 
@@ -103,7 +103,7 @@ describeObjectStorage('Smart cache production object lifecycle', () => {
 
   it('stores ciphertext, downloads it, and deletes it after opt-out', async () => {
     const plaintext = Buffer.from(
-      `housemouse-smart-cache-object-e2e:${randomUUID()}`,
+      `mousekeeper-smart-cache-object-e2e:${randomUUID()}`,
       'utf8',
     );
     const key = randomBytes(32);

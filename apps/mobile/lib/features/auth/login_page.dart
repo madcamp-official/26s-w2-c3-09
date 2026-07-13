@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:housemouse_character_assets/character_assets.dart';
-import '../character/housemouse_motion.dart';
+import 'package:mousekeeper_character_assets/character_assets.dart';
+import '../character/mousekeeper_motion.dart';
 import 'auth_controller.dart';
 
 class LoginPage extends ConsumerWidget {
@@ -17,14 +17,14 @@ class LoginPage extends ConsumerWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const HousemouseMotionImage(
-                  motion: HousemouseMotion.hello,
+                const MouseKeeperMotionImage(
+                  motion: MouseKeeperMotion.hello,
                   width: 180,
                   height: 180,
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'HOUSEMOUSE',
+                  'MOUSEKEEPER',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
                 const SizedBox(height: 8),

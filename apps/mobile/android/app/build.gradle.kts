@@ -1,14 +1,19 @@
 plugins {
     id("com.android.application")
-    id("com.google.gms.google-services")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-val releaseStorePath = System.getenv("HOUSEMOUSE_ANDROID_KEYSTORE_PATH")
-val releaseKeyAlias = System.getenv("HOUSEMOUSE_ANDROID_KEY_ALIAS")
-val releaseStorePassword = System.getenv("HOUSEMOUSE_ANDROID_STORE_PASSWORD")
-val releaseKeyPassword = System.getenv("HOUSEMOUSE_ANDROID_KEY_PASSWORD")
+// Firebase configuration is package-specific. Keep local/debug builds usable while the
+// com.mousekeeper.app Firebase client is not registered, and surface UNCONFIGURED in Dart.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
+val releaseStorePath = System.getenv("MOUSEKEEPER_ANDROID_KEYSTORE_PATH")
+val releaseKeyAlias = System.getenv("MOUSEKEEPER_ANDROID_KEY_ALIAS")
+val releaseStorePassword = System.getenv("MOUSEKEEPER_ANDROID_STORE_PASSWORD")
+val releaseKeyPassword = System.getenv("MOUSEKEEPER_ANDROID_KEY_PASSWORD")
 val releaseSigningConfigured = listOf(
     releaseStorePath,
     releaseKeyAlias,
@@ -21,14 +26,14 @@ val releaseRequested = gradle.startParameter.taskNames.any {
 
 if (releaseRequested && !releaseSigningConfigured) {
     throw GradleException(
-        "UNCONFIGURED: HOUSEMOUSE_ANDROID_KEYSTORE_PATH, " +
-            "HOUSEMOUSE_ANDROID_KEY_ALIAS, HOUSEMOUSE_ANDROID_STORE_PASSWORD, " +
-            "HOUSEMOUSE_ANDROID_KEY_PASSWORD",
+        "UNCONFIGURED: MOUSEKEEPER_ANDROID_KEYSTORE_PATH, " +
+            "MOUSEKEEPER_ANDROID_KEY_ALIAS, MOUSEKEEPER_ANDROID_STORE_PASSWORD, " +
+            "MOUSEKEEPER_ANDROID_KEY_PASSWORD",
     )
 }
 
 android {
-    namespace = "com.housemouse.app"
+    namespace = "com.mousekeeper.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -38,7 +43,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.housemouse.app"
+        applicationId = "com.mousekeeper.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

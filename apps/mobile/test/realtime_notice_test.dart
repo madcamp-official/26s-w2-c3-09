@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/core/sync/realtime_controller.dart';
+import 'package:mousekeeper/core/sync/realtime_controller.dart';
 
 void main() {
   test('live proposal and terminal execution events create user notices', () {

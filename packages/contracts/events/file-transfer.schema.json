@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.local/contracts/events/file-transfer.schema.json",
+  "$id": "https://mousekeeper.local/contracts/events/file-transfer.schema.json",
   "title": "FileTransferEvent",
   "description": "Desktop-to-server transfer state for a download_file command. Completion means the desktop uploaded bytes and computed a checksum; mobile download completion is tracked separately by the server/mobile flow.",
   "type": "object",

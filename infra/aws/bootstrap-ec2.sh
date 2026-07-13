@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DOMAIN="${HOUSEMOUSE_DOMAIN:-mousekeeper.madcamp-kaist.org}"
-REPOSITORY_URL="${HOUSEMOUSE_REPOSITORY_URL:-https://github.com/madcamp-official/26s-w2-c3-09.git}"
-BRANCH="${HOUSEMOUSE_BRANCH:-B}"
-APP_DIR=/opt/housemouse
-CONFIG_DIR=/etc/housemouse
+DOMAIN="${MOUSEKEEPER_DOMAIN:-mousekeeper.madcamp-kaist.org}"
+REPOSITORY_URL="${MOUSEKEEPER_REPOSITORY_URL:-https://github.com/madcamp-official/26s-w2-c3-09.git}"
+BRANCH="${MOUSEKEEPER_BRANCH:-B}"
+APP_DIR=/opt/mousekeeper
+CONFIG_DIR=/etc/mousekeeper
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 NODE_VERSION=v24.18.0
 
@@ -47,29 +47,29 @@ corepack enable
 corepack prepare pnpm@11.11.0 --activate
 
 systemctl enable --now docker nginx
-if ! id housemouse >/dev/null 2>&1; then
-  useradd --system --home-dir "${APP_DIR}" --shell /usr/sbin/nologin housemouse
+if ! id mousekeeper >/dev/null 2>&1; then
+  useradd --system --home-dir "${APP_DIR}" --shell /usr/sbin/nologin mousekeeper
 fi
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then
   rm -rf "${APP_DIR}"
-  install -d -o housemouse -g housemouse -m 0750 "${APP_DIR}"
-  runuser -u housemouse -- git clone --branch "${BRANCH}" --single-branch "${REPOSITORY_URL}" "${APP_DIR}"
+  install -d -o mousekeeper -g mousekeeper -m 0750 "${APP_DIR}"
+  runuser -u mousekeeper -- git clone --branch "${BRANCH}" --single-branch "${REPOSITORY_URL}" "${APP_DIR}"
 else
-  runuser -u housemouse -- git -C "${APP_DIR}" fetch origin "${BRANCH}"
-  runuser -u housemouse -- git -C "${APP_DIR}" checkout "${BRANCH}"
-  runuser -u housemouse -- git -C "${APP_DIR}" merge --ff-only "origin/${BRANCH}"
+  runuser -u mousekeeper -- git -C "${APP_DIR}" fetch origin "${BRANCH}"
+  runuser -u mousekeeper -- git -C "${APP_DIR}" checkout "${BRANCH}"
+  runuser -u mousekeeper -- git -C "${APP_DIR}" merge --ff-only "origin/${BRANCH}"
 fi
-chown -R housemouse:housemouse "${APP_DIR}"
+chown -R mousekeeper:mousekeeper "${APP_DIR}"
 
-install -d -o root -g housemouse -m 0750 "${CONFIG_DIR}"
+install -d -o root -g mousekeeper -m 0750 "${CONFIG_DIR}"
 if [[ ! -f "${CONFIG_DIR}/firebase-service-account.json" ]]; then
-  if [[ ! -f /tmp/housemouse-firebase-service-account.json ]]; then
-    echo 'UNCONFIGURED: /tmp/housemouse-firebase-service-account.json' >&2
+  if [[ ! -f /tmp/mousekeeper-firebase-service-account.json ]]; then
+    echo 'UNCONFIGURED: /tmp/mousekeeper-firebase-service-account.json' >&2
     exit 1
   fi
-  install -o root -g housemouse -m 0640 /tmp/housemouse-firebase-service-account.json "${CONFIG_DIR}/firebase-service-account.json"
-  rm -f /tmp/housemouse-firebase-service-account.json
+  install -o root -g mousekeeper -m 0640 /tmp/mousekeeper-firebase-service-account.json "${CONFIG_DIR}/firebase-service-account.json"
+  rm -f /tmp/mousekeeper-firebase-service-account.json
 fi
 
 if [[ ! -f "${CONFIG_DIR}/infra.env" || ! -f "${CONFIG_DIR}/server.env" ]]; then
@@ -78,8 +78,8 @@ if [[ ! -f "${CONFIG_DIR}/infra.env" || ! -f "${CONFIG_DIR}/server.env" ]]; then
   jwt_secret="$(openssl rand -hex 32)"
   umask 0027
   cat >"${CONFIG_DIR}/infra.env" <<EOF
-POSTGRES_DB=housemouse
-POSTGRES_USER=housemouse
+POSTGRES_DB=mousekeeper
+POSTGRES_USER=mousekeeper
 POSTGRES_PASSWORD=${postgres_password}
 REDIS_PASSWORD=${redis_password}
 EOF
@@ -87,7 +87,7 @@ EOF
 NODE_ENV=production
 PORT=3000
 SERVER_HOST=127.0.0.1
-DATABASE_URL=postgresql://housemouse:${postgres_password}@127.0.0.1:5432/housemouse
+DATABASE_URL=postgresql://mousekeeper:${postgres_password}@127.0.0.1:5432/mousekeeper
 REDIS_URL=redis://:${redis_password}@127.0.0.1:6379
 WEB_ORIGIN=https://${DOMAIN}
 JWT_OR_DEVICE_TOKEN_SECRET=${jwt_secret}
@@ -105,34 +105,34 @@ OBJECT_STORAGE_BUCKET=
 OBJECT_STORAGE_ACCESS_KEY_ID=
 OBJECT_STORAGE_SECRET_ACCESS_KEY=
 EOF
-  chown root:housemouse "${CONFIG_DIR}/infra.env" "${CONFIG_DIR}/server.env"
+  chown root:mousekeeper "${CONFIG_DIR}/infra.env" "${CONFIG_DIR}/server.env"
   chmod 0640 "${CONFIG_DIR}/infra.env" "${CONFIG_DIR}/server.env"
 fi
 
 docker compose --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml" up -d
 for _ in {1..30}; do
-  if docker compose --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml" exec -T postgres pg_isready -U housemouse -d housemouse >/dev/null 2>&1; then
+  if docker compose --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml" exec -T postgres pg_isready -U mousekeeper -d mousekeeper >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
-runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm install --frozen-lockfile"
-runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @housemouse/contracts build"
-runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @housemouse/database build"
-runuser -u housemouse -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin NODE_OPTIONS=--max-old-space-size=1024 pnpm --filter @housemouse/server build"
-runuser -u housemouse -- /bin/bash -c "set -a; source '${CONFIG_DIR}/server.env'; set +a; cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @housemouse/database db:migrate"
+runuser -u mousekeeper -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm install --frozen-lockfile"
+runuser -u mousekeeper -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @mousekeeper/contracts build"
+runuser -u mousekeeper -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @mousekeeper/database build"
+runuser -u mousekeeper -- /bin/bash -c "cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin NODE_OPTIONS=--max-old-space-size=1024 pnpm --filter @mousekeeper/server build"
+runuser -u mousekeeper -- /bin/bash -c "set -a; source '${CONFIG_DIR}/server.env'; set +a; cd '${APP_DIR}'; PATH=/usr/local/bin:/usr/bin:/bin pnpm --filter @mousekeeper/database db:migrate"
 
-install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-server.service" /etc/systemd/system/housemouse-server.service
-install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-worker.service" /etc/systemd/system/housemouse-worker.service
-install -o root -g root -m 0755 "${SCRIPT_DIR}/backup-postgres.sh" /usr/local/sbin/housemouse-backup-postgres
-install -o root -g root -m 0755 "${SCRIPT_DIR}/restore-postgres-drill.sh" /usr/local/sbin/housemouse-restore-postgres-drill
-install -d -o root -g root -m 0700 /var/backups/housemouse
-install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-postgres-backup.service" /etc/systemd/system/housemouse-postgres-backup.service
-install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-postgres-backup.timer" /etc/systemd/system/housemouse-postgres-backup.timer
+install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/mousekeeper-server.service" /etc/systemd/system/mousekeeper-server.service
+install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/mousekeeper-worker.service" /etc/systemd/system/mousekeeper-worker.service
+install -o root -g root -m 0755 "${SCRIPT_DIR}/backup-postgres.sh" /usr/local/sbin/mousekeeper-backup-postgres
+install -o root -g root -m 0755 "${SCRIPT_DIR}/restore-postgres-drill.sh" /usr/local/sbin/mousekeeper-restore-postgres-drill
+install -d -o root -g root -m 0700 /var/backups/mousekeeper
+install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/mousekeeper-postgres-backup.service" /etc/systemd/system/mousekeeper-postgres-backup.service
+install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/mousekeeper-postgres-backup.timer" /etc/systemd/system/mousekeeper-postgres-backup.timer
 systemctl daemon-reload
-systemctl enable --now housemouse-server
-systemctl enable --now housemouse-postgres-backup.timer
+systemctl enable --now mousekeeper-server
+systemctl enable --now mousekeeper-postgres-backup.timer
 
 for _ in {1..30}; do
   if curl -fsS http://127.0.0.1:3000/ready >/dev/null; then
@@ -143,8 +143,8 @@ done
 curl -fsS http://127.0.0.1:3000/health >/dev/null
 curl -fsS http://127.0.0.1:3000/ready >/dev/null
 
-install -o root -g root -m 0644 "${SCRIPT_DIR}/nginx/housemouse.conf" /etc/nginx/sites-available/housemouse
-ln -sfn /etc/nginx/sites-available/housemouse /etc/nginx/sites-enabled/housemouse
+install -o root -g root -m 0644 "${SCRIPT_DIR}/nginx/mousekeeper.conf" /etc/nginx/sites-available/mousekeeper
+ln -sfn /etc/nginx/sites-available/mousekeeper /etc/nginx/sites-enabled/mousekeeper
 rm -f /etc/nginx/sites-enabled/default
 nginx -t
 systemctl reload nginx
@@ -179,11 +179,11 @@ fi
 
 if [[ "${bucket_configured}" == true ]] && [[ "${region_configured}" == true ]] && \
    { [[ "${static_credentials_configured}" == true ]] || [[ "${instance_role_configured}" == true ]]; }; then
-  systemctl enable --now housemouse-worker
+  systemctl enable --now mousekeeper-worker
 else
-  systemctl disable --now housemouse-worker >/dev/null 2>&1 || true
+  systemctl disable --now mousekeeper-worker >/dev/null 2>&1 || true
   echo 'UNCONFIGURED: object-storage region, bucket, and credentials/EC2 IAM role; worker remains stopped.'
 fi
 
-systemctl --no-pager --full status housemouse-server | sed -n '1,12p'
+systemctl --no-pager --full status mousekeeper-server | sed -n '1,12p'
 echo "DEPLOYED: https://${DOMAIN}"

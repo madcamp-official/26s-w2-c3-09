@@ -8,7 +8,7 @@ import {
 import {
   createExecutionSchema,
   updateExecutionSchema,
-} from '@housemouse/contracts';
+} from '@mousekeeper/contracts';
 import {
   auditEvents,
   commands,
@@ -18,7 +18,7 @@ import {
   proposals,
   rooms,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { isDeepStrictEqual } from 'node:util';

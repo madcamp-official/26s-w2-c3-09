@@ -1,6 +1,6 @@
 class AppConfig {
   static const firebaseEnabled = bool.fromEnvironment('FIREBASE_ENABLED');
-  static const apiBaseUrl = String.fromEnvironment('HOUSEMOUSE_API_URL');
+  static const apiBaseUrl = String.fromEnvironment('MOUSEKEEPER_API_URL');
   static const googleServerClientId = String.fromEnvironment(
     'GOOGLE_SERVER_CLIENT_ID',
   );
@@ -12,7 +12,7 @@ class AppConfig {
     }
     final uri = Uri.tryParse(apiBaseUrl);
     if (uri == null || !uri.hasScheme || !uri.hasAuthority) {
-      return 'HOUSEMOUSE_API_URL';
+      return 'MOUSEKEEPER_API_URL';
     }
     if (sentryDsn.isNotEmpty) {
       if (!isValidSentryDsn(sentryDsn)) {

@@ -368,7 +368,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
       'proposal.created' => 'PC가 정리 제안을 만들었습니다',
       'decision.created' => '제안에 승인 또는 거절 결정을 저장했습니다',
       'execution.completed' => '승인된 작업 실행이 끝났습니다',
-      _ => 'HOUSEMOUSE 상태가 변경되었습니다',
+      _ => 'MOUSEKEEPER 상태가 변경되었습니다',
     };
   }
 }

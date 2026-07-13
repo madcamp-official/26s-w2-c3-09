@@ -1,5 +1,5 @@
 {
-  "name": "@housemouse/worker",
+  "name": "@mousekeeper/worker",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1009.0",
-    "@housemouse/database": "workspace:*",
+    "@mousekeeper/database": "workspace:*",
     "@sentry/node": "^10.65.0",
     "drizzle-orm": "^0.45.2",
     "firebase-admin": "^14.1.0",

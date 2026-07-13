@@ -327,7 +327,7 @@ function invokeAgentCommand<T>(command: string, args?: Record<string, unknown>) 
 function ensureTauriRuntime() {
   if (!window.__TAURI_INTERNALS__) {
     throw new Error(
-      "Tauri runtime is not available. Run `pnpm --filter @housemouse/desktop tauri:dev` from the repository root."
+      "Tauri runtime is not available. Run `pnpm --filter @mousekeeper/desktop tauri:dev` from the repository root."
     );
   }
 }

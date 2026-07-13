@@ -1,5 +1,5 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { auditEvents, rooms, type Database } from '@housemouse/database';
+import { auditEvents, rooms, type Database } from '@mousekeeper/database';
 import { and, desc, eq } from 'drizzle-orm';
 import { DATABASE } from '../database/database.module';
 

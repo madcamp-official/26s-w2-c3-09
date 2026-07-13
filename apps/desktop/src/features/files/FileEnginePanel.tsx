@@ -754,7 +754,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     <div className={embedded ? undefined : "app-shell"}>
       <section className="toolbar">
         <div>
-          <h1>Housemouse Files</h1>
+          <h1>MouseKeeper Files</h1>
           <p>{status}</p>
         </div>
         <button type="button" onClick={refreshRoots}>

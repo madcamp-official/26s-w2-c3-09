@@ -6,7 +6,7 @@ import '../../core/sync/realtime_controller.dart';
 import '../auth/auth_controller.dart';
 import '../auth/pairing_page.dart';
 import '../character/character_settings_page.dart';
-import '../character/housemouse_motion.dart';
+import '../character/mousekeeper_motion.dart';
 import '../rooms/room_page.dart';
 import 'home_controller.dart';
 
@@ -46,7 +46,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final realtimeCharacterKind = ref.watch(realtimeCharacterKindProvider);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('HOUSEMOUSE'),
+        title: const Text('MOUSEKEEPER'),
         actions: [
           IconButton(onPressed: _signOut, icon: const Icon(Icons.logout)),
         ],
@@ -105,8 +105,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                   leading: SizedBox(
                     width: 52,
                     height: 52,
-                    child: HousemouseMotionImage(
-                      motion: housemouseMotionForHome(
+                    child: MouseKeeperMotionImage(
+                      motion: mousekeeperMotionForHome(
                         isOffline: data.isOffline,
                         presences: data.devices.map(
                           (item) => item['presence'] as String? ?? 'OFFLINE',
@@ -122,7 +122,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       ),
                     ),
                   ),
-                  title: const Text('HOUSEMOUSE 캐릭터'),
+                  title: const Text('MOUSEKEEPER 캐릭터'),
                   subtitle: data.character == null
                       ? const Text('오프라인 · 캐릭터 설정을 확인할 수 없음')
                       : Text(
@@ -314,7 +314,7 @@ class PushNotificationStatusCard extends StatelessWidget {
         child: ListTile(
           leading: Icon(Icons.notifications_off_outlined),
           title: Text('알림 권한이 꺼져 있어요'),
-          subtitle: Text('휴대폰 설정에서 HOUSEMOUSE 알림을 허용해 주세요.'),
+          subtitle: Text('휴대폰 설정에서 MOUSEKEEPER 알림을 허용해 주세요.'),
         ),
       ),
       PushNotificationStatus.unconfigured => Card(

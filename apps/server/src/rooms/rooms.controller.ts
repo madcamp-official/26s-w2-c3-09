@@ -9,7 +9,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { createRoomSchema } from '@housemouse/contracts';
+import { createRoomSchema } from '@mousekeeper/contracts';
 import {
   auditEvents,
   cacheDeletionJobs,
@@ -21,7 +21,7 @@ import {
   objectDeletionJobs,
   rooms,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';

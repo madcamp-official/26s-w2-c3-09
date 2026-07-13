@@ -8,8 +8,8 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { heartbeatSchema } from '@housemouse/contracts';
-import { devices, type Database } from '@housemouse/database';
+import { heartbeatSchema } from '@mousekeeper/contracts';
+import { devices, type Database } from '@mousekeeper/database';
 import { and, eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { z } from 'zod';

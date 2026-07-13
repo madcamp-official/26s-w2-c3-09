@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/core/config/app_config.dart';
+import 'package:mousekeeper/core/config/app_config.dart';
 
 void main() {
   test('Sentry DSN validation accepts only HTTPS URLs', () {

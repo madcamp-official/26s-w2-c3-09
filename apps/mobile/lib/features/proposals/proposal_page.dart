@@ -189,7 +189,7 @@ class ProposalItemsList extends StatelessWidget {
             title: Text(item['actionType'] as String? ?? '작업'),
             subtitle: Text(
               '${item['sourceRelativePath'] ?? ''}\n'
-              '→ ${item['destinationRelativePath'] ?? 'HOUSEMOUSE 휴지통'}\n'
+              '→ ${item['destinationRelativePath'] ?? 'MOUSEKEEPER 휴지통'}\n'
               '이유: ${item['reasonCode'] ?? '정리 규칙 일치'}'
               '${conflict == 'NONE' ? '' : '\n충돌: $conflict'}',
             ),

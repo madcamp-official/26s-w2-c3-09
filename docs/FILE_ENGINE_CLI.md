@@ -1,6 +1,6 @@
 # File Engine CLI
 
-`file-engine-cli` is A-side local file safety tooling for HOUSEMOUSE. It analyzes a managed root, proposes safe file moves, applies user decisions, executes no-overwrite moves, writes an operation journal, and supports undo.
+`file-engine-cli` is A-side local file safety tooling for MOUSEKEEPER. It analyzes a managed root, proposes safe file moves, applies user decisions, executes no-overwrite moves, writes an operation journal, and supports undo.
 
 The CLI is intentionally JSON-first so the desktop app and future server contracts can reuse the same data shape.
 
@@ -30,7 +30,7 @@ $env:Path = "C:\Users\user\.cargo\bin;$env:Path"
 
 1. `analyze` lists files inside the managed root.
 2. `browse` lists one directory level (folders then files) so a UI can navigate the tree without a full recursive scan.
-3. `rules` prints the rule set that `propose` will apply (the root's `.housemouse/rules.json`, or a built-in default when that file is absent).
+3. `rules` prints the rule set that `propose` will apply (the root's `.mousekeeper/rules.json`, or a built-in default when that file is absent).
 4. `propose` evaluates those rules against the files and creates deterministic file-move proposals without changing files.
 5. The user or app writes `decision.jsonl`.
 6. `precheck` validates the saved proposal against the current filesystem state.
@@ -40,7 +40,7 @@ $env:Path = "C:\Users\user\.cargo\bin;$env:Path"
 
 ## Storage
 
-Per-root state lives in a SQLite database at `<managed-root>/.housemouse/housemouse.db`:
+Per-root state lives in a SQLite database at `<managed-root>/.mousekeeper/mousekeeper.db`:
 
 - `file_index` — the scanned file metadata `index` populates and `search` reads.
 - `operation_journal` — the append-only execute/undo event log (formerly `journal.jsonl`).
@@ -49,7 +49,7 @@ Per-root state lives in a SQLite database at `<managed-root>/.housemouse/housemo
 
 ## Rule DSL
 
-Organizing rules are **data, not code**. Each managed root may carry `.housemouse/rules.json`; when absent, a built-in default (extension buckets: documents/images/archives) is used. Because a rule can come from an untrusted source (e.g. a natural-language request translated to JSON server-side, or a per-user file), the rule set is validated before it is ever applied.
+Organizing rules are **data, not code**. Each managed root may carry `.mousekeeper/rules.json`; when absent, a built-in default (extension buckets: documents/images/archives) is used. Because a rule can come from an untrusted source (e.g. a natural-language request translated to JSON server-side, or a per-user file), the rule set is validated before it is ever applied.
 
 ```json
 {
@@ -205,7 +205,7 @@ Possible `status` values:
 ```json
 {
   "root": "C:\\managed-root",
-  "journal_path": "C:\\managed-root\\.housemouse\\housemouse.db",
+  "journal_path": "C:\\managed-root\\.mousekeeper\\mousekeeper.db",
   "executed_count": 1,
   "skipped_count": 0,
   "rejected_count": 0,
@@ -231,7 +231,7 @@ Possible result `status` values:
 ```json
 {
   "root": "C:\\managed-root",
-  "journal_path": "C:\\managed-root\\.housemouse\\housemouse.db",
+  "journal_path": "C:\\managed-root\\.mousekeeper\\mousekeeper.db",
   "undone_count": 1,
   "skipped_count": 0,
   "results": [
@@ -250,8 +250,8 @@ Possible result `status` values:
 ```json
 {
   "root": "C:\\managed-root",
-  "journal_path": "C:\\managed-root\\.housemouse\\housemouse.db",
-  "quarantined_path": "C:\\managed-root\\.housemouse\\journal.jsonl.corrupted-1783672855045"
+  "journal_path": "C:\\managed-root\\.mousekeeper\\mousekeeper.db",
+  "quarantined_path": "C:\\managed-root\\.mousekeeper\\journal.jsonl.corrupted-1783672855045"
 }
 ```
 

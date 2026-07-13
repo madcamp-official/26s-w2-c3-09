@@ -1,4 +1,4 @@
-import type { EventEnvelope } from '@housemouse/contracts';
+import type { EventEnvelope } from '@mousekeeper/contracts';
 import { toCharacterEvent } from './character-event';
 
 const base: EventEnvelope = {

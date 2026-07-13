@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: housemouse-server
+    name: mousekeeper-server
     runtime: node
     plan: starter
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @housemouse/contracts build && pnpm --filter @housemouse/database build && pnpm --filter @housemouse/server build
-    preDeployCommand: pnpm --filter @housemouse/database db:migrate
-    startCommand: pnpm --filter @housemouse/server start:prod
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @mousekeeper/contracts build && pnpm --filter @mousekeeper/database build && pnpm --filter @mousekeeper/server build
+    preDeployCommand: pnpm --filter @mousekeeper/database db:migrate
+    startCommand: pnpm --filter @mousekeeper/server start:prod
     healthCheckPath: /ready
     envVars:
       - key: NODE_ENV
@@ -15,12 +15,12 @@ services:
       - key: SERVER_HOST
         value: "0.0.0.0"
       - key: DATABASE_URL
-        fromDatabase: { name: housemouse-postgres, property: connectionString }
+        fromDatabase: { name: mousekeeper-postgres, property: connectionString }
       - key: REDIS_URL
         fromService:
           {
             type: keyvalue,
-            name: housemouse-key-value,
+            name: mousekeeper-key-value,
             property: connectionString,
           }
       - key: WEB_ORIGIN
@@ -57,14 +57,14 @@ services:
         sync: false
 
   - type: worker
-    name: housemouse-worker
+    name: mousekeeper-worker
     runtime: node
     plan: starter
-    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @housemouse/database build
-    startCommand: pnpm --filter @housemouse/worker start
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @mousekeeper/database build
+    startCommand: pnpm --filter @mousekeeper/worker start
     envVars:
       - key: DATABASE_URL
-        fromDatabase: { name: housemouse-postgres, property: connectionString }
+        fromDatabase: { name: mousekeeper-postgres, property: connectionString }
       - key: OBJECT_STORAGE_ENDPOINT
         sync: false
       - key: OBJECT_STORAGE_REGION
@@ -89,15 +89,15 @@ services:
         sync: false
 
   - type: keyvalue
-    name: housemouse-key-value
+    name: mousekeeper-key-value
     plan: free
     ipAllowList: []
     maxmemoryPolicy: noeviction
 
 databases:
-  - name: housemouse-postgres
+  - name: mousekeeper-postgres
     plan: free
     postgresMajorVersion: "17"
-    databaseName: housemouse
-    user: housemouse
+    databaseName: mousekeeper
+    user: mousekeeper
     ipAllowList: []

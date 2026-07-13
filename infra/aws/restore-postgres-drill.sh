@@ -1,49 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BACKUP_DIR=/var/backups/housemouse
-COMPOSE_FILE=/opt/housemouse/infra/aws/compose.yaml
-ENV_FILE=/etc/housemouse/infra.env
+BACKUP_DIR=/var/backups/mousekeeper
+COMPOSE_FILE=/opt/mousekeeper/infra/aws/compose.yaml
+ENV_FILE=/etc/mousekeeper/infra.env
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo 'Run this script as root.' >&2
   exit 1
 fi
 if [[ "$#" -ne 1 ]]; then
-  echo 'Usage: restore-postgres-drill.sh /var/backups/housemouse/<backup>.dump' >&2
+  echo 'Usage: restore-postgres-drill.sh /var/backups/mousekeeper/<backup>.dump' >&2
   exit 1
 fi
 
 backup_path="$(realpath -e -- "$1")"
 case "${backup_path}" in
-  "${BACKUP_DIR}"/housemouse-*.dump) ;;
+  "${BACKUP_DIR}"/mousekeeper-*.dump) ;;
   *)
-    echo 'Restore drill accepts only a HOUSEMOUSE backup from the protected backup directory.' >&2
+    echo 'Restore drill accepts only a MOUSEKEEPER backup from the protected backup directory.' >&2
     exit 1
     ;;
 esac
 
-drill_database="housemouse_restore_drill_$(date -u +%Y%m%d%H%M%S)_$$"
+drill_database="mousekeeper_restore_drill_$(date -u +%Y%m%d%H%M%S)_$$"
 compose=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
 cleanup() {
-  "${compose[@]}" exec -T postgres dropdb --username=housemouse \
+  "${compose[@]}" exec -T postgres dropdb --username=mousekeeper \
     --if-exists --force "${drill_database}" >/dev/null
 }
 trap cleanup EXIT
 
 "${compose[@]}" exec -T postgres pg_restore --list \
   <"${backup_path}" >/dev/null
-"${compose[@]}" exec -T postgres createdb --username=housemouse \
+"${compose[@]}" exec -T postgres createdb --username=mousekeeper \
   "${drill_database}"
 "${compose[@]}" exec -T postgres pg_restore \
-  --username=housemouse \
+  --username=mousekeeper \
   --dbname="${drill_database}" \
   --exit-on-error \
   --no-owner \
   --no-privileges <"${backup_path}" >/dev/null
 
 schema_ok="$("${compose[@]}" exec -T postgres psql \
-  --username=housemouse \
+  --username=mousekeeper \
   --dbname="${drill_database}" \
   --tuples-only \
   --no-align \

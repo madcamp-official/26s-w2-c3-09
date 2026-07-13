@@ -1,16 +1,16 @@
 [Unit]
-Description=HOUSEMOUSE API server
+Description=MOUSEKEEPER API server
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-User=housemouse
-Group=housemouse
-WorkingDirectory=/opt/housemouse
-EnvironmentFile=/etc/housemouse/server.env
+User=mousekeeper
+Group=mousekeeper
+WorkingDirectory=/opt/mousekeeper
+EnvironmentFile=/etc/mousekeeper/server.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/env pnpm --filter @housemouse/server start:prod
+ExecStart=/usr/bin/env pnpm --filter @mousekeeper/server start:prod
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

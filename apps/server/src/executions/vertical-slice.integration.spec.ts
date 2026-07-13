@@ -13,7 +13,7 @@ import {
   rooms,
   syncEvents,
   users,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { eq } from 'drizzle-orm';
 import { AffinityService } from '../affinity/affinity.service';
 import { CommandsService } from '../commands/commands.service';
@@ -24,7 +24,7 @@ import { ExecutionsService } from './executions.service';
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeDatabase =
-  databaseUrl && process.env.HOUSEMOUSE_RUN_DB_TESTS === 'true'
+  databaseUrl && process.env.MOUSEKEEPER_RUN_DB_TESTS === 'true'
     ? describe
     : describe.skip;
 

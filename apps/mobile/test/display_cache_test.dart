@@ -1,7 +1,7 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/storage/app_database.dart';
-import 'package:housemouse/storage/display_cache.dart';
+import 'package:mousekeeper/storage/app_database.dart';
+import 'package:mousekeeper/storage/display_cache.dart';
 
 void main() {
   late AppDatabase database;

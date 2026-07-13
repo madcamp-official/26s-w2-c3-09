@@ -15,7 +15,7 @@ import {
   completeCacheUploadSchema,
   idempotencyKeySchema,
   updateSmartCachePolicySchema,
-} from '@housemouse/contracts';
+} from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { AgentOnly } from '../auth/agent-only.decorator';
 import { requireAgentDevice } from '../auth/agent-device';

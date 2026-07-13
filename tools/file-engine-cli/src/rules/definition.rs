@@ -51,7 +51,7 @@ pub struct Action {
     /// (no absolute paths, no `..`) because this value can come from an untrusted source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub move_to: Option<String>,
-    /// Moves a matched file into HouseMouse's recoverable root-local trash.
+    /// Moves a matched file into MouseKeeper's recoverable root-local trash.
     #[serde(default, skip_serializing_if = "is_false")]
     pub trash: bool,
 }

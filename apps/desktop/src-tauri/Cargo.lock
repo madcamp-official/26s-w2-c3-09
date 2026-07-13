@@ -1887,29 +1887,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "housemouse-desktop"
-version = "0.1.0"
-dependencies = [
- "file-engine-cli",
- "futures-util",
- "keyring",
- "notify",
- "reqwest 0.13.4",
- "rust_socketio",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sqlx",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tempfile",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "html5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2626,6 +2603,29 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mousekeeper-desktop"
+version = "0.1.0"
+dependencies = [
+ "file-engine-cli",
+ "futures-util",
+ "keyring",
+ "notify",
+ "reqwest 0.13.4",
+ "rust_socketio",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tempfile",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

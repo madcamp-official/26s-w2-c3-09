@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { pushNotificationTokens, type Database } from '@housemouse/database';
+import { pushNotificationTokens, type Database } from '@mousekeeper/database';
 import { and, eq } from 'drizzle-orm';
 import { DATABASE } from '../database/database.module';
 

@@ -141,7 +141,7 @@ Example payload shape:
 
 ```json
 {
-  "type": "housemouse_pairing",
+  "type": "mousekeeper_pairing",
   "sessionId": "...",
   "code": "123456",
   "serverBaseUrl": "http://127.0.0.1:3000"
@@ -615,7 +615,7 @@ A-side work:
 - validate relative directory paths with the same root boundary rules as local browse
 - block traversal, absolute paths, symlink, junction, and reparse point escapes
 - skip unreadable or unsafe entries for read/list operations without failing the whole page
-- exclude `.housemouse`, `.housemouse_trash`, temp/lock/credential-like files from remote browse results
+- exclude `.mousekeeper`, `.mousekeeper_trash`, temp/lock/credential-like files from remote browse results
 - support pagination or cursor inputs without treating stale pages as current truth
 - return structured errors for offline, timeout, permission denied, invalid path, cursor invalidated, and root disabled
 - avoid uploading absolute local paths or file contents in browse responses
@@ -704,7 +704,7 @@ Safety rules:
 - opt-in per room
 - quota enforced by server reservation
 - file size limit
-- exclude `.housemouse`, `.housemouse_trash`, temp/lock/credential-like files
+- exclude `.mousekeeper`, `.mousekeeper_trash`, temp/lock/credential-like files
 - device revoke/cache disable must delete server objects
 - pending queued commands should warn that cached file list may be outdated
 

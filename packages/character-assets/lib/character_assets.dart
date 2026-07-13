@@ -1,4 +1,4 @@
-enum HousemouseMotion {
+enum MouseKeeperMotion {
   clean,
   considering,
   fighting,
@@ -9,26 +9,26 @@ enum HousemouseMotion {
   working,
 }
 
-const housemouseCleanAsset = 'mouse_clean.png';
-const housemouseConsideringAsset = 'mouse_considering.png';
-const housemouseFightingAsset = 'mouse_fighting.png';
-const housemouseHelloAsset = 'mouse_hello.png';
-const housemouseSleepingAsset = 'mouse_sleeping.png';
-const housemouseStandAsset = 'mouse_stand.png';
-const housemouseWalkAsset = 'mouse_walk.png';
-const housemouseWorkingAsset = 'mouse_working.png';
+const mousekeeperCleanAsset = 'mouse_clean.png';
+const mousekeeperConsideringAsset = 'mouse_considering.png';
+const mousekeeperFightingAsset = 'mouse_fighting.png';
+const mousekeeperHelloAsset = 'mouse_hello.png';
+const mousekeeperSleepingAsset = 'mouse_sleeping.png';
+const mousekeeperStandAsset = 'mouse_stand.png';
+const mousekeeperWalkAsset = 'mouse_walk.png';
+const mousekeeperWorkingAsset = 'mouse_working.png';
 
 // Stable default for screens that do not have a runtime state yet.
-const housemouseMascotAsset = housemouseStandAsset;
-const housemouseMascotPackage = 'housemouse_character_assets';
+const mousekeeperMascotAsset = mousekeeperStandAsset;
+const mousekeeperMascotPackage = 'mousekeeper_character_assets';
 
-String housemouseMotionAsset(HousemouseMotion motion) => switch (motion) {
-  HousemouseMotion.clean => housemouseCleanAsset,
-  HousemouseMotion.considering => housemouseConsideringAsset,
-  HousemouseMotion.fighting => housemouseFightingAsset,
-  HousemouseMotion.hello => housemouseHelloAsset,
-  HousemouseMotion.sleeping => housemouseSleepingAsset,
-  HousemouseMotion.stand => housemouseStandAsset,
-  HousemouseMotion.walk => housemouseWalkAsset,
-  HousemouseMotion.working => housemouseWorkingAsset,
+String mousekeeperMotionAsset(MouseKeeperMotion motion) => switch (motion) {
+  MouseKeeperMotion.clean => mousekeeperCleanAsset,
+  MouseKeeperMotion.considering => mousekeeperConsideringAsset,
+  MouseKeeperMotion.fighting => mousekeeperFightingAsset,
+  MouseKeeperMotion.hello => mousekeeperHelloAsset,
+  MouseKeeperMotion.sleeping => mousekeeperSleepingAsset,
+  MouseKeeperMotion.stand => mousekeeperStandAsset,
+  MouseKeeperMotion.walk => mousekeeperWalkAsset,
+  MouseKeeperMotion.working => mousekeeperWorkingAsset,
 };

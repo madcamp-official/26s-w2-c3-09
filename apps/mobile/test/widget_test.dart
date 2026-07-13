@@ -1,21 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/app.dart';
-import 'package:housemouse/features/character/character_settings_page.dart';
-import 'package:housemouse/features/chat/readme_command_page.dart';
-import 'package:housemouse/features/home/home_page.dart';
-import 'package:housemouse/features/files/smart_cache_page.dart';
-import 'package:housemouse/features/proposals/proposal_page.dart';
+import 'package:mousekeeper/app.dart';
+import 'package:mousekeeper/features/character/character_settings_page.dart';
+import 'package:mousekeeper/features/chat/readme_command_page.dart';
+import 'package:mousekeeper/features/home/home_page.dart';
+import 'package:mousekeeper/features/files/smart_cache_page.dart';
+import 'package:mousekeeper/features/proposals/proposal_page.dart';
 
 void main() {
   testWidgets('외부 인증 미설정 상태를 명확히 표시한다', (tester) async {
     await tester.pumpWidget(
       const ProviderScope(
-        child: HousemouseApp(configurationError: 'FIREBASE_ENABLED'),
+        child: MouseKeeperApp(configurationError: 'FIREBASE_ENABLED'),
       ),
     );
-    expect(find.text('HOUSEMOUSE'), findsOneWidget);
+    expect(find.text('MOUSEKEEPER'), findsOneWidget);
     expect(find.textContaining('UNCONFIGURED'), findsOneWidget);
   });
 
@@ -68,7 +68,7 @@ void main() {
       ),
     );
     expect(find.textContaining('old/report.pdf'), findsOneWidget);
-    expect(find.textContaining('HOUSEMOUSE 휴지통'), findsOneWidget);
+    expect(find.textContaining('MOUSEKEEPER 휴지통'), findsOneWidget);
     expect(find.textContaining('AGE_RULE_MATCH'), findsOneWidget);
     expect(find.textContaining('NAME_CONFLICT'), findsOneWidget);
   });

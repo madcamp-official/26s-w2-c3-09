@@ -3,7 +3,7 @@ import {
   notificationJobs,
   syncEvents,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { and, asc, eq, gt, max, sql } from 'drizzle-orm';
 import { notificationForEvent } from '../notifications/notification-event';
 

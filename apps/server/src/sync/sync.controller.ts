@@ -1,5 +1,5 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { type Database } from '@housemouse/database';
+import { type Database } from '@mousekeeper/database';
 import { Inject } from '@nestjs/common';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';

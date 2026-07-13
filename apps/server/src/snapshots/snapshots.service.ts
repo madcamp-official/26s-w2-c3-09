@@ -4,8 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { createRoomSnapshotSchema } from '@housemouse/contracts';
-import { roomSnapshots, rooms, type Database } from '@housemouse/database';
+import { createRoomSnapshotSchema } from '@mousekeeper/contracts';
+import { roomSnapshots, rooms, type Database } from '@mousekeeper/database';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module';

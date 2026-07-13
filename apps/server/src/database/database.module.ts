@@ -1,5 +1,5 @@
 import { Inject, Module, OnApplicationShutdown } from '@nestjs/common';
-import { createDatabase } from '@housemouse/database';
+import { createDatabase } from '@mousekeeper/database';
 import { loadEnvironment } from '../config/environment';
 
 export const DATABASE = Symbol('DATABASE');

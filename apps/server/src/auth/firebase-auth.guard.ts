@@ -25,7 +25,7 @@ export class FirebaseAuthGuard implements CanActivate {
     if (!header?.startsWith('Bearer '))
       throw new UnauthorizedException({ code: 'UNAUTHENTICATED' });
     const token = header.slice(7);
-    request.principal = token.startsWith('hm_device_')
+    request.principal = token.startsWith('mk_device_')
       ? await this.auth.authenticateDevice(token.slice(10))
       : await this.auth.authenticate(token);
     const agentOnly = this.reflector.getAllAndOverride<boolean>(AGENT_ONLY, [

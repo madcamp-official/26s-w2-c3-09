@@ -1,6 +1,6 @@
-# 집쥐인(HOUSEMOUSE) MVP 구현 계획
+# 집쥐인(MOUSEKEEPER) MVP 구현 계획
 
-이 문서는 루트의 `HOUSEMOUSE_PLAN.md` v1.3과 `maeari_ai_collaboration_principles.txt`를 실제 개발 순서로 옮긴 실행 가이드다. 제품 구조와 기술 선택은 HOUSEMOUSE 계획서를 우선하고, 협업 문서의 무가짜 구현·환경 변수 분리·fail-fast·계약 우선·교차 리뷰 원칙을 적용한다.
+이 문서는 루트의 `MOUSEKEEPER_PLAN.md` v1.3과 `maeari_ai_collaboration_principles.txt`를 실제 개발 순서로 옮긴 실행 가이드다. 제품 구조와 기술 선택은 MOUSEKEEPER 계획서를 우선하고, 협업 문서의 무가짜 구현·환경 변수 분리·fail-fast·계약 우선·교차 리뷰 원칙을 적용한다.
 
 ## 1. 핵심 구현 원칙
 
@@ -11,7 +11,7 @@
 - Socket.IO는 실시간 알림 수단이며 PostgreSQL이 명령과 결과의 진실의 원천이다.
 - 서버는 전체 파일 인덱스와 사용자 절대 경로를 저장하지 않는다.
 - 외부 연동이 없으면 fake 성공이나 임시 provider 대신 명확한 `UNCONFIGURED` 오류를 노출한다.
-- HOUSEMOUSE 식별자와 휴지통 이름 등은 v1.3 명칭을 기준으로 통일한다.
+- MOUSEKEEPER 식별자와 휴지통 이름 등은 v1.3 명칭을 기준으로 통일한다.
 
 ## 2. 목표 아키텍처
 
@@ -52,7 +52,7 @@ Android에서 정리 명령 생성
 → Android에서 전체 승인 또는 거절
 → Desktop이 source identity와 destination 충돌 재검증
 → operation journal 기록
-→ no-overwrite 이동 또는 HOUSEMOUSE 휴지통 격리
+→ no-overwrite 이동 또는 MOUSEKEEPER 휴지통 격리
 → 실행 결과와 청결도 동기화
 → Desktop에서 undo
 ```
@@ -65,7 +65,7 @@ Android에서 정리 명령 생성
 
 1. `Command`, `Proposal`, `Decision`, `ExecutionResult`, event envelope의 ID, 상태와 오류 코드를 공동 확정한다.
 2. Rust path guard에서 canonical root, 상대 경로 정규화, `..`, 절대 경로, symlink, junction, reparse point 우회를 차단한다.
-3. no-overwrite, journal-before-write, HOUSEMOUSE 휴지통, undo를 fixture로 검증한다.
+3. no-overwrite, journal-before-write, MOUSEKEEPER 휴지통, undo를 fixture로 검증한다.
 4. 서버는 시작 시 필수 환경 변수를 검증하고 누락되면 즉시 중단한다.
 
 완료 조건은 schema validation과 scan → proposal → execute → undo 테스트가 반복 실행되는 것이다.

@@ -127,7 +127,7 @@ fn build_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, 
         OVERLAY_WINDOW_LABEL,
         tauri::WebviewUrl::App("index.html".into()),
     )
-    .title("Housemouse")
+    .title("MouseKeeper")
     .inner_size(340.0, 460.0)
     .resizable(false)
     .decorations(false)

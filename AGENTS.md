@@ -8,7 +8,7 @@
 
 ## Must-Read Context
 
-- Read `HOUSEMOUSE_PLAN.md` for the overall MVP plan, ownership, schedules, contracts, and A/B responsibilities.
+- Read `MOUSEKEEPER_PLAN.md` for the overall MVP plan, ownership, schedules, contracts, and A/B responsibilities.
 - Read `AI_implement_rule.txt` for AI implementation rules and project engineering constraints.
 - If these files appear garbled because of encoding, still use the stable structural signals from headings, paths, CODEOWNERS, and existing repository layout.
 

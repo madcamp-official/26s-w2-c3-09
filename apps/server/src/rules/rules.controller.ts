@@ -7,7 +7,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { createRuleSchema, updateRuleSchema } from '@housemouse/contracts';
+import { createRuleSchema, updateRuleSchema } from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';
 import type { AuthPrincipal } from '../auth/auth-principal';

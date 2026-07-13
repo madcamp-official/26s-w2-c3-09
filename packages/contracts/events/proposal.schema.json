@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.local/contracts/events/proposal.schema.json",
+  "$id": "https://mousekeeper.local/contracts/events/proposal.schema.json",
   "title": "ProposalReport",
   "description": "Desktop-to-server proposal batch generated from a command. Proposals describe candidate local file mutations; they do not authorize execution.",
   "type": "object",

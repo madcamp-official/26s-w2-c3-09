@@ -4,8 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { createPairingSessionSchema } from '@housemouse/contracts';
-import { devices, pairingSessions, type Database } from '@housemouse/database';
+import { createPairingSessionSchema } from '@mousekeeper/contracts';
+import { devices, pairingSessions, type Database } from '@mousekeeper/database';
 import { createHmac, randomBytes, randomInt } from 'node:crypto';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -123,14 +123,14 @@ export class PairingService {
       return { status: 'PENDING' as const, expiresAt: session.expiresAt };
     const token = sign({}, loadEnvironment().JWT_OR_DEVICE_TOKEN_SECRET, {
       subject: session.claimedDeviceId,
-      issuer: 'housemouse-server',
-      audience: 'housemouse-desktop',
+      issuer: 'mousekeeper-server',
+      audience: 'mousekeeper-desktop',
       expiresIn: '90d',
     });
     return {
       status: 'CLAIMED' as const,
       deviceId: session.claimedDeviceId,
-      deviceToken: `hm_device_${token}`,
+      deviceToken: `mk_device_${token}`,
     };
   }
 }

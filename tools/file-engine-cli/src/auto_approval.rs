@@ -109,7 +109,7 @@ mod tests {
             proposal_id: id.to_string(),
             action,
             from: "inbox/file.tmp".to_string(),
-            to: ".housemouse_trash".to_string(),
+            to: ".mousekeeper_trash".to_string(),
             content: None,
             source_size_bytes: 1,
             source_modified_unix_ms: None,

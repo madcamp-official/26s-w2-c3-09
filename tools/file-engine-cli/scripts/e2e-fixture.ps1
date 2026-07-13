@@ -11,7 +11,7 @@ $decisionPath = Join-Path $runRoot "decision.jsonl"
 
 New-Item -ItemType Directory -Path $runRoot | Out-Null
 Copy-Item -Recurse -Path $fixtureRoot -Destination $managedRoot
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $managedRoot ".housemouse")
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $managedRoot ".mousekeeper")
 
 Push-Location $cliDir
 try {

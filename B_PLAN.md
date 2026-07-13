@@ -72,7 +72,7 @@ Firebase
 
 #### 1.1 Android Firebase 연결
 
-- 실제 `google-services.json`의 Android package가 `com.housemouse.app`과 일치하는지 확인한다.
+- 실제 `google-services.json`의 Android package가 `com.mousekeeper.app`과 일치하는지 확인한다.
 - Gradle Google Services plugin과 Firebase 초기화를 확인한다.
 - debug와 release SHA fingerprint를 Firebase 프로젝트에 등록한다.
 - 설정 파일이 없거나 잘못된 경우 앱이 명확한 설정 오류를 표시하도록 확인한다.

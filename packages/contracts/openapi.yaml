@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
-  title: HOUSEMOUSE Control Plane API
+  title: MOUSEKEEPER Control Plane API
   version: 0.1.0
-  description: PostgreSQL에 먼저 영속되는 HOUSEMOUSE control-plane 공개 계약
+  description: PostgreSQL에 먼저 영속되는 MOUSEKEEPER control-plane 공개 계약
 security:
   - firebaseBearer: []
 paths:
@@ -860,7 +860,7 @@ components:
     deviceBearer:
       type: http
       scheme: bearer
-      bearerFormat: hm_device_ JWT
+      bearerFormat: mk_device_ JWT
   schemas:
     RegisterPushNotificationToken:
       type: object

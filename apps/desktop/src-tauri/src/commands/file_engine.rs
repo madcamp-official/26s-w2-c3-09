@@ -31,7 +31,7 @@ use crate::storage::auto_approval::{
 use crate::storage::managed_roots::{ManagedRoot, ManagedRootStatePatch, ManagedRootStore};
 use crate::storage::watchers::WatcherStore;
 
-const DEMO_ROOT_DIR_NAME: &str = "housemouse-ui-demo";
+const DEMO_ROOT_DIR_NAME: &str = "mousekeeper-ui-demo";
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
@@ -610,7 +610,7 @@ fn copy_demo_tree(source: &Path, target: &Path) -> Result<(), String> {
             continue;
         };
 
-        if matches!(name_str, ".housemouse" | ".housemouse_trash") {
+        if matches!(name_str, ".mousekeeper" | ".mousekeeper_trash") {
             continue;
         }
 
@@ -866,8 +866,8 @@ mod tests {
 
         assert!(root.starts_with(std::env::temp_dir()));
         assert!(root.join("documents").join("note.md").exists());
-        assert!(!root.join(".housemouse").exists());
-        assert!(!root.join(".housemouse_trash").exists());
+        assert!(!root.join(".mousekeeper").exists());
+        assert!(!root.join(".mousekeeper_trash").exists());
     }
 
     #[test]
@@ -933,11 +933,11 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         fs::create_dir_all(root.join("inbox")).expect("create inbox");
-        fs::create_dir_all(root.join(".housemouse")).expect("create state dir");
+        fs::create_dir_all(root.join(".mousekeeper")).expect("create state dir");
         fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
         fs::write(root.join("inbox").join("noise.tmp"), "noise").expect("write temp");
         fs::write(
-            root.join(".housemouse").join("rules.json"),
+            root.join(".mousekeeper").join("rules.json"),
             r#"{"version":1,"rules":[{"id":"temp-trash","when":{"name_matches":"*.tmp"},"then":{"trash":true}}]}"#,
         )
         .expect("write rules");

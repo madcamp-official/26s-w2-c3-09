@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Housemouse",
+  "productName": "MouseKeeper",
   "version": "0.1.0",
-  "identifier": "com.housemouse.desktop",
+  "identifier": "com.mousekeeper.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Housemouse",
+        "title": "MouseKeeper",
         "width": 1200,
         "height": 800
       }

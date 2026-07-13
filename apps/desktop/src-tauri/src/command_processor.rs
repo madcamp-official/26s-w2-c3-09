@@ -548,7 +548,7 @@ mod tests {
                     proposal_id: "trash:0000000000000002".to_string(),
                     action: ProposalAction::Trash,
                     from: "inbox/noise.tmp".to_string(),
-                    to: ".housemouse_trash/noise.tmp".to_string(),
+                    to: ".mousekeeper_trash/noise.tmp".to_string(),
                     content: None,
                     source_size_bytes: 3,
                     source_modified_unix_ms: None,

@@ -11,11 +11,12 @@ apps/desktop/src-tauri/gen/
 *.db
 *.db-shm
 *.db-wal
-.housemouse/
-**/.housemouse/
-.housemouse_trash/
-**/.housemouse_trash/
+.mousekeeper/
+**/.mousekeeper/
+.mousekeeper_trash/
+**/.mousekeeper_trash/
 apps/mobile/android/local.properties
+apps/mobile/android/app/google-services.json
 apps/mobile/ios/Flutter/ephemeral/
 
 .AGENTS.md

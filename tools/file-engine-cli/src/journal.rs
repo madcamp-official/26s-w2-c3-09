@@ -12,8 +12,8 @@ use crate::db::{block_on, db_path_for_root, open_root_db, DbError};
 use crate::path_guard::{PathGuard, PathGuardError};
 use crate::precondition::{precheck_root, PrecheckError, PrecheckStatus};
 
-pub const STATE_DIR: &str = ".housemouse";
-pub const TRASH_DIR: &str = ".housemouse_trash";
+pub const STATE_DIR: &str = ".mousekeeper";
+pub const TRASH_DIR: &str = ".mousekeeper_trash";
 pub const JOURNAL_FILE: &str = "journal.jsonl";
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

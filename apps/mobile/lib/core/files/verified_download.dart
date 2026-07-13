@@ -18,7 +18,7 @@ class VerifiedDownload {
     final directory = await getApplicationDocumentsDirectory();
     final destination = await _availableDestination(directory, fileName);
     final temporary = File(
-      p.join(directory.path, '.housemouse-${const Uuid().v4()}.part'),
+      p.join(directory.path, '.mousekeeper-${const Uuid().v4()}.part'),
     );
     try {
       await api.downloadSignedUrl(

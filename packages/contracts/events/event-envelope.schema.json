@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.app/contracts/events/event-envelope.schema.json",
-  "title": "HOUSEMOUSE EventEnvelope",
+  "$id": "https://mousekeeper.app/contracts/events/event-envelope.schema.json",
+  "title": "MOUSEKEEPER EventEnvelope",
   "type": "object",
   "additionalProperties": false,
   "required": ["eventId", "eventType", "schemaVersion", "correlationId", "aggregateType", "aggregateId", "deviceId", "roomId", "sequence", "occurredAt", "payload"],

@@ -33,7 +33,7 @@ export class RealtimeGateway implements OnGatewayConnection {
         throw new Error('Missing token');
       }
       const token = raw.startsWith('Bearer ') ? raw.slice(7) : raw;
-      const principal = token.startsWith('hm_device_')
+      const principal = token.startsWith('mk_device_')
         ? await this.auth.authenticateDevice(token.slice(10))
         : await this.auth.authenticate(token);
       await client.join(`user:${principal.userId}`);

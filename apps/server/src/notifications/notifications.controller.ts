@@ -6,7 +6,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { registerPushNotificationTokenSchema } from '@housemouse/contracts';
+import { registerPushNotificationTokenSchema } from '@mousekeeper/contracts';
 import { CurrentPrincipal } from '../auth/auth-principal';
 import type { AuthPrincipal } from '../auth/auth-principal';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';

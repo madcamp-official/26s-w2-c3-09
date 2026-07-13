@@ -17,7 +17,7 @@ import {
   rooms,
   syncEvents,
   type Database,
-} from "@housemouse/database";
+} from "@mousekeeper/database";
 import { and, asc, eq, inArray, lte, max, or, sql } from "drizzle-orm";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging, type Messaging } from "firebase-admin/messaging";

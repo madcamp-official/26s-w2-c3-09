@@ -4,7 +4,7 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
-import { devices, type Database } from '@housemouse/database';
+import { devices, type Database } from '@mousekeeper/database';
 import { and, eq } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { DATABASE } from '../database/database.module';

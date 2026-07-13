@@ -5,25 +5,25 @@ import 'features/auth/login_page.dart';
 import 'features/home/home_page.dart';
 import 'core/sync/realtime_controller.dart';
 
-final housemouseScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+final mousekeeperScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
-class HousemouseApp extends ConsumerWidget {
-  const HousemouseApp({super.key, this.configurationError});
+class MouseKeeperApp extends ConsumerWidget {
+  const MouseKeeperApp({super.key, this.configurationError});
   final String? configurationError;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     ref.listen(realtimeNoticeProvider, (previous, next) {
       if (next == null || previous?.eventId == next.eventId) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        final messenger = housemouseScaffoldMessengerKey.currentState;
+        final messenger = mousekeeperScaffoldMessengerKey.currentState;
         messenger
           ?..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text(next.message)));
       });
     });
     return MaterialApp(
-      title: 'HOUSEMOUSE',
-      scaffoldMessengerKey: housemouseScaffoldMessengerKey,
+      title: 'MOUSEKEEPER',
+      scaffoldMessengerKey: mousekeeperScaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF76543A)),
@@ -51,7 +51,7 @@ class ConfigurationRequiredPage extends StatelessWidget {
   final String error;
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('HOUSEMOUSE')),
+    appBar: AppBar(title: const Text('MOUSEKEEPER')),
     body: Center(
       child: Padding(
         padding: const EdgeInsets.all(24),

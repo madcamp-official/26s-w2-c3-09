@@ -148,16 +148,18 @@ fn execute_prechecked(
                     reason: None,
                 });
             }
-            ProposalAction::ReadmeWrite => match execute_readme_write(&guard, &store, check, index)? {
-                Ok(result) => {
-                    executed_count += 1;
-                    results.push(result);
+            ProposalAction::ReadmeWrite => {
+                match execute_readme_write(&guard, &store, check, index)? {
+                    Ok(result) => {
+                        executed_count += 1;
+                        results.push(result);
+                    }
+                    Err(reason) => {
+                        skipped_count += 1;
+                        results.push(skipped_result(check, Some(reason)));
+                    }
                 }
-                Err(reason) => {
-                    skipped_count += 1;
-                    results.push(skipped_result(check, Some(reason)));
-                }
-            },
+            }
         }
     }
 
@@ -187,8 +189,8 @@ fn execute_readme_write(
     };
 
     let operation_id = format!("op-{}-{index}", unix_ms());
-    let backup_relative = format!(".housemouse/readme_backups/{operation_id}.bak");
-    let absent_relative = format!(".housemouse/readme_backups/{operation_id}.absent");
+    let backup_relative = format!(".mousekeeper/readme_backups/{operation_id}.bak");
+    let absent_relative = format!(".mousekeeper/readme_backups/{operation_id}.absent");
     let target = guard.root().join("README.md");
     let backup = guard.root().join(&backup_relative);
     let absent = guard.root().join(&absent_relative);
@@ -531,10 +533,10 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         fs::create_dir_all(root.join("inbox")).expect("create inbox");
-        fs::create_dir_all(root.join(".housemouse")).expect("create state dir");
+        fs::create_dir_all(root.join(".mousekeeper")).expect("create state dir");
         fs::write(root.join("inbox").join("cache.tmp"), "noise").expect("write temp");
         fs::write(
-            root.join(".housemouse").join("rules.json"),
+            root.join(".mousekeeper").join("rules.json"),
             r#"{"version":1,"rules":[{"id":"temp-trash","when":{"name_matches":"*.tmp"},"then":{"trash":true}}]}"#,
         )
         .expect("write rules");
@@ -557,14 +559,14 @@ mod tests {
     fn proposal_trash_matches_direct_trash_on_disk_structure() {
         // A proposal-executed QUARANTINE and a direct manual trash must produce the same journal
         // action and the same recoverable on-disk layout (a `file` payload plus an `original.json`
-        // metadata sidecar under .housemouse_trash/<op>/), because both go through trash_file().
+        // metadata sidecar under .mousekeeper_trash/<op>/), because both go through trash_file().
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         fs::create_dir_all(root.join("inbox")).expect("create inbox");
-        fs::create_dir_all(root.join(".housemouse")).expect("create state dir");
+        fs::create_dir_all(root.join(".mousekeeper")).expect("create state dir");
         fs::write(root.join("inbox").join("cache.tmp"), "noise").expect("write temp");
         fs::write(
-            root.join(".housemouse").join("rules.json"),
+            root.join(".mousekeeper").join("rules.json"),
             r#"{"version":1,"rules":[{"id":"temp-trash","when":{"name_matches":"*.tmp"},"then":{"trash":true}}]}"#,
         )
         .expect("write rules");

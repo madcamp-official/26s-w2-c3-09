@@ -18,7 +18,7 @@ import {
   rooms,
   auditEvents,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { and, eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
 import { CurrentPrincipal } from '../auth/auth-principal';

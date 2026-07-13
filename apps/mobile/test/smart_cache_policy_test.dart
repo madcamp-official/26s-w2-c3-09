@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:housemouse/features/files/smart_cache_page.dart';
+import 'package:mousekeeper/features/files/smart_cache_page.dart';
 
 void main() {
   test('opt-in policy input converts MB and preserves explicit exclusions', () {

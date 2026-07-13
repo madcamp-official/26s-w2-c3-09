@@ -1,4 +1,4 @@
-package com.housemouse.app
+package com.mousekeeper.app
 
 import io.flutter.embedding.android.FlutterActivity
 

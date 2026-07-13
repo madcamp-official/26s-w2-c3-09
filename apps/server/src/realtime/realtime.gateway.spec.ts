@@ -17,7 +17,7 @@ describe('RealtimeGateway contract', () => {
     const join = jest.fn().mockResolvedValue(undefined);
     const disconnect = jest.fn();
     const client = {
-      handshake: { auth: { token: 'hm_device_signed-token' } },
+      handshake: { auth: { token: 'mk_device_signed-token' } },
       join,
       disconnect,
       data: {},

@@ -31,7 +31,7 @@
       "proposalId": "trash:aaaaaaaaaaaaaaaa",
       "action": "trash",
       "from": "inbox/noise.tmp",
-      "to": ".housemouse_trash",
+      "to": ".mousekeeper_trash",
       "sourceSizeBytes": 128,
       "sourceModifiedUnixMs": 1783760400000,
       "reason": "rule 'old-temp' moves this into recoverable trash",

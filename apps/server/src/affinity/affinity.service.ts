@@ -3,7 +3,7 @@ import {
   affinityEvents,
   characterProfiles,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { eq, sql } from 'drizzle-orm';
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 @Injectable()

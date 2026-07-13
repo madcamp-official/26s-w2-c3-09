@@ -41,11 +41,11 @@ export function OnboardingSlot({
 
   return (
     <section className="onboarding-slot" aria-labelledby="onboarding-heading">
-      <h1 id="onboarding-heading">Welcome to Housemouse</h1>
+      <h1 id="onboarding-heading">Welcome to MouseKeeper</h1>
 
       {/* B's onboarding design / character intro plugs in here. */}
       <div className="onboarding-design-slot" data-slot="onboarding-design">
-        <p>Pair your phone and pick a folder for Housemouse to help tidy.</p>
+        <p>Pair your phone and pick a folder for MouseKeeper to help tidy.</p>
       </div>
 
       <ol className="onboarding-steps">

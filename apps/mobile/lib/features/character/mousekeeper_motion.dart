@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:housemouse_character_assets/character_assets.dart';
+import 'package:mousekeeper_character_assets/character_assets.dart';
 
-class HousemouseMotionImage extends StatelessWidget {
-  const HousemouseMotionImage({
+class MouseKeeperMotionImage extends StatelessWidget {
+  const MouseKeeperMotionImage({
     super.key,
     required this.motion,
     this.width,
     this.height,
   });
 
-  final HousemouseMotion motion;
+  final MouseKeeperMotion motion;
   final double? width;
   final double? height;
 
@@ -24,31 +24,31 @@ class HousemouseMotionImage extends StatelessWidget {
       ),
     ),
     child: Image.asset(
-      housemouseMotionAsset(motion),
+      mousekeeperMotionAsset(motion),
       key: ValueKey(motion),
-      package: housemouseMascotPackage,
+      package: mousekeeperMascotPackage,
       width: width,
       height: height,
       fit: BoxFit.contain,
       filterQuality: FilterQuality.none,
-      semanticLabel: 'HouseMouse ${motion.name}',
+      semanticLabel: 'MouseKeeper ${motion.name}',
     ),
   );
 }
 
-HousemouseMotion? housemouseMotionForCharacterKind(String? kind) =>
+MouseKeeperMotion? mousekeeperMotionForCharacterKind(String? kind) =>
     switch (kind) {
-      'ANALYZING' || 'WAITING_APPROVAL' => HousemouseMotion.considering,
-      'WORKING' => HousemouseMotion.working,
-      'SUCCESS' => HousemouseMotion.clean,
-      'ERROR' => HousemouseMotion.fighting,
-      'USER_WORKING' => HousemouseMotion.walk,
-      'OFFLINE' => HousemouseMotion.sleeping,
-      'IDLE' => HousemouseMotion.stand,
+      'ANALYZING' || 'WAITING_APPROVAL' => MouseKeeperMotion.considering,
+      'WORKING' => MouseKeeperMotion.working,
+      'SUCCESS' => MouseKeeperMotion.clean,
+      'ERROR' => MouseKeeperMotion.fighting,
+      'USER_WORKING' => MouseKeeperMotion.walk,
+      'OFFLINE' => MouseKeeperMotion.sleeping,
+      'IDLE' => MouseKeeperMotion.stand,
       _ => null,
     };
 
-HousemouseMotion housemouseMotionForHome({
+MouseKeeperMotion mousekeeperMotionForHome({
   required bool isOffline,
   required Iterable<String> presences,
   required Iterable<String?> executionStatuses,
@@ -59,17 +59,17 @@ HousemouseMotion housemouseMotionForHome({
   if (isOffline ||
       (presenceSet.isNotEmpty &&
           presenceSet.every((item) => item == 'OFFLINE'))) {
-    return HousemouseMotion.sleeping;
+    return MouseKeeperMotion.sleeping;
   }
-  if (presenceSet.contains('DEGRADED')) return HousemouseMotion.fighting;
+  if (presenceSet.contains('DEGRADED')) return MouseKeeperMotion.fighting;
   if (presenceSet.contains('ONLINE_EXECUTING')) {
-    return HousemouseMotion.working;
+    return MouseKeeperMotion.working;
   }
   if (presenceSet.contains('ONLINE_SCANNING')) {
-    return HousemouseMotion.considering;
+    return MouseKeeperMotion.considering;
   }
 
-  final liveMotion = housemouseMotionForCharacterKind(realtimeCharacterKind);
+  final liveMotion = mousekeeperMotionForCharacterKind(realtimeCharacterKind);
   if (liveMotion != null) return liveMotion;
 
   final statuses = executionStatuses.whereType<String>().toSet();
@@ -81,9 +81,9 @@ HousemouseMotion housemouseMotionForHome({
       'ROLLED_BACK',
     }.contains(status),
   )) {
-    return HousemouseMotion.fighting;
+    return MouseKeeperMotion.fighting;
   }
-  if (statuses.contains('EXECUTING')) return HousemouseMotion.working;
+  if (statuses.contains('EXECUTING')) return MouseKeeperMotion.working;
   if (hasPendingProposal ||
       statuses.any(
         (status) => const {
@@ -92,14 +92,14 @@ HousemouseMotion housemouseMotionForHome({
           'WAITING_APPROVAL',
         }.contains(status),
       )) {
-    return HousemouseMotion.considering;
+    return MouseKeeperMotion.considering;
   }
-  if (statuses.contains('SUCCEEDED')) return HousemouseMotion.clean;
+  if (statuses.contains('SUCCEEDED')) return MouseKeeperMotion.clean;
   if (statuses.any(
     (status) => const {'QUEUED', 'DELIVERED', 'APPROVED'}.contains(status),
   )) {
-    return HousemouseMotion.walk;
+    return MouseKeeperMotion.walk;
   }
-  if (presenceSet.isEmpty) return HousemouseMotion.sleeping;
-  return HousemouseMotion.stand;
+  if (presenceSet.isEmpty) return MouseKeeperMotion.sleeping;
+  return MouseKeeperMotion.stand;
 }

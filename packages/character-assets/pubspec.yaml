@@ -1,5 +1,5 @@
-name: housemouse_character_assets
-description: Shared HouseMouse mascot assets.
+name: mousekeeper_character_assets
+description: Shared MouseKeeper mascot assets.
 version: 0.1.0
 publish_to: none
 
@@ -12,7 +12,6 @@ dependencies:
 
 flutter:
   assets:
-    - mascot.png
     - mouse_clean.png
     - mouse_considering.png
     - mouse_fighting.png

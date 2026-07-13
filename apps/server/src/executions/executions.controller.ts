@@ -13,7 +13,7 @@ import {
   createExecutionSchema,
   idempotencyKeySchema,
   updateExecutionSchema,
-} from '@housemouse/contracts';
+} from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';
 import { AgentOnly } from '../auth/agent-only.decorator';

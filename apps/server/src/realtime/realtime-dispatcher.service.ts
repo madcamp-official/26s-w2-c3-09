@@ -4,7 +4,7 @@ import {
   OnApplicationBootstrap,
   OnApplicationShutdown,
 } from '@nestjs/common';
-import { syncEvents, type Database } from '@housemouse/database';
+import { syncEvents, type Database } from '@mousekeeper/database';
 import { asc, eq, isNull } from 'drizzle-orm';
 import { DATABASE } from '../database/database.module';
 import { RealtimeGateway } from './realtime.gateway';

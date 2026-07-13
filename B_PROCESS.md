@@ -1,10 +1,10 @@
 # B 개발 진행 기록
 
-이 문서는 B(Product & Cloud) 영역의 결정, 구현 변경, 검증 결과와 외부 설정 의존성을 기록한다. 기준 문서는 `HOUSEMOUSE_PLAN.md`, `IMPLEMENTATION_PLAN.md`, `AI_implement_rule.txt`이다.
+이 문서는 B(Product & Cloud) 영역의 결정, 구현 변경, 검증 결과와 외부 설정 의존성을 기록한다. 기준 문서는 `MOUSEKEEPER_PLAN.md`, `IMPLEMENTATION_PLAN.md`, `AI_implement_rule.txt`이다.
 
 ## 적용 원칙
 
-- `HOUSEMOUSE_PLAN.md` v1.3의 기술 스택과 상태 머신을 제품 결정의 최우선 기준으로 사용한다.
+- `MOUSEKEEPER_PLAN.md` v1.3의 기술 스택과 상태 머신을 제품 결정의 최우선 기준으로 사용한다.
 - 가짜 API, dummy/seed 데이터, 성공을 가장하는 fallback을 만들지 않는다.
 - Firebase, object storage 등 외부 provider가 없으면 `UNCONFIGURED` 또는 시작 단계 fail-fast로 처리한다.
 - 중요한 명령과 결과는 PostgreSQL commit 후에만 알림을 발행한다.
@@ -21,7 +21,7 @@
 - pnpm: 설치 완료
 - Flutter/Android toolchain: `flutter doctor` 통과
 - Docker: 설치 완료
-- Android application ID: `com.housemouse.app`
+- Android application ID: `com.mousekeeper.app`
 
 ### 기존 구현
 
@@ -108,7 +108,7 @@
 
 ### Flutter 모바일
 
-- `--dart-define`의 `FIREBASE_ENABLED`, `HOUSEMOUSE_API_URL`, 선택적 `GOOGLE_SERVER_CLIENT_ID`를 설정 경계로 사용한다.
+- `--dart-define`의 `FIREBASE_ENABLED`, `MOUSEKEEPER_API_URL`, 선택적 `GOOGLE_SERVER_CLIENT_ID`를 설정 경계로 사용한다.
 - Firebase native 설정이 없거나 초기화에 실패하면 Google 로그인 대신 `UNCONFIGURED`를 표시한다.
 - Google Sign-In → Firebase credential 로그인과 Firebase ID token API header 주입을 구현했다.
 - 홈 화면에 장치·방의 loading, empty, network error 상태와 새로고침을 구현했다.
@@ -135,7 +135,7 @@
 - pairing session 응답에 Desktop만 아는 256-bit nonce를 추가했다.
 - 모바일 claim이 완료되면 pairing session에 claimed device ID를 원자적으로 연결한다.
 - Desktop은 session ID + nonce로 claim 상태를 조회하고 90일 만료 device JWT를 받는다.
-- device token은 `hm_device_` prefix, server issuer, desktop audience를 검증하고 DB의 ACTIVE device 여부를 매 요청 재확인한다.
+- device token은 `mk_device_` prefix, server issuer, desktop audience를 검증하고 DB의 ACTIVE device 여부를 매 요청 재확인한다.
 - `@AgentOnly` metadata와 guard를 추가해 command 수신/상태, proposal 제출, execution, heartbeat, browse 결과, transfer upload endpoint에서 Firebase 사용자 token을 거절한다.
 - device revoke 뒤 기존 JWT도 DB 검사에서 즉시 거절된다.
 - simulator도 Firebase ID token 대신 실제 pairing device token만 받도록 변경했다.
@@ -171,7 +171,7 @@
 
 ### 실시간 알림과 replay
 
-- Socket.IO namespace `/realtime`을 추가하고 Firebase 사용자 token 또는 `hm_device_` device token을 handshake에서 실제 검증한다.
+- Socket.IO namespace `/realtime`을 추가하고 Firebase 사용자 token 또는 `mk_device_` device token을 handshake에서 실제 검증한다.
 - 브라우저 Origin은 `WEB_ORIGIN`과 정확히 일치할 때만 허용하고, native client처럼 Origin header가 없는 연결은 인증 token 검증 뒤 허용한다.
 - `sync_events.published_at`과 migration `0007_ambiguous_wong.sql`을 추가했다.
 - PostgreSQL에 먼저 저장된 미발행 event를 dispatcher가 읽어 user room에 알린 뒤 published 시각을 기록한다.
@@ -214,7 +214,7 @@
 - Flutter analyze 0건, widget test 1건 통과.
 - Docker 임시 PostgreSQL 17과 Valkey 8을 healthy 상태로 띄운 뒤 migration 0000~0007과 실제 command DB integration test를 통과했다. 검증 뒤 container/network/volume을 삭제했다.
 - Android 첫 build는 SDK Build-Tools 36, Platform 34/35, CMake 3.22.1 설치 때문에 5분 명령 제한을 넘었지만 Gradle 자식 프로세스가 정상 완료했고 `apps/mobile/build/app/outputs/flutter-apk/app-debug.apk`가 생성됐다.
-- Android `namespace`와 `applicationId`는 모두 `com.housemouse.app`이다.
+- Android `namespace`와 `applicationId`는 모두 `com.mousekeeper.app`이다.
 - 저장소 전체에서 README는 root `README.md` 하나만 존재한다.
 
 ### 외부 설정이 남은 항목
@@ -225,7 +225,7 @@
 
 ## 2026-07-11 — B 전체 범위 재감사와 최종 하드닝
 
-이번 단계에서는 `HOUSEMOUSE_PLAN.md`의 B-P0~B-P3, Phase 1~8, B DoD와 `IMPLEMENTATION_PLAN.md`, `AI_implement_rule.txt`를 다시 대조했다. 외부 secret이나 asset 없이 검증 가능한 B 구현은 계속 진행하고, 실제 provider가 필요한 항목은 성공으로 가장하지 않고 아래의 외부 의존성으로 분리했다.
+이번 단계에서는 `MOUSEKEEPER_PLAN.md`의 B-P0~B-P3, Phase 1~8, B DoD와 `IMPLEMENTATION_PLAN.md`, `AI_implement_rule.txt`를 다시 대조했다. 외부 secret이나 asset 없이 검증 가능한 B 구현은 계속 진행하고, 실제 provider가 필요한 항목은 성공으로 가장하지 않고 아래의 외부 의존성으로 분리했다.
 
 ### 계약과 데이터 계층
 
@@ -239,7 +239,7 @@
 
 ### 인증·명령·실시간 제어면
 
-- Firebase user token과 90일 `hm_device_` token을 분리하고, device token은 요청마다 DB의 `ACTIVE` 상태와 정확한 device ownership을 다시 검사한다.
+- Firebase user token과 90일 `mk_device_` token을 분리하고, device token은 요청마다 DB의 `ACTIVE` 상태와 정확한 device ownership을 다시 검사한다.
 - pairing code는 HMAC 기반 6자리 값, 256-bit nonce, 10분 TTL을 사용하며 claim한 device와만 token을 교환한다.
 - command는 DB durable queue에 먼저 저장하고, proposal/decision/execution은 각각 멱등 key와 대상 device를 격리한다.
 - 승인된 decision 중 아직 execution이 claim하지 않은 항목만 Desktop pending API로 반환한다.
@@ -304,7 +304,7 @@
 - desktop simulator: 1 test와 typecheck 통과.
 - Flutter: `flutter analyze` 0건, cache/outbox/browse fallback/실시간 알림/스마트 캐시/README/캐릭터 widget·unit tests 19개 통과.
 - 최신 Android debug APK 생성 성공: `apps/mobile/build/app/outputs/flutter-apk/app-debug.apk`, 183,707,412 bytes, SHA-256 `C96A1514AB4915D4D400CF3C86D681E9F40BC3030DAB04DD40AA583A49B6BAA3`.
-- Android release dry-run은 실제 signing 환경 변수 4개가 없을 때 `UNCONFIGURED: HOUSEMOUSE_ANDROID_KEYSTORE_PATH...`로 중단되는 것을 확인했다.
+- Android release dry-run은 실제 signing 환경 변수 4개가 없을 때 `UNCONFIGURED: MOUSEKEEPER_ANDROID_KEYSTORE_PATH...`로 중단되는 것을 확인했다.
 - 검증에 사용한 임시 server process, PostgreSQL·Valkey container와 일회성 key 파일은 모두 종료·삭제했다.
 
 ### 실제 외부 입력이 필요한 잔여 항목
@@ -319,7 +319,7 @@
 
 ## 2026-07-11 — 완료 감사 2차 보완
 
-첫 번째 완료 보고 뒤 `HOUSEMOUSE_PLAN.md`의 B 항목과 테스트 전략을 항목별로 다시 대조했다. “코드가 존재한다”는 이유만으로 완료 처리하지 않고 실제 controller, DB schema, OpenAPI, 모바일 상태 처리와 통합 테스트가 요구사항을 직접 증명하는지 확인했다.
+첫 번째 완료 보고 뒤 `MOUSEKEEPER_PLAN.md`의 B 항목과 테스트 전략을 항목별로 다시 대조했다. “코드가 존재한다”는 이유만으로 완료 처리하지 않고 실제 controller, DB schema, OpenAPI, 모바일 상태 처리와 통합 테스트가 요구사항을 직접 증명하는지 확인했다.
 
 ### README 질문·검토 흐름
 
@@ -376,7 +376,7 @@
 | Minimal notification | app-open Socket.IO 알림과 replay-safe badge | 구현 완료·FCM 실기기 대기 |
 | P1 Smart cache | opt-in, exclude, quota lock, LRU, freshness, tombstone, offline UI | control plane 완료·실제 암호화 object E2E 대기 |
 | Deploy/Recovery | Render Blueprint, readiness, backup/restore, CI, runbook | 구성 완료·운영 권한/secret 대기 |
-| Android | `com.housemouse.app`, debug APK, release signing fail-fast | debug 완료·실제 keystore 대기 |
+| Android | `com.mousekeeper.app`, debug APK, release signing fail-fast | debug 완료·실제 keystore 대기 |
 
 ### 2차 감사 이후 외부 차단선
 
@@ -422,14 +422,14 @@
 
 Render 중심이던 잔여 배포 계획을 AWS EC2로 갱신하고 다음 저장소 구성을 추가했다.
 
-- `infra/aws/nginx/housemouse.conf`: Socket.IO upgrade를 포함한 `127.0.0.1:3000` reverse proxy
-- `infra/aws/systemd/housemouse-server.service`, `housemouse-worker.service`: root가 아닌 전용 계정, 외부 환경 파일, 재시작 정책
+- `infra/aws/nginx/mousekeeper.conf`: Socket.IO upgrade를 포함한 `127.0.0.1:3000` reverse proxy
+- `infra/aws/systemd/mousekeeper-server.service`, `mousekeeper-worker.service`: root가 아닌 전용 계정, 외부 환경 파일, 재시작 정책
 - `docs/AWS_EC2_DEPLOYMENT.md`: IAM role, migration, build, systemd, Nginx, Certbot, 클라이언트 URL 주입 절차
 - `scripts/check-production-endpoint.ps1`: HTTPS 강제 및 `/health`, `/ready` payload 검증
 
 AWS SDK object storage 설정은 endpoint와 static access key를 선택 사항으로 바꿨다. AWS 기본 S3에서는 endpoint를 생략하고 EC2 instance role의 temporary credential chain을 사용한다. 다른 S3-compatible provider는 기존 endpoint·static credential 방식을 유지한다. static credential은 access key와 secret key 중 하나만 설정하면 `UNCONFIGURED`로 거절한다.
 
-EC2에 Ubuntu 전용 `housemouse` 계정, 2GB swap, Node 24.18.0, pnpm 11.11.0, Docker PostgreSQL 17·Valkey 8, migration `0000~0014`, API systemd, Nginx reverse proxy와 Certbot TLS를 실제 구성했다. 외부 `https://mousekeeper.madcamp-kaist.org/health`는 `200 {status: ok}`, `/ready`는 `200 {status: ready}`를 반환한다. 80은 443으로 redirect하며 3000·5432·6379는 외부에서 닫혀 있고 DB·cache 컨테이너는 loopback에만 bind된다.
+EC2에 Ubuntu 전용 `mousekeeper` 계정, 2GB swap, Node 24.18.0, pnpm 11.11.0, Docker PostgreSQL 17·Valkey 8, migration `0000~0014`, API systemd, Nginx reverse proxy와 Certbot TLS를 실제 구성했다. 외부 `https://mousekeeper.madcamp-kaist.org/health`는 `200 {status: ok}`, `/ready`는 `200 {status: ready}`를 반환한다. 80은 443으로 redirect하며 3000·5432·6379는 외부에서 닫혀 있고 DB·cache 컨테이너는 loopback에만 bind된다.
 
 Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecycle worker는 `UNCONFIGURED` 상태로 disable했다. Android release keystore와 Sentry DSN도 외부 입력 대기다. API 배포 완료와 object storage/worker 완료를 구분해 기록한다.
 
@@ -445,7 +445,7 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 
 ## 2026-07-13 — Private S3와 lifecycle worker 활성화
 
-- Private S3 bucket과 `HouseMouseEc2S3Role`을 연결하고 장기 access key 없이 AWS SDK default credential chain을 사용했다.
+- Private S3 bucket과 `MouseKeeperEc2S3Role`을 연결하고 장기 access key 없이 AWS SDK default credential chain을 사용했다.
 - 첫 권한 검사에서 identity policy 누락을 `s3:ListBucket`, `s3:PutObject` `AccessDenied`로 확인했다. 반쪽 설정을 유지하지 않고 server 환경을 즉시 `UNCONFIGURED`로 복원하고 worker를 정지했다.
 - 최소 권한 policy 수정 후 `transfers/` prefix에서 LIST → PUT → HEAD → GET → DELETE와 삭제 후 404를 실제 검증했다. 임시 object와 검사 스크립트는 모두 삭제했다.
 - Worker 첫 운영 시작에서 `tsx` CJS 변환이 top-level `await`를 거절하는 문제를 발견했다. 진입점을 명시적 `start()` 함수로 감싸 `2902a88`에 수정·배포했다.
@@ -471,7 +471,7 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 ### 운영 복구와 네트워크 경계
 
 - EC2 API bind를 `127.0.0.1:3000`으로 제한하고 Nginx만 접근하게 했다. 공개 `/health`, `/ready`는 계속 200이다.
-- root-only `/var/backups/housemouse` custom dump와 일일 systemd timer를 설치했다. 실제 backup SHA-256 검증, 임시 PostgreSQL DB restore, 필수 schema 확인과 임시 DB 삭제를 통과했다.
+- root-only `/var/backups/mousekeeper` custom dump와 일일 systemd timer를 설치했다. 실제 backup SHA-256 검증, 임시 PostgreSQL DB restore, 필수 schema 확인과 임시 DB 삭제를 통과했다.
 - Sentry SDK를 server·worker·mobile에 연결했다. DSN이 없으면 비활성이고, 값이 있으면 PII 전송을 끄며 request/user/extra/breadcrumb, token과 절대 경로를 제거한다. 실제 dashboard 수신은 DSN 미제공으로 검증 대기다.
 - Sentry 의존성 추가 뒤 저사양 EC2 Nest build가 기본 512MB heap에서 OOM이 나므로 배포 빌드에만 `NODE_OPTIONS=--max-old-space-size=1024`를 적용했다. runtime heap은 변경하지 않았다.
 

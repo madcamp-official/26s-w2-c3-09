@@ -295,10 +295,10 @@ fn validate_cache_path(relative_path: &str) -> Result<(), String> {
     }
 
     let lower = relative_path.replace('\\', "/").to_ascii_lowercase();
-    if lower.contains("/.housemouse/")
-        || lower.starts_with(".housemouse/")
-        || lower.contains("/.housemouse_trash/")
-        || lower.starts_with(".housemouse_trash/")
+    if lower.contains("/.mousekeeper/")
+        || lower.starts_with(".mousekeeper/")
+        || lower.contains("/.mousekeeper_trash/")
+        || lower.starts_with(".mousekeeper_trash/")
         || lower.ends_with(".tmp")
         || lower.ends_with(".lock")
         || lower.ends_with(".key")

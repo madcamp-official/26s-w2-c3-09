@@ -4,8 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { createRuleSchema, updateRuleSchema } from '@housemouse/contracts';
-import { rooms, rules, type Database } from '@housemouse/database';
+import { createRuleSchema, updateRuleSchema } from '@mousekeeper/contracts';
+import { rooms, rules, type Database } from '@mousekeeper/database';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module';

@@ -1,5 +1,5 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
-import { devices, users, type Database } from '@housemouse/database';
+import { devices, users, type Database } from '@mousekeeper/database';
 import { and, eq } from 'drizzle-orm';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
@@ -31,7 +31,7 @@ export class AuthService {
       const displayName =
         decoded.name?.trim() ||
         decoded.email?.split('@')[0] ||
-        'HOUSEMOUSE 사용자';
+        'MOUSEKEEPER 사용자';
       const existing = (
         await this.db
           .select()
@@ -68,7 +68,7 @@ export class AuthService {
       const payload = verify(
         token,
         loadEnvironment().JWT_OR_DEVICE_TOKEN_SECRET,
-        { issuer: 'housemouse-server', audience: 'housemouse-desktop' },
+        { issuer: 'mousekeeper-server', audience: 'mousekeeper-desktop' },
       );
       if (typeof payload === 'string' || typeof payload.sub !== 'string')
         throw new Error('Invalid device token');

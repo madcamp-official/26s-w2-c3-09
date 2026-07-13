@@ -42,9 +42,9 @@ jobs:
       - run: pnpm build
       - name: Verify Drizzle migrations are committed
         env:
-          DATABASE_URL: postgresql://migration:validation@localhost:5432/housemouse
+          DATABASE_URL: postgresql://migration:validation@localhost:5432/mousekeeper
         run: |
-          pnpm --filter @housemouse/database db:generate
+          pnpm --filter @mousekeeper/database db:generate
           git diff --exit-code -- packages/database/migrations
 
   flutter:

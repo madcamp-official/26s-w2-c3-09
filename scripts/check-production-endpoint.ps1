@@ -10,7 +10,7 @@ if ($uri.Scheme -ne 'https') {
   throw 'Production endpoint must use https.'
 }
 
-function Assert-HousemouseEndpoint {
+function Assert-MouseKeeperEndpoint {
   param(
     [Parameter(Mandatory = $true)]
     [string]$Path,
@@ -29,5 +29,5 @@ function Assert-HousemouseEndpoint {
 Resolve-DnsName $uri.Host -Type A -ErrorAction Stop |
   Where-Object Type -eq 'A' |
   ForEach-Object { "DNS Name=$($_.Name) IPAddress=$($_.IPAddress)" }
-Assert-HousemouseEndpoint -Path '/health' -ExpectedStatus 'ok'
-Assert-HousemouseEndpoint -Path '/ready' -ExpectedStatus 'ready'
+Assert-MouseKeeperEndpoint -Path '/health' -ExpectedStatus 'ok'
+Assert-MouseKeeperEndpoint -Path '/ready' -ExpectedStatus 'ready'

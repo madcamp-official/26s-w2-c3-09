@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://housemouse.local/contracts/events/decision.schema.json",
+  "$id": "https://mousekeeper.local/contracts/events/decision.schema.json",
   "title": "DecisionBatch",
   "description": "User decisions for a proposal batch. Approval allows the desktop to run precondition checks; it is not a bypass for local safety validation.",
   "type": "object",

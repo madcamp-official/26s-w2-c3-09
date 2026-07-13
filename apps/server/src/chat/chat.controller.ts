@@ -8,8 +8,8 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { createChatMessageSchema } from '@housemouse/contracts';
-import { chatMessages, rooms, type Database } from '@housemouse/database';
+import { createChatMessageSchema } from '@mousekeeper/contracts';
+import { chatMessages, rooms, type Database } from '@mousekeeper/database';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';

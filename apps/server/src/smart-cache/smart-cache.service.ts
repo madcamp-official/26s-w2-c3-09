@@ -10,7 +10,7 @@ import {
   cacheCandidateBatchSchema,
   completeCacheUploadSchema,
   updateSmartCachePolicySchema,
-} from '@housemouse/contracts';
+} from '@mousekeeper/contracts';
 import {
   cacheDeletionJobs,
   cacheCandidateBatches,
@@ -22,7 +22,7 @@ import {
   rooms,
   smartCachePolicies,
   type Database,
-} from '@housemouse/database';
+} from '@mousekeeper/database';
 import { and, asc, eq, gt, inArray, sql, sum } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
