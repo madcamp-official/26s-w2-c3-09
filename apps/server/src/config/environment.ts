@@ -13,6 +13,10 @@ const schema = z.object({
   DATABASE_URL: z.url(),
   REDIS_URL: z.url(),
   WEB_ORIGIN: z.url(),
+  SENTRY_DSN: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.url().optional(),
+  ),
   FIREBASE_SERVICE_ACCOUNT_PATH: optionalString,
   FIREBASE_PROJECT_ID: optionalString,
   FIREBASE_CLIENT_EMAIL: optionalString,

@@ -24,6 +24,10 @@ const schema = z
     FIREBASE_PROJECT_ID: optionalString,
     FIREBASE_CLIENT_EMAIL: optionalString,
     FIREBASE_PRIVATE_KEY: optionalString,
+    SENTRY_DSN: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.url().optional(),
+    ),
   })
   .superRefine((value, context) => {
     const hasAccessKey = Boolean(value.OBJECT_STORAGE_ACCESS_KEY_ID);

@@ -1,3 +1,4 @@
+import "./instrument";
 import { readFileSync } from "node:fs";
 import {
   DeleteObjectCommand,
@@ -20,6 +21,7 @@ import {
 import { and, asc, eq, inArray, lte, max, or, sql } from "drizzle-orm";
 import { cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging, type Messaging } from "firebase-admin/messaging";
+import { captureException } from "@sentry/node";
 import { loadWorkerConfig } from "./config";
 import { isPermanentlyInvalidTokenError } from "./notification-delivery";
 
@@ -512,7 +514,8 @@ async function tick() {
       await sweepOrphanTransfers();
       lastOrphanSweepAt = Date.now();
     }
-  } catch {
+  } catch (error) {
+    captureException(error);
     console.error("WORKER_TICK_FAILED");
   } finally {
     running = false;
