@@ -13,7 +13,7 @@ file-engine-cli = { path = "../../../tools/file-engine-cli" }
 futures-util = { version = "0.3", optional = true }
 keyring = "4.1.4"
 notify = "8.2.0"
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "stream"] }
 rust_socketio = { version = "0.6.0", features = ["async"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -22,7 +22,8 @@ sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 tauri-plugin-autostart = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
-tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

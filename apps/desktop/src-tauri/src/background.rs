@@ -434,7 +434,9 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
         }
     }
 
-    match crate::file_transfer_processor::process_pending_file_transfers(&agent, &roots).await {
+    match crate::file_transfer_processor::process_pending_file_transfers(&agent, &roots, &outbox)
+        .await
+    {
         Ok(report) => {
             if report.failed_count > 0 {
                 activity.had_error = true;

@@ -12,7 +12,9 @@ use crate::agent::{
     AgentFileTransfer, AgentFileTransferFailureCode, AgentFileTransferSourceVersion,
     AgentFileTransferUploadTarget, AgentRuntime,
 };
+use crate::outbox_processor::{enqueue_file_transfer_completion, file_transfer_completion_key};
 use crate::storage::managed_roots::ManagedRootStore;
+use crate::storage::outbox::OutboxStore;
 
 const FILE_READ_CHUNK_BYTES: usize = 1024 * 1024;
 const UPLOAD_TIMEOUT_SECONDS: u64 = 120;
@@ -92,6 +94,7 @@ pub enum FileTransferProcessingStatus {
 pub async fn process_pending_file_transfers(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
 ) -> Result<FileTransferProcessingReport, String> {
     let transfers = agent
         .pending_file_transfers()
@@ -108,7 +111,7 @@ pub async fn process_pending_file_transfers(
 
     for transfer in transfers {
         let transfer_id = transfer.transfer_id.clone();
-        match process_one_transfer(agent, roots, transfer).await {
+        match process_one_transfer(agent, roots, outbox, transfer).await {
             Ok(completed) => {
                 report.uploaded_count += 1;
                 report.results.push(FileTransferProcessingResult {
@@ -154,6 +157,7 @@ pub async fn process_pending_file_transfers(
 async fn process_one_transfer(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
     transfer: AgentFileTransfer,
 ) -> Result<CompletedTransferUpload, TransferUploadExecutionError> {
     let prepared = prepare_upload_target_for_transfer(agent, roots, &transfer)
@@ -164,7 +168,7 @@ async fn process_one_transfer(
             failure_reported: error.failure_reported,
             message: error.message,
         })?;
-    upload_prepared_transfer(agent, prepared).await
+    upload_prepared_transfer(agent, outbox, prepared).await
 }
 
 pub async fn prepare_upload_target_for_transfer(
@@ -231,13 +235,14 @@ pub async fn prepare_upload_target_for_transfer(
 
 pub async fn upload_prepared_transfer(
     agent: &AgentRuntime,
+    outbox: &OutboxStore,
     prepared: PreparedTransferUpload,
 ) -> Result<CompletedTransferUpload, TransferUploadExecutionError> {
     if let Err(error) = ensure_source_unchanged(&prepared.source) {
         return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await);
     }
 
-    let payload = match read_source_payload(&prepared.source) {
+    let payload = match hash_source_payload(&prepared.source) {
         Ok(payload) => payload,
         Err(error) => {
             return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await)
@@ -248,23 +253,40 @@ pub async fn upload_prepared_transfer(
         return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await);
     }
 
-    put_upload_bytes(&prepared.upload_target.upload_url, payload.bytes)
-        .await
-        .map_err(|message| TransferUploadExecutionError {
-            transfer_id: prepared.source.transfer_id.clone(),
-            failure_code: None,
-            failure_reported: false,
-            message,
-        })?;
+    put_upload_file(
+        &prepared.upload_target.upload_url,
+        &prepared.source.resolved_path,
+        payload.size_bytes,
+    )
+    .await
+    .map_err(|message| TransferUploadExecutionError {
+        transfer_id: prepared.source.transfer_id.clone(),
+        failure_code: None,
+        failure_reported: false,
+        message,
+    })?;
 
     if let Err(error) = ensure_source_unchanged(&prepared.source) {
         return Err(report_source_changed(agent, &prepared.source.transfer_id, error).await);
     }
 
+    enqueue_file_transfer_completion(
+        outbox,
+        &prepared.source.transfer_id,
+        payload.size_bytes,
+        &payload.sha256,
+    )
+    .map_err(|message| TransferUploadExecutionError {
+        transfer_id: prepared.source.transfer_id.clone(),
+        failure_code: None,
+        failure_reported: false,
+        message,
+    })?;
+
     agent
         .complete_file_transfer_upload(
             prepared.source.transfer_id.clone(),
-            format!("{}-complete", prepared.source.transfer_id),
+            file_transfer_completion_key(&prepared.source.transfer_id),
             payload.size_bytes,
             payload.sha256.clone(),
         )
@@ -398,12 +420,11 @@ pub fn validate_local_transfer_source(
 
 #[derive(Debug, PartialEq, Eq)]
 struct TransferUploadPayload {
-    bytes: Vec<u8>,
     size_bytes: u64,
     sha256: String,
 }
 
-fn read_source_payload(
+fn hash_source_payload(
     source: &ValidatedTransferSource,
 ) -> Result<TransferUploadPayload, TransferUploadExecutionError> {
     let mut file =
@@ -414,11 +435,7 @@ fn read_source_payload(
             message: format!("cannot open source file for upload: {error}"),
         })?;
     let mut hasher = Sha256::new();
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(source.source_version.size_bytes)
-            .unwrap_or(FILE_READ_CHUNK_BYTES)
-            .min(FILE_READ_CHUNK_BYTES),
-    );
+    let mut size_bytes = 0_u64;
     let mut buffer = vec![0_u8; FILE_READ_CHUNK_BYTES];
 
     loop {
@@ -434,10 +451,9 @@ fn read_source_payload(
             break;
         }
         hasher.update(&buffer[..read]);
-        bytes.extend_from_slice(&buffer[..read]);
+        size_bytes = size_bytes.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
     }
 
-    let size_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if size_bytes != source.source_version.size_bytes {
         return Err(TransferUploadExecutionError {
             transfer_id: source.transfer_id.clone(),
@@ -448,26 +464,31 @@ fn read_source_payload(
     }
 
     Ok(TransferUploadPayload {
-        bytes,
         size_bytes,
         sha256: hex_lower(&hasher.finalize()),
     })
 }
 
-async fn put_upload_bytes(upload_url: &str, bytes: Vec<u8>) -> Result<(), String> {
+async fn put_upload_file(upload_url: &str, path: &PathBuf, size_bytes: u64) -> Result<(), String> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|error| format!("cannot open source file stream for upload: {error}"))?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = reqwest::Body::wrap_stream(stream);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(UPLOAD_TIMEOUT_SECONDS))
         .build()
         .map_err(|error| format!("cannot configure upload client: {error}"))?;
     let response = client
         .put(upload_url)
-        .body(bytes)
+        .header("Content-Length", size_bytes.to_string())
+        .body(body)
         .send()
         .await
-        .map_err(|error| format!("cannot upload file bytes: {error}"))?;
+        .map_err(|error| format!("cannot stream file upload: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
-            "upload target rejected file bytes with HTTP {}",
+            "upload target rejected file stream with HTTP {}",
             response.status()
         ));
     }
@@ -667,8 +688,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ensure_source_unchanged, prepare_upload_target_for_transfer, put_upload_bytes,
-        read_source_payload, unix_ms_to_rfc3339, upload_target_failure_code,
+        ensure_source_unchanged, hash_source_payload, prepare_upload_target_for_transfer,
+        put_upload_file, unix_ms_to_rfc3339, upload_target_failure_code,
         validate_local_transfer_source,
     };
     use crate::agent::{AgentFileTransfer, AgentFileTransferFailureCode, AgentRuntime};
@@ -820,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_source_payload_and_computes_sha256() {
+    fn hashes_source_payload_without_buffering_body() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
         fs::create_dir_all(&root).expect("root");
@@ -829,10 +850,9 @@ mod tests {
             validate_local_transfer_source(root.to_str().expect("root"), "hello.txt", None, None)
                 .expect("source");
 
-        let payload = read_source_payload(&source).expect("payload");
+        let payload = hash_source_payload(&source).expect("payload");
 
         assert_eq!(payload.size_bytes, 5);
-        assert_eq!(payload.bytes, b"hello");
         assert_eq!(
             payload.sha256,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
@@ -859,7 +879,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn put_upload_bytes_sends_the_file_body_to_upload_target() {
+    async fn put_upload_file_streams_the_file_body_to_upload_target() {
+        let temp = tempdir().expect("tempdir");
+        let upload_file = temp.path().join("upload.txt");
+        fs::write(&upload_file, "hello upload").expect("upload file");
+
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind upload target");
         let address = listener.local_addr().expect("address");
         let server = thread::spawn(move || {
@@ -875,12 +899,9 @@ mod tests {
                 .expect("write response");
         });
 
-        put_upload_bytes(
-            &format!("http://{address}/upload-target"),
-            b"hello upload".to_vec(),
-        )
-        .await
-        .expect("put upload");
+        put_upload_file(&format!("http://{address}/upload-target"), &upload_file, 12)
+            .await
+            .expect("put upload");
         server.join().expect("server thread");
     }
 

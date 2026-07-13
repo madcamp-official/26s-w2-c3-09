@@ -186,16 +186,18 @@ pub async fn process_agent_file_browse_requests(
 pub async fn process_agent_file_transfers(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
+    outbox: tauri::State<'_, OutboxStore>,
 ) -> Result<FileTransferProcessingReport, String> {
-    process_pending_file_transfers(&runtime, &roots).await
+    process_pending_file_transfers(&runtime, &roots, &outbox).await
 }
 
 #[cfg(not(feature = "tauri-commands"))]
 pub async fn process_agent_file_transfers(
     runtime: &AgentRuntime,
     roots: &ManagedRootStore,
+    outbox: &OutboxStore,
 ) -> Result<FileTransferProcessingReport, String> {
-    process_pending_file_transfers(runtime, roots).await
+    process_pending_file_transfers(runtime, roots, outbox).await
 }
 
 #[cfg(feature = "tauri-commands")]
