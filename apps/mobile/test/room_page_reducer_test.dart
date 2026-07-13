@@ -251,4 +251,62 @@ void main() {
       {'id': 'proposal-b', 'status': 'OPEN'},
     ]);
   });
+
+  test(
+    'room snapshot realtime update replaces only newer cleanliness data',
+    () {
+      final original = {
+        'id': 'snapshot-old',
+        'roomId': 'room-a',
+        'score': 52,
+        'metrics': {'deductions': []},
+        'formulaVersion': 'mousekeeper-cleanliness-v1',
+        'calculatedAt': '2026-07-13T09:00:00.000Z',
+      };
+
+      final patched = patchRoomSnapshotForRealtimeUpdate(
+        snapshot: original,
+        roomId: 'room-a',
+        update: const RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.roomSnapshotUpdated,
+          eventType: 'room.snapshot.updated',
+          roomId: 'room-a',
+          snapshotId: 'snapshot-new',
+          roomSnapshot: {
+            'id': 'snapshot-new',
+            'roomId': 'room-a',
+            'score': 88,
+            'metrics': {'deductions': []},
+            'formulaVersion': 'mousekeeper-cleanliness-v1',
+            'calculatedAt': '2026-07-13T10:00:00.000Z',
+          },
+        ),
+      );
+
+      expect(identical(patched, original), isFalse);
+      expect(patched?['id'], 'snapshot-new');
+      expect(patched?['score'], 88);
+
+      final stale = patchRoomSnapshotForRealtimeUpdate(
+        snapshot: patched,
+        roomId: 'room-a',
+        update: const RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.roomSnapshotUpdated,
+          eventType: 'room.snapshot.updated',
+          roomId: 'room-a',
+          snapshotId: 'snapshot-stale',
+          roomSnapshot: {
+            'id': 'snapshot-stale',
+            'roomId': 'room-a',
+            'score': 10,
+            'metrics': {'deductions': []},
+            'formulaVersion': 'mousekeeper-cleanliness-v1',
+            'calculatedAt': '2026-07-13T08:00:00.000Z',
+          },
+        ),
+      );
+
+      expect(identical(stale, patched), isTrue);
+    },
+  );
 }

@@ -89,11 +89,10 @@ void main() {
         'status': 'SUCCEEDED',
       },
     });
-    final snapshot = realtimeHomeUpdateFor('room.snapshot.updated', {
+    final snapshot = realtimeHomeUpdateFor('device.paired', {
       'eventId': 'snapshot-event',
-      'eventType': 'room.snapshot.updated',
-      'roomId': 'room-a',
-      'payload': {'snapshotId': 'snapshot-a'},
+      'eventType': 'device.paired',
+      'payload': {'deviceId': 'device-a'},
     });
 
     expect(execution?.kind, RealtimeHomeUpdateKind.executionStatus);
@@ -213,5 +212,47 @@ void main() {
     });
 
     expect(decision?.kind, RealtimeHomeUpdateKind.refreshSummary);
+  });
+
+  test('room snapshot updated becomes a room-scoped cleanliness patch', () {
+    final snapshot = realtimeHomeUpdateFor('room.snapshot.updated', {
+      'eventId': 'snapshot-event',
+      'eventType': 'room.snapshot.updated',
+      'aggregateId': 'snapshot-a',
+      'roomId': 'room-a',
+      'payload': {
+        'snapshotId': 'snapshot-a',
+        'roomId': 'room-a',
+        'score': 88,
+        'metrics': {
+          'totalFileCount': 10,
+          'managedFileCount': 8,
+          'unorganizedFileCount': 2,
+          'deductions': [],
+        },
+        'formulaVersion': 'mousekeeper-cleanliness-v1',
+        'calculatedAt': '2026-07-13T00:00:00.000Z',
+      },
+    });
+
+    expect(snapshot?.kind, RealtimeHomeUpdateKind.roomSnapshotUpdated);
+    expect(snapshot?.snapshotId, 'snapshot-a');
+    expect(snapshot?.roomId, 'room-a');
+    expect(snapshot?.roomSnapshot?['score'], 88);
+    expect(
+      snapshot?.roomSnapshot?['formulaVersion'],
+      'mousekeeper-cleanliness-v1',
+    );
+  });
+
+  test('incomplete room snapshot events request one summary fallback', () {
+    final snapshot = realtimeHomeUpdateFor('room.snapshot.updated', {
+      'eventId': 'snapshot-event',
+      'eventType': 'room.snapshot.updated',
+      'aggregateId': 'snapshot-a',
+      'payload': {'snapshotId': 'snapshot-a'},
+    });
+
+    expect(snapshot?.kind, RealtimeHomeUpdateKind.refreshSummary);
   });
 }

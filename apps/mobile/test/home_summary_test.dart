@@ -113,8 +113,38 @@ void main() {
       )!;
       expect(removed.rooms.single['pendingProposalCount'], 0);
 
-      final revoked = reduceHomeDataForRealtimeUpdate(
+      final snapshot = reduceHomeDataForRealtimeUpdate(
         current: removed,
+        update: const RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.roomSnapshotUpdated,
+          eventType: 'room.snapshot.updated',
+          roomId: 'room-a',
+          snapshotId: 'snapshot-a',
+          roomSnapshot: {
+            'id': 'snapshot-a',
+            'roomId': 'room-a',
+            'score': 88,
+            'metrics': {
+              'totalFileCount': 10,
+              'managedFileCount': 8,
+              'unorganizedFileCount': 2,
+              'deductions': [],
+            },
+            'formulaVersion': 'mousekeeper-cleanliness-v1',
+            'calculatedAt': '2026-07-13T10:00:00.000Z',
+          },
+        ),
+        activeDeviceIds: const {'device-a', 'device-b'},
+        activeRoomIds: const {'room-a'},
+      )!;
+      expect(snapshot.rooms.single['cleanlinessScore'], 88);
+      expect(
+        snapshot.rooms.single['cleanlinessFormulaVersion'],
+        'mousekeeper-cleanliness-v1',
+      );
+
+      final revoked = reduceHomeDataForRealtimeUpdate(
+        current: snapshot,
         update: const RealtimeHomeUpdate(
           kind: RealtimeHomeUpdateKind.deviceRemoved,
           eventType: 'device.revoked',
@@ -170,6 +200,9 @@ HomeData _homeData() => const HomeData(
       'desktopDeviceId': 'device-a',
       'pendingProposalCount': 1,
       'latestExecutionStatus': 'SUCCEEDED',
+      'cleanlinessScore': 52,
+      'cleanlinessFormulaVersion': 'mousekeeper-cleanliness-v1',
+      'cleanlinessCalculatedAt': '2026-07-13T09:00:00.000Z',
     },
   ],
   isOffline: false,

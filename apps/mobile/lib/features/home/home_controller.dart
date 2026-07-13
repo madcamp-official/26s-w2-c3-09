@@ -192,6 +192,34 @@ HomeData? reduceHomeDataForRealtimeUpdate({
           })
           .toList(growable: false);
       return changed ? current.copyWith(rooms: rooms) : current;
+    case RealtimeHomeUpdateKind.roomSnapshotUpdated:
+      final roomId = update.roomId;
+      final snapshot = update.roomSnapshot;
+      if (roomId == null ||
+          snapshot == null ||
+          !activeRoomIds.contains(roomId)) {
+        return current;
+      }
+      var changed = false;
+      final rooms = current.rooms
+          .map((room) {
+            if (room['id'] != roomId ||
+                !_snapshotIsNewer(
+                  currentCalculatedAt: room['cleanlinessCalculatedAt'],
+                  nextCalculatedAt: snapshot['calculatedAt'],
+                )) {
+              return room;
+            }
+            changed = true;
+            return {
+              ...room,
+              'cleanlinessScore': snapshot['score'],
+              'cleanlinessFormulaVersion': snapshot['formulaVersion'],
+              'cleanlinessCalculatedAt': snapshot['calculatedAt'],
+            };
+          })
+          .toList(growable: false);
+      return changed ? current.copyWith(rooms: rooms) : current;
     case RealtimeHomeUpdateKind.commandStatus:
       return current;
     case RealtimeHomeUpdateKind.executionStatus:
@@ -213,6 +241,20 @@ HomeData? reduceHomeDataForRealtimeUpdate({
           .toList(growable: false);
       return changed ? current.copyWith(rooms: rooms) : current;
   }
+}
+
+bool _snapshotIsNewer({
+  required Object? currentCalculatedAt,
+  required Object? nextCalculatedAt,
+}) {
+  if (nextCalculatedAt is! String || nextCalculatedAt.isEmpty) return false;
+  final next = DateTime.tryParse(nextCalculatedAt);
+  if (next == null) return false;
+  if (currentCalculatedAt is! String || currentCalculatedAt.isEmpty) {
+    return true;
+  }
+  final current = DateTime.tryParse(currentCalculatedAt);
+  return current == null || next.isAfter(current);
 }
 
 class HomeController extends AsyncNotifier<HomeData> {

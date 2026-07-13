@@ -35,12 +35,13 @@ class _RoomContent {
     List<Map<String, dynamic>>? commands,
     List<Map<String, dynamic>>? proposals,
     List<Map<String, dynamic>>? executions,
+    Map<String, dynamic>? snapshot,
   }) => _RoomContent(
     commands: commands ?? this.commands,
     proposals: proposals ?? this.proposals,
     executions: executions ?? this.executions,
     activity: activity,
-    snapshot: snapshot,
+    snapshot: snapshot ?? this.snapshot,
     isOffline: isOffline,
   );
 }
@@ -139,6 +140,40 @@ bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
     if (!right.containsKey(key) || left[key] != right[key]) return false;
   }
   return true;
+}
+
+Map<String, dynamic>? patchRoomSnapshotForRealtimeUpdate({
+  required Map<String, dynamic>? snapshot,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  if (update.kind != RealtimeHomeUpdateKind.roomSnapshotUpdated ||
+      update.roomId != roomId ||
+      update.roomSnapshot == null) {
+    return snapshot;
+  }
+  final next = update.roomSnapshot!;
+  if (!_snapshotIsNewer(
+    currentCalculatedAt: snapshot?['calculatedAt'],
+    nextCalculatedAt: next['calculatedAt'],
+  )) {
+    return snapshot;
+  }
+  return Map<String, dynamic>.unmodifiable(next);
+}
+
+bool _snapshotIsNewer({
+  required Object? currentCalculatedAt,
+  required Object? nextCalculatedAt,
+}) {
+  if (nextCalculatedAt is! String || nextCalculatedAt.isEmpty) return false;
+  final next = DateTime.tryParse(nextCalculatedAt);
+  if (next == null) return false;
+  if (currentCalculatedAt is! String || currentCalculatedAt.isEmpty) {
+    return true;
+  }
+  final current = DateTime.tryParse(currentCalculatedAt);
+  return current == null || next.isAfter(current);
 }
 
 List<Map<String, dynamic>> patchExecutionItemsForRealtimeUpdate({
@@ -290,15 +325,22 @@ class _RoomPageState extends ConsumerState<RoomPage> {
       update: update,
       roomId: roomId,
     );
+    final snapshot = patchRoomSnapshotForRealtimeUpdate(
+      snapshot: current.snapshot,
+      update: update,
+      roomId: roomId,
+    );
     if (identical(commands, current.commands) &&
         identical(proposals, current.proposals) &&
-        identical(executions, current.executions)) {
+        identical(executions, current.executions) &&
+        identical(snapshot, current.snapshot)) {
       return false;
     }
     final patched = current.copyWith(
       commands: commands,
       proposals: proposals,
       executions: executions,
+      snapshot: snapshot,
     );
     _latestContent = patched;
     _content = Future.value(patched);
@@ -311,6 +353,9 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     }
     if (!identical(executions, current.executions)) {
       unawaited(cache.replaceExecutions(roomId, executions));
+    }
+    if (!identical(snapshot, current.snapshot)) {
+      unawaited(cache.saveSnapshot(roomId, snapshot));
     }
     setState(() {});
     return true;

@@ -41,6 +41,7 @@ enum RealtimeHomeUpdateKind {
   roomRemoved,
   proposalCreated,
   decisionCreated,
+  roomSnapshotUpdated,
   commandStatus,
   executionStatus,
   refreshSummary,
@@ -54,6 +55,7 @@ class RealtimeHomeUpdate {
     this.roomId,
     this.proposalId,
     this.decisionId,
+    this.snapshotId,
     this.commandId,
     this.executionId,
     this.decisionType,
@@ -61,6 +63,7 @@ class RealtimeHomeUpdate {
     this.proposalSummary,
     this.proposalItemCount,
     this.pendingProposalCount,
+    this.roomSnapshot,
     this.presence,
     this.commandStatus,
     this.executionStatus,
@@ -72,6 +75,7 @@ class RealtimeHomeUpdate {
   final String? roomId;
   final String? proposalId;
   final String? decisionId;
+  final String? snapshotId;
   final String? commandId;
   final String? executionId;
   final String? decisionType;
@@ -79,6 +83,7 @@ class RealtimeHomeUpdate {
   final Map<String, dynamic>? proposalSummary;
   final int? proposalItemCount;
   final int? pendingProposalCount;
+  final Map<String, dynamic>? roomSnapshot;
   final String? presence;
   final String? commandStatus;
   final String? executionStatus;
@@ -128,6 +133,12 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
   };
   final decisionId = switch (payload['decisionId'] ??
       value['decisionId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final snapshotId = switch (payload['snapshotId'] ??
+      value['snapshotId'] ??
       value['aggregateId']) {
     final String id when id.isNotEmpty => id,
     _ => null,
@@ -224,6 +235,39 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
       eventType: event,
     );
   }
+  if (event == 'room.snapshot.updated') {
+    final score = payload['score'];
+    final metrics = payload['metrics'];
+    final formulaVersion = payload['formulaVersion'];
+    final calculatedAt = payload['calculatedAt'];
+    if (roomId != null &&
+        snapshotId != null &&
+        score is int &&
+        metrics is Map &&
+        formulaVersion is String &&
+        formulaVersion.isNotEmpty &&
+        calculatedAt is String &&
+        calculatedAt.isNotEmpty) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.roomSnapshotUpdated,
+        eventType: event,
+        roomId: roomId,
+        snapshotId: snapshotId,
+        roomSnapshot: {
+          'id': snapshotId,
+          'roomId': roomId,
+          'score': score,
+          'metrics': Map<String, dynamic>.from(metrics),
+          'formulaVersion': formulaVersion,
+          'calculatedAt': calculatedAt,
+        },
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
   if (event == 'command.updated') {
     final status = payload['status'];
     if (roomId != null &&
@@ -283,10 +327,7 @@ const _validPresences = <String>{
   'DEGRADED',
 };
 
-const _summaryRefreshEvents = <String>{
-  'device.paired',
-  'room.snapshot.updated',
-};
+const _summaryRefreshEvents = <String>{'device.paired'};
 
 const _homeIrrelevantEvents = <String>{
   'character.event',
