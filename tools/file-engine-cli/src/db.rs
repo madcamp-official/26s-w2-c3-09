@@ -117,7 +117,8 @@ async fn migrate(pool: &SqlitePool) -> Result<(), DbError> {
             relative_path     TEXT PRIMARY KEY,
             size_bytes        INTEGER NOT NULL,
             modified_unix_ms  INTEGER,
-            extension         TEXT
+            extension         TEXT,
+            file_id           TEXT
         )",
     )
     .execute(pool)
@@ -125,6 +126,13 @@ async fn migrate(pool: &SqlitePool) -> Result<(), DbError> {
     .map_err(|error| DbError::Migrate {
         message: error.to_string(),
     })?;
+    add_column_if_missing(
+        pool,
+        "PRAGMA table_info(file_index)",
+        "file_id",
+        "ALTER TABLE file_index ADD COLUMN file_id TEXT",
+    )
+    .await?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS file_search_entries (
@@ -163,26 +171,14 @@ async fn migrate(pool: &SqlitePool) -> Result<(), DbError> {
     .map_err(|error| DbError::Migrate {
         message: error.to_string(),
     })?;
-    let meta_columns = sqlx::query("PRAGMA table_info(file_index_meta)")
-        .fetch_all(pool)
-        .await
-        .map_err(|error| DbError::Migrate {
-            message: error.to_string(),
-        })?;
-    if !meta_columns.iter().any(|row| {
-        row.try_get::<String, _>("name")
-            .is_ok_and(|name| name == "initialized")
-    }) {
-        sqlx::query(
-            "ALTER TABLE file_index_meta
-             ADD COLUMN initialized INTEGER NOT NULL DEFAULT 0 CHECK(initialized IN (0, 1))",
-        )
-        .execute(pool)
-        .await
-        .map_err(|error| DbError::Migrate {
-            message: error.to_string(),
-        })?;
-    }
+    add_column_if_missing(
+        pool,
+        "PRAGMA table_info(file_index_meta)",
+        "initialized",
+        "ALTER TABLE file_index_meta
+         ADD COLUMN initialized INTEGER NOT NULL DEFAULT 0 CHECK(initialized IN (0, 1))",
+    )
+    .await?;
     sqlx::query(
         "INSERT OR IGNORE INTO file_index_meta(singleton, generation, initialized)
          VALUES (1, 0, 0)",
@@ -216,6 +212,34 @@ async fn migrate(pool: &SqlitePool) -> Result<(), DbError> {
     Ok(())
 }
 
+async fn add_column_if_missing(
+    pool: &SqlitePool,
+    table_info_sql: &'static str,
+    column: &str,
+    alter_sql: &'static str,
+) -> Result<(), DbError> {
+    let rows = sqlx::query(table_info_sql)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| DbError::Migrate {
+            message: error.to_string(),
+        })?;
+    if rows.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .is_ok_and(|name| name == column)
+    }) {
+        return Ok(());
+    }
+
+    sqlx::query(alter_sql)
+        .execute(pool)
+        .await
+        .map(|_| ())
+        .map_err(|error| DbError::Migrate {
+            message: error.to_string(),
+        })
+}
+
 impl fmt::Display for DbError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -243,9 +267,10 @@ impl Error for DbError {}
 
 #[cfg(test)]
 mod tests {
+    use sqlx::Row;
     use tempfile::tempdir;
 
-    use super::{block_on, open_root_db};
+    use super::{block_on, db_path_for_root, open_pool_at, open_root_db};
 
     #[test]
     fn opens_database_and_round_trips_a_row() {
@@ -323,5 +348,52 @@ mod tests {
         });
 
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migration_adds_file_id_to_existing_file_index() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path();
+        let db_path = db_path_for_root(root);
+        let pool = open_pool_at(&db_path).expect("open old db");
+        block_on(async {
+            sqlx::query(
+                "CREATE TABLE file_index (
+                    relative_path     TEXT PRIMARY KEY,
+                    size_bytes        INTEGER NOT NULL,
+                    modified_unix_ms  INTEGER,
+                    extension         TEXT
+                )",
+            )
+            .execute(&pool)
+            .await
+            .expect("create old file_index");
+            sqlx::query(
+                "INSERT INTO file_index (relative_path, size_bytes, modified_unix_ms, extension)
+                 VALUES (?, ?, ?, ?)",
+            )
+            .bind("legacy.txt")
+            .bind(7_i64)
+            .bind(123_i64)
+            .bind("txt")
+            .execute(&pool)
+            .await
+            .expect("insert legacy row");
+        });
+        drop(pool);
+
+        let pool = open_root_db(root).expect("migrate db");
+        let row = block_on(async {
+            sqlx::query("SELECT size_bytes, file_id FROM file_index WHERE relative_path = ?")
+                .bind("legacy.txt")
+                .fetch_one(&pool)
+                .await
+                .expect("legacy row remains readable")
+        });
+        let size: i64 = row.try_get("size_bytes").expect("size");
+        let file_id: Option<String> = row.try_get("file_id").expect("file_id column");
+
+        assert_eq!(size, 7);
+        assert!(file_id.is_none());
     }
 }

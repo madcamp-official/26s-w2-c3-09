@@ -14,6 +14,7 @@
 - Mobile file downloads now listen for `file.transfer.updated` WebSocket events and wake only the matching active transfer, keeping REST status reads as a 15-second safety fallback instead of polling every 2 seconds.
 - Desktop background runtime keeps heartbeat at 5 seconds, splits scheduled REST reconciliation into 15-second fast control-plane passes and 30-second heavy file-transfer/smart-cache passes, while Socket.IO wakeups still trigger an immediate full reconcile.
 - Desktop full reconcile now rebuilds the SQLite browse/search index for active watched managed roots and recalculates the same cleanliness snapshot, so missed watcher events are repaired without turning mobile into a full-refresh polling client.
+- File-engine SQLite `file_index` now stores nullable OS-backed `file_id` values: Windows uses volume serial + file index via Win32, Unix uses dev + inode, and unsupported platforms leave the field empty instead of inventing an identity.
 - Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
 - Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.
 - OpenAI Responses provider is now configurable behind `AI_PROVIDER=openai`, `AI_API_KEY`, and `AI_MODEL`; model output is parsed as structured JSON and revalidated against MouseKeeper command/rule Zod contracts before any draft enters product logic. Missing or rejected credentials still return explicit `AI_PROVIDER_UNCONFIGURED`.
@@ -124,7 +125,7 @@ Tauri Desktop
 - 새 Android identifier용 Firebase debug build 완료, Google login·FCM 실기기 재검증
 - Android release signing, updater signing과 rename 이후 Windows installer 재검증
 - 실제 Rive animation/interaction과 schema-validated 자연어 command provider
-- SQLite file ID and release-grade three-party E2E automation for delegated create operations
+- Wiring indexed file ID into proposal/precondition/transfer source identity, plus release-grade three-party E2E automation for delegated create operations
 - Desktop smart-cache client-side encryption과 key lifecycle
 - Android ↔ server ↔ Desktop 전체 P0 release E2E 자동화
 
@@ -150,7 +151,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 |---|---|---|
 | 0 계약·파일 안전 POC | 완료 | Rust 안전 회귀와 fixture E2E 유지 |
 | 1 로그인·페어링·Presence | 코드 경로와 새 Firebase debug build | Google login과 background/terminated FCM 수신 확인 |
-| 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결, watcher 누락 보정용 30초 full-pass index reconcile | SQLite file ID |
+| 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결, watcher 누락 보정용 30초 full-pass index reconcile, SQLite OS file ID 저장 | file ID를 source precondition/transfer 검증에 연결 |
 | 3 규칙·명령·제안 | Desktop/server/mobile processor 연결, 확장 Rule DSL 서버 계약 | 확장 DSL Desktop evaluator 통합과 실제 3자 release E2E |
 | 4 실행·Undo·README·파일 전달 | MOVE/격리/README/transfer/CREATE_DIR/CREATE_FILE 구현 | 실제 3자 transfer E2E와 create release E2E |
 | 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI·cursor pagination, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
@@ -206,7 +207,7 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 
 1. Android USB를 다시 연결해 새 package 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
 2. Desktop smart-cache 업로더에 authenticated encryption과 OS 보안 저장소 key lifecycle을 구현한다.
-3. SQLite file ID를 보완하고 CREATE_DIR/CREATE_FILE journal/undo 경로를 release E2E에서 검증한다.
+3. Indexed file ID를 proposal/precondition/transfer source identity에 연결하고 CREATE_DIR/CREATE_FILE journal/undo 경로를 release E2E에서 검증한다.
 4. command/proposal/execute/undo와 browse/transfer를 한 managed root·실기기에서 왕복 검증한다.
 5. 새 EC2 unit/path와 Firebase package로 rename migration을 실행하고 rollback을 확인한다.
 6. 실제 `.riv`와 overlay shell을 연결하고 artboard/state machine/input을 실기기·Desktop에서 확인한다.

@@ -121,9 +121,9 @@
 ### 3.1 P0 핵심 누락
 
 - [~] **모바일 로그인:** `com.mousekeeper.app`용 Firebase JSON을 로컬 설치하고 Firebase 활성 debug build까지 통과했다. 실제 Google login과 release SHA 검증은 남았다.
-- [~] **파일 인덱스 identity:** SQLite `file_index`에는 상대 경로·크기·mtime·확장자는 있지만 기획서가 요구한 OS file ID가 없다.
-- [~] **watcher 재조정:** event 오류 시 full reindex는 있으나 누락을 주기적으로 보완하는 scheduled reconcile scan이 없다.
-- [~] **파일 실행 action:** MOVE, QUARANTINE, README_WRITE는 안전 실행되지만 서버가 위임한 CREATE_DIR은 명시적으로 거부된다.
+- [~] **파일 identity 연결:** SQLite `file_index`는 OS-backed nullable `file_id`를 저장한다. 다만 proposal/precondition/transfer sourceVersion이 아직 indexed file_id를 공통 identity로 사용하지는 않는다.
+- [x] **watcher 재조정:** watcher event와 overflow full reindex가 있고, 30초 full reconcile pass가 active watched root의 SQLite browse/search index와 청결도 snapshot을 주기적으로 보정한다.
+- [~] **파일 실행 action:** MOVE, QUARANTINE, README_WRITE, CREATE_DIR, CREATE_FILE 경로는 구현됐다. CREATE 계열의 실제 3자 release E2E와 journal/undo 회귀 고정은 남았다.
 - [~] **온라인 파일 전달:** server 실제 S3 lifecycle E2E와 Desktop processor 단위 테스트는 있으나 Android↔Desktop↔server 한 기기 E2E 회귀가 현재 자동화되어 있지 않다.
 - [~] **오프라인 큐:** DB queue, mobile/desktop outbox와 cursor replay는 있으나 프로세스 강제 종료·서버 재시작을 포함한 전체 E2E script가 없다.
 - [~] **캐릭터 기본 상태:** 8종 PNG 상태 전환은 있으나 기획서의 실제 애니메이션 상태 머신은 없다.
@@ -207,12 +207,12 @@
 | Presence | 완료 | Redis TTL, OFFLINE event, UI 표시 |
 | 여러 관리 폴더 | 완료 | N개 room/root 모델, overlap만 제한 |
 | 명시적 관리 루트 | 완료 | native picker와 canonical root store |
-| 로컬 파일 인덱스 | 부분 | SQLite 존재, OS file ID 누락 |
-| watcher + 재조정 | 부분 | watcher/overflow reindex 존재, 주기 scan 누락 |
+| 로컬 파일 인덱스 | 부분 완료 | SQLite index와 OS-backed nullable file_id 저장 완료; source precondition/transfer 연결 대기 |
+| watcher + 재조정 | 완료 | watcher/overflow reindex와 30초 active-root reconcile |
 | Rule DSL | 부분 완료 | extension/age/name 결정론 평가 완료, 확장 DSL은 서버 계약 추가 후 Desktop evaluator 통합 대기 |
 | 파일별 제안 | 완료 | reason/destination/collision UI |
 | 전체 승인·거절 | 완료 | DB 영속·idempotency |
-| 파일 실행 | 부분 | MOVE/QUARANTINE/README, CREATE_DIR 누락 |
+| 파일 실행 | 부분 | MOVE/QUARANTINE/README/CREATE_DIR/CREATE_FILE 구현, release E2E 고정 필요 |
 | 복구형 trash | 완료 | metadata/journal/undo |
 | README 제안·적용 | 완료 | hash/write/backup/undo |
 | 청결도 | 완료 | 0~100와 감점 근거 |
@@ -237,9 +237,9 @@
 
 - [ ] Desktop smart-cache upload에 AES-256-GCM 등 client-side authenticated encryption을 적용하고 key를 OS 보안 저장소에 보관한다.
 - [ ] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞추고 mobile 복호화·tag 검증을 연결한다.
-- [ ] SQLite file identity를 추가하고 proposal/precondition/transfer에서 size·mtime과 함께 비교한다.
-- [ ] scheduled reconcile scan과 scan/write/transfer 동시성 제한을 명시하고 테스트한다.
-- [ ] 승인된 CREATE_DIR을 journal-before-write/no-overwrite/undo 정책으로 구현하거나 P0 계약에서 제거한다.
+- [ ] Indexed file identity를 proposal/precondition/transfer에서 size·mtime과 함께 비교하도록 연결한다.
+- [ ] scan/write/transfer 동시성 제한을 명시하고 테스트한다.
+- [ ] 승인된 CREATE_DIR/CREATE_FILE의 journal-before-write/no-overwrite/undo 정책을 실제 3자 E2E로 고정한다.
 - [ ] 자연어 command provider를 선택하고 출력 Zod validation, 사용자 draft 확인, `UNCONFIGURED` 경계를 구현한다.
 - [ ] 로컬 설치된 `com.mousekeeper.app` Firebase 설정에 debug/release SHA를 확인하고 Google login/FCM을 실기기 검증한다.
 - [ ] Android↔server↔Desktop command/proposal/execute/undo와 browse/transfer를 하나의 반복 가능한 E2E로 고정한다.
@@ -251,7 +251,7 @@
 ### 우선순위 1 — 캐릭터 interaction 전 backend/infra 보완
 
 1. 스마트 캐시를 기본 `false`로 유지한 채 실제 Desktop encryption/key lifecycle을 먼저 완성한다.
-2. file ID migration, 주기 reconcile, CREATE_DIR 안전 operation을 보완한다.
+2. Indexed file ID를 source precondition/transfer에 연결하고 CREATE_DIR/CREATE_FILE 안전 operation을 release E2E로 고정한다.
 3. 외부 DB/S3 integration suite를 CI의 secret-protected opt-in job으로 실행한다.
 4. Firebase debug/release SHA, release keystore, Sentry DSN을 secret manager와 provider console에 등록한다.
 5. 새 systemd/path/IAM 이름으로 EC2를 migration하고 health/ready/worker/backup/restore를 재검증한다.

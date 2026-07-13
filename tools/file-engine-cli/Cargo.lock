@@ -285,6 +285,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "windows-sys",
 ]
 
 [[package]]
