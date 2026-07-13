@@ -394,6 +394,11 @@ async fn forget_agent_device_impl(
     sync_store: &AgentSyncStore,
 ) -> Result<AgentConnectionStatus, String> {
     let device_id = runtime.connection_status().device_id;
+    // Best-effort server-side revoke first, so the phone stops listing this PC and the rooms it
+    // owned are removed instead of lingering as ghosts. A failure here (offline, or the device was
+    // already revoked from mobile) must not block clearing local credentials, so the result is
+    // intentionally ignored.
+    let _ = runtime.revoke_device().await;
     let status = runtime.forget_device().map_err(|error| error.to_string())?;
     if let Some(device_id) = device_id {
         sync_store.clear_device(&device_id).await?;

@@ -79,7 +79,7 @@ pre {
 }
 
 .app-shell {
-  max-width: 1120px;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 24px;
 }
@@ -168,6 +168,10 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.agent-hint {
+  flex: 1 1 280px;
+}
+
 .background-runtime {
   display: flex;
   align-items: center;
@@ -195,6 +199,84 @@ pre {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.runtime-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #d9e2e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.runtime-card-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.runtime-card-main > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.runtime-card-main small,
+.runtime-telemetry small,
+.advanced-tools summary {
+  color: #5f6972;
+}
+
+.runtime-card-main small {
+  overflow-wrap: anywhere;
+}
+
+.runtime-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #9ca3af;
+}
+
+.runtime-running {
+  background: #22c55e;
+}
+
+.runtime-suspended {
+  background: #f59e0b;
+}
+
+.runtime-stopped {
+  background: #9ca3af;
+}
+
+.advanced-tools {
+  border: 1px solid #e1e5e8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+}
+
+.advanced-tools summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.advanced-tools-body {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.runtime-telemetry {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 12px;
 }
 
 .agent-pairing-row {
@@ -297,7 +379,7 @@ pre {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 0.9fr) minmax(360px, 1.4fr);
+  grid-template-columns: minmax(300px, 0.9fr) minmax(420px, 1.4fr);
   gap: 16px;
 }
 
@@ -529,8 +611,23 @@ pre {
   .workspace-grid,
   .auto-approval-panel,
   .proposal-row,
+  .runtime-card,
+  .runtime-telemetry,
   .pairing-qr-panel {
     grid-template-columns: 1fr;
+  }
+
+  .runtime-card {
+    display: grid;
+  }
+
+  .runtime-actions {
+    justify-content: stretch;
+  }
+
+  .runtime-actions button,
+  .button-grid button {
+    width: 100%;
   }
 
   .command-row {
@@ -538,7 +635,8 @@ pre {
     flex-direction: column;
   }
 
-  .toolbar {
+  .toolbar,
+  .app-shell-toolbar {
     display: grid;
   }
 }
@@ -547,8 +645,17 @@ pre {
 .app-shell-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
+  border-bottom: 1px solid #d9e2e8;
+  padding-bottom: 12px;
+}
+
+.app-title {
+  color: #263238;
+  font-size: 14px;
+  letter-spacing: 0;
 }
 
 .onboarding-slot {

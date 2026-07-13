@@ -89,6 +89,14 @@ export type ProposalReport = {
   proposals: Proposal[];
 };
 
+export type AutoCleanupProposalEvent = {
+  root_id: string;
+  proposal: ProposalReport;
+  auto_approved_count: number;
+  executed_count: number;
+  skipped_count: number;
+};
+
 export type CleanlinessDeduction = {
   reasonCode: string;
   count: number;
@@ -243,6 +251,16 @@ export function updateManagedRootState(rootId: string, patch: ManagedRootStatePa
   return invokeCommand<ManagedRoot>("update_managed_root_state", { rootId, patch });
 }
 
+export type UnregisterManagedRootReport = {
+  root_id: string;
+  server_room_removed: boolean;
+  server_message: string | null;
+};
+
+export function unregisterManagedRoot(rootId: string) {
+  return invokeCommand<UnregisterManagedRootReport>("unregister_managed_root", { rootId });
+}
+
 export function prepareDemoRoot() {
   return invokeCommand<string>("prepare_demo_root");
 }
@@ -345,6 +363,7 @@ export function recoverJournal(rootId: string) {
 }
 
 export const ROOT_CHANGED_EVENT = "managed-root-changed";
+export const AUTO_CLEANUP_PROPOSAL_EVENT = "auto-cleanup-proposal";
 
 export function startWatchingRoot(rootId: string) {
   return invokeCommand<void>("start_watching_root", { rootId });
@@ -362,6 +381,14 @@ export function listenForRootChanges(handler: (rootId: string) => void) {
   ensureTauriRuntime();
 
   return listen<string>(ROOT_CHANGED_EVENT, (event) => handler(event.payload));
+}
+
+export function listenForAutoCleanupProposals(handler: (event: AutoCleanupProposalEvent) => void) {
+  ensureTauriRuntime();
+
+  return listen<AutoCleanupProposalEvent>(AUTO_CLEANUP_PROPOSAL_EVENT, (event) =>
+    handler(event.payload)
+  );
 }
 
 export async function selectManagedRootDirectory() {

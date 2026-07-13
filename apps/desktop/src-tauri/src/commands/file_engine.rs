@@ -22,6 +22,7 @@ use file_engine_cli::undo::{
     undo_operation as undo_file_operation, undo_root as undo_file_root, UndoReport,
 };
 
+use crate::agent::AgentRuntime;
 use crate::cleanliness::{
     calculate_cleanliness_snapshot as calculate_cleanliness_snapshot_for_root, CleanlinessSnapshot,
 };
@@ -32,6 +33,16 @@ use crate::storage::managed_roots::{ManagedRoot, ManagedRootStatePatch, ManagedR
 use crate::storage::watchers::WatcherStore;
 
 const DEMO_ROOT_DIR_NAME: &str = "mousekeeper-ui-demo";
+
+/// Outcome of unregistering (folder-level unpairing) a managed root. The local removal is always
+/// authoritative once this returns Ok; `server_room_removed` reports whether the mobile-facing room
+/// was also torn down, so the UI can tell the user when that step is still pending (e.g. offline).
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct UnregisterManagedRootReport {
+    pub root_id: String,
+    pub server_room_removed: bool,
+    pub server_message: Option<String>,
+}
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
@@ -82,6 +93,72 @@ pub fn update_managed_root_state(
     store: &ManagedRootStore,
 ) -> Result<ManagedRoot, String> {
     update_managed_root_state_impl(root_id, patch, store, None)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn unregister_managed_root(
+    root_id: String,
+    window: tauri::Window,
+    runtime: tauri::State<'_, AgentRuntime>,
+    store: tauri::State<'_, ManagedRootStore>,
+    auto_approval: tauri::State<'_, AutoApprovalStore>,
+    watchers: tauri::State<'_, WatcherStore>,
+) -> Result<UnregisterManagedRootReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
+    // Stop any live watcher before the root disappears so it cannot fire against a folder we no
+    // longer manage. This is best-effort: a root that was not being watched simply returns false.
+    let _ = watchers.stop(&root_id);
+    unregister_managed_root_impl(root_id, &runtime, &store, &auto_approval).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn unregister_managed_root(
+    root_id: String,
+    runtime: &AgentRuntime,
+    store: &ManagedRootStore,
+    auto_approval: &AutoApprovalStore,
+) -> Result<UnregisterManagedRootReport, String> {
+    unregister_managed_root_impl(root_id, runtime, store, auto_approval).await
+}
+
+async fn unregister_managed_root_impl(
+    root_id: String,
+    runtime: &AgentRuntime,
+    store: &ManagedRootStore,
+    auto_approval: &AutoApprovalStore,
+) -> Result<UnregisterManagedRootReport, String> {
+    // The root must be registered locally; this surfaces a clear error otherwise before any
+    // server-side teardown runs.
+    store.get(&root_id)?;
+
+    // Best-effort: remove the mobile-facing room so the phone stops listing this folder. Offline
+    // or an already-removed room must not block local removal, so any failure is captured in the
+    // report instead of aborting.
+    let mut server_room_removed = false;
+    let mut server_message = None;
+    match runtime.list_rooms().await {
+        Ok(rooms) => match rooms.into_iter().find(|room| room.root_id == root_id) {
+            Some(room) => match runtime.remove_room(room.room_id).await {
+                Ok(()) => server_room_removed = true,
+                Err(error) => server_message = Some(error.to_string()),
+            },
+            // No room was ever synced for this root, so there is nothing to tear down remotely.
+            None => server_room_removed = true,
+        },
+        Err(error) => server_message = Some(error.to_string()),
+    }
+
+    // Drop the local auto-approval policy, then the managed root itself (authoritative). Files on
+    // disk are never touched by unregistering.
+    let _ = auto_approval.remove(&root_id);
+    store.remove(&root_id)?;
+
+    Ok(UnregisterManagedRootReport {
+        root_id,
+        server_room_removed,
+        server_message,
+    })
 }
 
 #[cfg(feature = "tauri-commands")]

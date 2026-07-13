@@ -9,12 +9,12 @@ import {
 } from "./overlayApi";
 
 const KIND_LABELS: Record<CharacterEventKind, string> = {
-  idle: "Idle",
-  analyzing: "Analyzing",
-  waiting_for_approval: "Waiting for approval",
-  working: "Working",
-  success: "Success",
-  error: "Attention needed"
+  idle: "대기 중",
+  analyzing: "분석 중",
+  waiting_for_approval: "승인 대기 중",
+  working: "작업 중",
+  success: "완료",
+  error: "확인 필요"
 };
 
 /**
@@ -45,7 +45,7 @@ export function CharacterOverlay() {
       await submitOverlayDraftRequest(draft);
       setDraft("");
       setNotice(
-        "Sent to the AI draft flow. Any resulting cleanup is a proposal you must approve before anything runs — the overlay never changes files itself."
+        "AI 초안 흐름으로 보냈어요. 정리 결과는 실행 전에 승인해야 하는 제안으로만 만들어지며, 오버레이가 직접 파일을 바꾸지는 않아요."
       );
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause));
@@ -59,7 +59,7 @@ export function CharacterOverlay() {
       <header className="character-overlay-header">
         <span className="character-state-badge">{KIND_LABELS[event.kind]}</span>
         <button className="character-overlay-hide" onClick={() => void hideOverlay()}>
-          Hide
+          숨기기
         </button>
       </header>
 
@@ -77,14 +77,14 @@ export function CharacterOverlay() {
         }}
       >
         <input
-          aria-label="Ask the agent to draft a cleanup"
-          placeholder="Describe a cleanup (draft only — you approve before it runs)"
+          aria-label="정리 초안 요청하기"
+          placeholder="정리할 내용을 적어주세요 (초안만 만들며, 실행 전 승인이 필요해요)"
           maxLength={2000}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
         />
         <button type="submit" disabled={busy || draft.trim().length === 0}>
-          Draft
+          초안 만들기
         </button>
       </form>
       {notice ? <p className="character-notice">{notice}</p> : null}

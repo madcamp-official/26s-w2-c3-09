@@ -165,6 +165,46 @@ impl ManagedRootStore {
             .ok_or_else(|| format!("managed root is not registered: {root_id}"))
     }
 
+    /// Removes a managed root from memory and, when a database is configured, from disk. Returns
+    /// whether an entry actually existed. Unregistering a folder is the local half of a folder
+    /// unpair; the mobile-facing room is torn down separately by the agent runtime.
+    pub fn remove(&self, root_id: &str) -> Result<bool, String> {
+        let removed = {
+            let mut roots = self
+                .roots
+                .lock()
+                .map_err(|_| "managed root store lock poisoned".to_string())?;
+            roots.remove(root_id).is_some()
+        };
+
+        if removed {
+            self.delete_persisted(root_id)?;
+        }
+        Ok(removed)
+    }
+
+    fn delete_persisted(&self, root_id: &str) -> Result<(), String> {
+        let pool = self
+            .pool
+            .lock()
+            .map_err(|_| "managed root pool lock poisoned".to_string())?
+            .clone();
+
+        if let Some(pool) = pool {
+            let root_id = root_id.to_string();
+            block_on(async move {
+                sqlx::query("DELETE FROM managed_roots WHERE root_id = ?1")
+                    .bind(root_id)
+                    .execute(&pool)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| format!("cannot delete managed root: {error}"))
+            })?;
+        }
+
+        Ok(())
+    }
+
     pub fn contains_root(&self, root: &str) -> Result<bool, String> {
         let roots = self
             .roots
@@ -573,6 +613,31 @@ mod tests {
         let root = reloaded.get("root:cafe").expect("get root");
         assert_eq!(root.last_seen_status, super::ManagedRootStatus::Error);
         assert_eq!(root.last_error, Some("watcher failed".to_string()));
+    }
+
+    #[test]
+    fn remove_deletes_root_from_memory_and_database() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("managed-roots.db");
+        let store = ManagedRootStore::default();
+        store.load_from_db(&path).expect("configure database");
+        store
+            .upsert(root("root:cafe", "C:/work", "work"))
+            .expect("insert root");
+
+        assert!(store.remove("root:cafe").expect("remove root"));
+        assert!(store.list().expect("list roots").is_empty());
+        // A second removal reports that nothing existed rather than erroring.
+        assert!(!store.remove("root:cafe").expect("remove missing root"));
+
+        // The deletion is durable: a fresh store loading the same database sees no roots, and the
+        // canonical path is free to be registered again.
+        let reloaded = ManagedRootStore::default();
+        reloaded.load_from_db(&path).expect("reload database");
+        assert!(reloaded.list().expect("list roots").is_empty());
+        reloaded
+            .upsert(root("root:new", "C:/work", "work again"))
+            .expect("re-register freed path");
     }
 
     #[test]

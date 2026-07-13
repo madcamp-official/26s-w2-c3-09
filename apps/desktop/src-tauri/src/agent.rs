@@ -814,6 +814,64 @@ impl AgentRuntime {
         result
     }
 
+    /// Creates a room command on the server (`POST /v1/rooms/:id/commands`). The desktop uses this
+    /// to start an *autonomous* cleanup: the background loop synthesizes an `ANALYZE` command it
+    /// immediately attaches a proposal to, so cleanups the desktop found on its own still reach
+    /// mobile through the normal command -> proposal -> decision pipeline (the server requires every
+    /// proposal to originate from an `ANALYZING` command). On an idempotent replay the server
+    /// returns the existing command with its current status, which the caller uses to detect that a
+    /// proposal was already submitted.
+    pub async fn create_command(
+        &self,
+        room_id: String,
+        intent: String,
+        payload: Value,
+        idempotency_key: String,
+    ) -> Result<AgentCommand, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        validate_opaque_value("command idempotency key", &idempotency_key, 128)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ServerCommand>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms/{room_id}/commands"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({ "intent": intent, "payload": payload })),
+            )
+            .await
+            .and_then(validate_server_command);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    /// Counts the proposals still awaiting a decision in a room
+    /// (`GET /v1/rooms/:id/proposals/open`). The autonomous cleanup path uses this to avoid piling
+    /// up duplicate proposals every tick: it only submits a new one when the room has none open.
+    pub async fn open_proposal_count_for_room(
+        &self,
+        room_id: String,
+    ) -> Result<usize, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<Value>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/proposals/open"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .map(|proposals| proposals.len());
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     /// Fetches approved decisions this device has not yet claimed an execution for.
     ///
     /// The server only ever returns `APPROVE` decisions here (rejected decisions never need a
@@ -1282,6 +1340,42 @@ impl AgentRuntime {
         state.last_error = Some(unconfigured_error("desktop device pairing is required"));
         drop(state);
         Ok(self.connection_status())
+    }
+
+    /// Revokes this desktop device on the server (`DELETE /v1/devices/:id`). The server marks the
+    /// device revoked, removes every room it owned, and cancels its cached files and transfers, so
+    /// the phone stops listing this PC instead of showing a stale ghost. Callers use this as a
+    /// best-effort step before `forget_device`: it is intentionally allowed to fail (offline, or
+    /// the device was already revoked from mobile) without blocking the local forget.
+    pub async fn revoke_device(&self) -> Result<(), AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        self.send_empty(
+            self.http
+                .delete(format!("{base_url}/v1/devices/{}", credential.device_id))
+                .bearer_auth(&credential.device_token),
+        )
+        .await
+    }
+
+    /// Removes a single mobile-facing room (`DELETE /v1/rooms/:id`) so unregistering one managed
+    /// folder stops that folder from appearing on the phone, without touching the rest of the
+    /// pairing. Only the owning desktop device is allowed to remove a room, which this device
+    /// token satisfies.
+    pub async fn remove_room(&self, room_id: String) -> Result<(), AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_empty(
+                self.http
+                    .delete(format!("{base_url}/v1/rooms/{room_id}"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await;
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
     }
 
     fn require_server_url(&self) -> Result<String, AgentError> {
@@ -2267,11 +2361,13 @@ impl AgentError {
         matches!(self.code, AgentErrorCode::TransportUnavailable)
     }
 
+    /// True only when the server has definitively rejected this device's identity (HTTP 401). A
+    /// revoked or unknown device token authenticates to a 401 `UNAUTHENTICATED`, so this is the
+    /// signal to drop local credentials and force a re-pair. A 403 `FORBIDDEN` is a per-endpoint
+    /// authorization decision (e.g. an agent-only route or an identity mismatch), not a pairing
+    /// revocation, so it must not nuke credentials.
     pub fn is_terminal_pairing_failure(&self) -> bool {
-        matches!(
-            self.code,
-            AgentErrorCode::Unauthenticated | AgentErrorCode::Forbidden
-        )
+        matches!(self.code, AgentErrorCode::Unauthenticated)
     }
 }
 
@@ -2519,10 +2615,12 @@ mod tests {
 
     #[tokio::test]
     async fn auth_failure_revokes_local_pairing_and_realtime_credentials() {
+        // A revoked device authenticates to HTTP 401 on the server (its token no longer matches an
+        // ACTIVE device row), which is the one status that must drop local pairing.
         let (server_url, server) = one_shot_error_server(
             "/v1/devices/device-1/heartbeat",
-            "HTTP/1.1 403 Forbidden",
-            r#"{"code":"DEVICE_REVOKED","message":"device revoked"}"#,
+            "HTTP/1.1 401 Unauthorized",
+            r#"{"code":"UNAUTHENTICATED","message":"device revoked"}"#,
             |request| {
                 assert!(request.starts_with("POST /v1/devices/device-1/heartbeat HTTP/1.1"));
                 assert!(request
@@ -2546,13 +2644,49 @@ mod tests {
         server.join().expect("server thread");
 
         let status = runtime.connection_status();
-        assert_eq!(error.code, AgentErrorCode::Forbidden);
+        assert_eq!(error.code, AgentErrorCode::Unauthenticated);
         assert_eq!(status.state, AgentConnectionState::Revoked);
         assert_eq!(status.device_id, None);
-        assert_eq!(status.last_error_code, Some(AgentErrorCode::Forbidden));
+        assert_eq!(status.last_error_code, Some(AgentErrorCode::Unauthenticated));
         assert_eq!(status.last_error_message.as_deref(), Some("device revoked"));
         assert!(runtime.realtime_credentials().is_none());
         assert!(store.load().expect("credential store").is_none());
+    }
+
+    #[tokio::test]
+    async fn forbidden_heartbeat_stays_offline_without_dropping_pairing() {
+        // A 403 is a per-endpoint authorization decision, not a pairing revocation, so it must not
+        // delete local credentials or force a re-pair — the device simply goes Offline and retries.
+        let (server_url, server) = one_shot_error_server(
+            "/v1/devices/device-1/heartbeat",
+            "HTTP/1.1 403 Forbidden",
+            r#"{"code":"FORBIDDEN","message":"forbidden"}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/devices/device-1/heartbeat HTTP/1.1"));
+            },
+        );
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .heartbeat("ONLINE_IDLE".to_string())
+            .await
+            .expect_err("forbidden heartbeat still fails");
+        server.join().expect("server thread");
+
+        let status = runtime.connection_status();
+        assert_eq!(error.code, AgentErrorCode::Forbidden);
+        assert_eq!(status.state, AgentConnectionState::Offline);
+        // The pairing survives: device id, saved credential, and realtime credential all remain.
+        assert_eq!(status.device_id.as_deref(), Some("device-1"));
+        assert!(runtime.realtime_credentials().is_some());
+        assert!(store.load().expect("credential store").is_some());
     }
 
     #[tokio::test]

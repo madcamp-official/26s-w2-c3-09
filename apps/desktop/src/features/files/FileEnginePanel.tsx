@@ -15,6 +15,7 @@ import {
   getAutoApprovalPolicy,
   IndexedFile,
   JournalCorruption,
+  listenForAutoCleanupProposals,
   listenForRootChanges,
   listOperationHistory,
   listManagedRoots,
@@ -34,6 +35,7 @@ import {
   startWatchingRoot,
   stopWatchingRoot,
   trashFile,
+  unregisterManagedRoot,
   updateAutoApprovalPolicy,
   updateManagedRootState,
   undoLastFileOperation,
@@ -49,7 +51,7 @@ type PrecheckSnapshot = {
   report: PrecheckReport;
 };
 
-const demoRootHint = "Creates a temporary copy of test-fixtures/file-trees/ui-demo";
+const demoRootHint = "test-fixtures/file-trees/ui-demo의 임시 복사본을 만들어요";
 
 export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {}) {
   const [pathInput, setPathInput] = useState("");
@@ -71,7 +73,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   const [watchingRootIds, setWatchingRootIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<IndexedFile[] | null>(null);
-  const [status, setStatus] = useState("Ready");
+  const [status, setStatus] = useState("준비됨");
   const [error, setError] = useState<string | null>(null);
   const [resultLines, setResultLines] = useState<string[]>([]);
   const [roomSyncStates, setRoomSyncStates] = useState<Record<string, RoomSyncState>>({});
@@ -143,7 +145,8 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
 
-    let unlisten: (() => void) | undefined;
+    let unlistenRootChanges: (() => void) | undefined;
+    let unlistenAutoProposals: (() => void) | undefined;
     let cancelled = false;
 
     listenForRootChanges((rootId) => {
@@ -160,13 +163,50 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       if (cancelled) {
         stop();
       } else {
-        unlisten = stop;
+        unlistenRootChanges = stop;
+      }
+    });
+
+    listenForAutoCleanupProposals((event) => {
+      if (event.root_id !== selectedRootIdRef.current) return;
+
+      setProposal(event.proposal);
+      setPrecheckSnapshot(null);
+      setAutoApprovedProposalIds(new Set());
+      setDecisions(
+        Object.fromEntries(
+          event.proposal.proposals.map((item) => [
+            item.proposal_id,
+            item.status === "ready" ? "approved" : "pending"
+          ])
+        )
+      );
+      setRejectionReasons({});
+      setResultLines([
+        ...event.proposal.proposals.map(formatProposal),
+        event.executed_count > 0
+          ? `자동 정리 실행 ${event.executed_count}건, 자동 승인 ${event.auto_approved_count}건`
+          : `자동 제안 ${event.proposal.proposals.length}건 준비됨`
+      ]);
+      setStatus(
+        event.executed_count > 0
+          ? `자동 정리 ${event.executed_count}건 실행됨`
+          : `자동 제안 ${event.proposal.proposals.length}건 준비됨`
+      );
+      void refreshBrowse(event.root_id, browsePathRef.current);
+      void refreshHistory(event.root_id);
+    }).then((stop) => {
+      if (cancelled) {
+        stop();
+      } else {
+        unlistenAutoProposals = stop;
       }
     });
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unlistenRootChanges?.();
+      unlistenAutoProposals?.();
     };
   }, []);
 
@@ -181,9 +221,9 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       );
       const failedCount = results.filter((result) => result.status === "rejected").length;
       if (failedCount > 0) {
-        setStatus(`${storedRoots.length} root(s) loaded; ${failedCount} mobile sync pending`);
+        setStatus(`폴더 ${storedRoots.length}개 불러옴 · 휴대폰 동기화 ${failedCount}개 대기 중`);
       } else if (storedRoots.length > 0) {
-        setStatus(`${storedRoots.length} root(s) synced to mobile`);
+        setStatus(`폴더 ${storedRoots.length}개를 휴대폰과 동기화했어요`);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -204,14 +244,14 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
 
   async function prepareDemoRootPath() {
     setError(null);
-    setStatus("Preparing demo root");
+    setStatus("데모 폴더 준비 중");
     try {
       const path = await prepareDemoRoot();
       setPathInput(path);
-      setStatus("Demo root prepared");
+      setStatus("데모 폴더 준비 완료");
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Demo setup failed");
+      setStatus("데모 준비 실패");
     }
   }
 
@@ -252,27 +292,27 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId || !journalCorruption) return;
 
     const confirmed = window.confirm(
-      "This quarantines the broken journal file and starts a fresh one. " +
-        "Operations recorded before the corrupted line will no longer be undoable through the app. Continue?"
+      "손상된 저널 파일을 격리하고 새 저널을 시작해요. " +
+        "손상된 줄 이전에 기록된 작업은 앱에서 더 이상 되돌릴 수 없어요. 계속할까요?"
     );
     if (!confirmed) return;
 
     setError(null);
-    setStatus("Recovering journal");
+    setStatus("저널 복구 중");
     try {
       const report = await recoverJournal(selectedRootId);
-      setResultLines([`Quarantined corrupted journal to ${report.quarantined_path}`]);
-      setStatus("Journal recovered");
+      setResultLines([`손상된 저널을 ${report.quarantined_path}로 격리했어요`]);
+      setStatus("저널 복구 완료");
       await refreshHistory(selectedRootId);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Recovery failed");
+      setStatus("복구 실패");
     }
   }
 
   async function registerRoot() {
     setError(null);
-    setStatus("Registering root");
+    setStatus("폴더 등록 중");
     let managed: ManagedRoot;
     try {
       managed = await registerManagedRoot(pathInput.trim());
@@ -281,7 +321,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       selectRoot(managed.root_id);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Register failed");
+      setStatus("등록 실패");
       return;
     }
     try {
@@ -298,14 +338,14 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       setRoomSyncStates((current) => ({ ...current, [root.root_id]: "synced" }));
       if (announce) {
         setError(null);
-        setStatus(room.created ? "Root registered and room created" : "Root synced to mobile");
+        setStatus(room.created ? "폴더 등록 및 방 생성 완료" : "휴대폰과 동기화 완료");
       }
       return room;
     } catch (caught) {
       setRoomSyncStates((current) => ({ ...current, [root.root_id]: "failed" }));
       if (announce) {
-        setError(`Root is safe locally, but mobile room sync failed: ${errorMessage(caught)}`);
-        setStatus("Mobile room sync pending");
+        setError(`폴더는 로컬에 안전하게 저장됐지만, 휴대폰 방 동기화에 실패했어요: ${errorMessage(caught)}`);
+        setStatus("휴대폰 방 동기화 대기");
       }
       throw caught;
     }
@@ -315,16 +355,51 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId) return;
 
     setError(null);
-    setStatus("Updating root state");
+    setStatus("폴더 설정 변경 중");
     try {
       const updated = await updateManagedRootState(selectedRootId, patch);
       setRoots((current) =>
         current.map((root) => (root.root_id === updated.root_id ? updated : root))
       );
-      setStatus("Root state updated");
+      setStatus("폴더 설정 변경 완료");
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Root state update failed");
+      setStatus("폴더 설정 변경 실패");
+    }
+  }
+
+  async function unregisterSelectedRoot() {
+    if (!selectedRoot) return;
+
+    const confirmed = window.confirm(
+      `"${selectedRoot.display_name}" 폴더 연결을 해제할까요? MOUSEKEEPER가 이 폴더 관리를 멈추고 휴대폰의 방도 삭제해요. 디스크의 실제 파일은 지워지지 않아요.`
+    );
+    if (!confirmed) return;
+
+    const removedRootId = selectedRoot.root_id;
+    setError(null);
+    setStatus("폴더 연결 해제 중");
+    try {
+      const report = await unregisterManagedRoot(removedRootId);
+      const remaining = await listManagedRoots();
+      setRoots(remaining);
+      setWatchingRootIds((current) => {
+        const next = new Set(current);
+        next.delete(removedRootId);
+        return next;
+      });
+      // selectRoot resets the per-root workspace state (proposal, browse, history, ...).
+      selectRoot(remaining[0]?.root_id ?? "");
+      setStatus(
+        report.server_room_removed
+          ? "폴더 연결 해제 및 휴대폰 방 삭제 완료"
+          : `폴더 연결을 로컬에서 해제했어요. 휴대폰 방 삭제는 대기 중${
+              report.server_message ? ` (${report.server_message})` : ""
+            }`
+      );
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("폴더 연결 해제 실패");
     }
   }
 
@@ -334,14 +409,14 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId) return;
 
     setError(null);
-    setStatus("Updating auto approval");
+    setStatus("자동 승인 설정 변경 중");
     try {
       const policy = await updateAutoApprovalPolicy(selectedRootId, patch);
       setAutoApprovalPolicy(policy);
-      setStatus("Auto approval updated");
+      setStatus("자동 승인 설정 변경 완료");
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Auto approval update failed");
+      setStatus("자동 승인 설정 변경 실패");
     }
   }
 
@@ -349,17 +424,17 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId) return;
 
     setError(null);
-    setStatus("Analyzing");
+    setStatus("분석 중");
     try {
       const report = await analyzeRoot(selectedRootId);
       setResultLines([
         ...report.files.map((file) => `${file.path} (${file.size_bytes} bytes)`),
         ...formatSkippedEntries(report.skipped_entries)
       ]);
-      setStatus(formatCountWithSkipped("Analyzed", report.files.length, report.skipped_entries.length, "files"));
+      setStatus(formatCountWithSkipped("분석 완료", report.files.length, report.skipped_entries.length, "개 파일"));
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Analyze failed");
+      setStatus("분석 실패");
     }
   }
 
@@ -367,7 +442,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId) return;
 
     setError(null);
-    setStatus("Building proposal");
+    setStatus("제안 만드는 중");
     try {
       const report = await proposeFileChanges(selectedRootId);
       setProposal(report);
@@ -383,10 +458,10 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       );
       setRejectionReasons({});
       setResultLines(report.proposals.map(formatProposal));
-      setStatus(`Prepared ${report.proposals.length} proposals`);
+      setStatus(`제안 ${report.proposals.length}건 준비됨`);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Proposal failed");
+      setStatus("제안 생성 실패");
     }
   }
 
@@ -394,15 +469,15 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId) return;
 
     setError(null);
-    setStatus("Calculating cleanliness");
+    setStatus("청결도 계산 중");
     try {
       const snapshot = await calculateCleanlinessSnapshot(selectedRootId);
       setCleanlinessSnapshot(snapshot);
       setResultLines(formatCleanlinessLines(snapshot));
-      setStatus(`Cleanliness ${snapshot.score}/100`);
+      setStatus(`청결도 ${snapshot.score}/100`);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Cleanliness calculation failed");
+      setStatus("청결도 계산 실패");
     }
   }
 
@@ -410,20 +485,20 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId) return;
 
     setError(null);
-    setStatus("Syncing cleanliness");
+    setStatus("청결도 동기화 중");
     try {
       const report = await submitCleanlinessSnapshot(selectedRootId);
       setCleanlinessSnapshot(report.snapshot);
       setRoomSyncStates((current) => ({ ...current, [report.root_id]: "synced" }));
       setResultLines([
         ...formatCleanlinessLines(report.snapshot),
-        `room | ${report.room_id}${report.room_created ? " (created)" : ""}`,
-        `snapshot | ${report.server_snapshot.snapshot_id}`
+        `방 | ${report.room_id}${report.room_created ? " (생성됨)" : ""}`,
+        `스냅샷 | ${report.server_snapshot.snapshot_id}`
       ]);
-      setStatus(`Cleanliness synced ${report.snapshot.score}/100`);
+      setStatus(`청결도 동기화 완료 ${report.snapshot.score}/100`);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Cleanliness sync failed");
+      setStatus("청결도 동기화 실패");
     }
   }
 
@@ -434,7 +509,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!decisionsToApply) return;
 
     setError(null);
-    setStatus("Prechecking");
+    setStatus("사전 점검 중");
     try {
       const report = await precheckFileChanges(selectedRootId, proposal, decisionsToApply);
       if (proposalDecisionKey) {
@@ -448,12 +523,12 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       const blocked = report.checks.filter((check) => check.status !== "ready");
       setStatus(
         blocked.length > 0
-          ? `Precheck blocked ${blocked.length} proposal(s)`
-          : `Prechecked ${report.checks.length} approved proposals`
+          ? `사전 점검에서 제안 ${blocked.length}건 차단됨`
+          : `승인된 제안 ${report.checks.length}건 사전 점검 완료`
       );
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Precheck failed");
+      setStatus("사전 점검 실패");
     }
   }
 
@@ -461,11 +536,11 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId || !proposal) return;
 
     setError(null);
-    setStatus("Applying auto approval policy");
+    setStatus("자동 승인 정책 적용 중");
     try {
       const autoDecisions = await autoApproveFileChanges(selectedRootId, proposal);
       if (autoDecisions.length === 0) {
-        setStatus("Auto approval found no eligible proposals");
+        setStatus("자동 승인 대상 제안이 없어요");
         return;
       }
 
@@ -484,13 +559,13 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         autoApprovedIds.has(item.proposal_id)
       );
       setResultLines([
-        `Auto approved ${autoDecisions.length} proposal(s) — still requires precheck and execute:`,
-        ...autoApprovedItems.map((item) => `auto-approved | ${item.from} -> ${item.to}`)
+        `제안 ${autoDecisions.length}건 자동 승인됨 — 여전히 사전 점검과 실행이 필요해요:`,
+        ...autoApprovedItems.map((item) => `자동 승인 | ${item.from} -> ${item.to}`)
       ]);
-      setStatus(`Auto approved ${autoDecisions.length} proposals`);
+      setStatus(`제안 ${autoDecisions.length}건 자동 승인됨`);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Auto approval failed");
+      setStatus("자동 승인 실패");
     }
   }
 
@@ -500,28 +575,28 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     const decisionsToApply = validatedDecisionEntries();
     if (!decisionsToApply) return;
     if (!proposalDecisionKey || !activePrecheck) {
-      setError("Run precheck after the latest proposal or decision change before executing.");
-      setStatus("Precheck required");
+      setError("실행 전에 최신 제안·결정 변경에 대해 사전 점검을 먼저 실행하세요.");
+      setStatus("사전 점검 필요");
       return;
     }
     if (!activePrecheckReady) {
       setResultLines(formatPrecheckLines(activePrecheck));
-      setStatus("Execute blocked by precheck");
+      setStatus("사전 점검에 막혀 실행 불가");
       return;
     }
 
     setError(null);
-    setStatus("Ready to execute");
+    setStatus("실행 준비됨");
     try {
       const confirmed = window.confirm(
-        `Move ${activePrecheck.checks.length} approved files for ${selectedRoot?.display_name || "this root"}?`
+        `${selectedRoot?.display_name || "이 폴더"}의 승인된 파일 ${activePrecheck.checks.length}개를 옮길까요?`
       );
       if (!confirmed) {
-        setStatus("Execute cancelled");
+        setStatus("실행 취소됨");
         return;
       }
 
-      setStatus("Executing");
+      setStatus("실행 중");
       const autoApprovedCount = decisionsToApply.filter(
         (decision) =>
           decision.decision === "approved" && autoApprovedProposalIds.has(decision.proposal_id)
@@ -532,53 +607,53 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       setPrecheckSnapshot(null);
       setAutoApprovedProposalIds(new Set());
       setStatus(
-        `Executed ${report.executed_count}, skipped ${report.skipped_count}, rejected ${report.rejected_count}` +
-          (autoApprovedCount > 0 ? ` (${autoApprovedCount} auto-approved)` : "")
+        `실행 ${report.executed_count} · 건너뜀 ${report.skipped_count} · 거절 ${report.rejected_count}` +
+          (autoApprovedCount > 0 ? ` (자동 승인 ${autoApprovedCount})` : "")
       );
       await refreshHistory(selectedRootId);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Execute failed");
+      setStatus("실행 실패");
     }
   }
 
   async function undoSelectedRoot() {
     if (!selectedRootId) return;
 
-    const confirmed = window.confirm(`Undo latest file operation for ${selectedRoot?.display_name || "this root"}?`);
+    const confirmed = window.confirm(`${selectedRoot?.display_name || "이 폴더"}의 가장 최근 파일 작업을 되돌릴까요?`);
     if (!confirmed) return;
 
     setError(null);
-    setStatus("Undoing");
+    setStatus("되돌리는 중");
     try {
       const report = await undoLastFileOperation(selectedRootId);
       const lines = formatUndoLines(report);
       setResultLines(lines);
-      setStatus(`Undone ${report.undone_count}, skipped ${report.skipped_count}`);
+      setStatus(`되돌림 ${report.undone_count} · 건너뜀 ${report.skipped_count}`);
       await refreshHistory(selectedRootId);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Undo failed");
+      setStatus("되돌리기 실패");
     }
   }
 
   async function undoSelectedOperation(operation: OperationHistoryEntry) {
     if (!selectedRootId || !operation.can_undo) return;
 
-    const confirmed = window.confirm(`Undo ${operation.from} -> ${operation.to}?`);
+    const confirmed = window.confirm(`${operation.from} -> ${operation.to} 작업을 되돌릴까요?`);
     if (!confirmed) return;
 
     setError(null);
-    setStatus("Undoing selected operation");
+    setStatus("선택한 작업 되돌리는 중");
     try {
       const report = await undoOperation(selectedRootId, operation.operation_id);
       const lines = formatUndoLines(report);
       setResultLines(lines);
-      setStatus(`Undone ${report.undone_count}, skipped ${report.skipped_count}`);
+      setStatus(`되돌림 ${report.undone_count} · 건너뜀 ${report.skipped_count}`);
       await refreshHistory(selectedRootId);
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Undo failed");
+      setStatus("되돌리기 실패");
     }
   }
 
@@ -594,15 +669,15 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           next.delete(selectedRootId);
           return next;
         });
-        setStatus("Stopped watching for changes");
+        setStatus("변경 감시 중지됨");
       } else {
         await startWatchingRoot(selectedRootId);
         setWatchingRootIds((current) => new Set(current).add(selectedRootId));
-        setStatus("Watching for changes");
+        setStatus("변경 감시 중");
       }
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Watch toggle failed");
+      setStatus("감시 전환 실패");
     }
   }
 
@@ -616,7 +691,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       const report = await browseRootTree(rootId, path);
       setBrowseEntries(report.entries);
       if (report.skipped_entries.length > 0) {
-        setStatus(`Browsing ${report.path || "/"} (${report.skipped_entries.length} skipped)`);
+        setStatus(`${report.path || "/"} 탐색 중 (${report.skipped_entries.length}개 건너뜀)`);
       }
     } catch (caught) {
       setBrowseEntries([]);
@@ -631,10 +706,10 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     try {
       const report = await searchManagedRoot(rootId, query);
       setSearchResults(report.files);
-      setStatus(formatCountWithSkipped("Found", report.files.length, report.skipped_entries.length, "indexed files"));
+      setStatus(formatCountWithSkipped("검색 결과", report.files.length, report.skipped_entries.length, "개 색인 파일"));
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Search failed");
+      setStatus("검색 실패");
     }
   }
 
@@ -642,37 +717,37 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     if (!selectedRootId) return;
 
     setError(null);
-    setStatus("Reindexing");
+    setStatus("색인 다시 만드는 중");
     try {
       const report = await reindexManagedRoot(selectedRootId);
-      setStatus(formatCountWithSkipped("Indexed", report.files.length, report.skipped_entries.length, "files"));
+      setStatus(formatCountWithSkipped("색인 완료", report.files.length, report.skipped_entries.length, "개 파일"));
       // Refresh whatever the search box is currently showing against the new index.
       if (searchResults !== null) {
         await runSearch(selectedRootId, searchQuery);
       }
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Reindex failed");
+      setStatus("색인 재생성 실패");
     }
   }
 
   async function trashBrowseEntry(entry: BrowseEntry) {
     if (!selectedRootId || entry.is_dir) return;
 
-    const confirmed = window.confirm(`Move ${entry.path} into recoverable trash?`);
+    const confirmed = window.confirm(`${entry.path}를 복구 가능한 휴지통으로 옮길까요?`);
     if (!confirmed) return;
 
     setError(null);
-    setStatus("Moving file to trash");
+    setStatus("파일을 휴지통으로 이동 중");
     try {
       setPrecheckSnapshot(null);
       const report = await trashFile(selectedRootId, entry.path);
       setResultLines([
-        `trashed | ${report.original_path} -> ${report.trashed_path}`,
-        `metadata | ${report.metadata_path}`,
-        `operation | ${report.operation_id}`
+        `휴지통 이동 | ${report.original_path} -> ${report.trashed_path}`,
+        `메타데이터 | ${report.metadata_path}`,
+        `작업 | ${report.operation_id}`
       ]);
-      setStatus("File moved to recoverable trash");
+      setStatus("파일을 복구 가능한 휴지통으로 옮겼어요");
       await refreshBrowse(selectedRootId, browsePath);
       await refreshHistory(selectedRootId);
       if (searchResults !== null) {
@@ -680,7 +755,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       }
     } catch (caught) {
       setError(errorMessage(caught));
-      setStatus("Trash failed");
+      setStatus("휴지통 이동 실패");
     }
   }
 
@@ -723,7 +798,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       ? Array.from(new Set([...current, action]))
       : current.filter((item) => item !== action);
     if (next.length === 0) {
-      setError("Auto approval must keep at least one allowed action.");
+      setError("자동 승인은 최소 한 가지 동작을 허용해야 해요.");
       return;
     }
 
@@ -736,14 +811,14 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     );
 
     if (missingReason) {
-      setError(`Rejected proposal needs a reason: ${missingReason.from}`);
-      setStatus("Decision invalid");
+      setError(`거절한 제안에는 사유가 필요해요: ${missingReason.from}`);
+      setStatus("결정이 올바르지 않음");
       return null;
     }
 
     if (commandDecisions.length === 0) {
-      setError("Approve or reject at least one proposal before continuing.");
-      setStatus("No decisions selected");
+      setError("계속하기 전에 제안을 최소 하나 승인하거나 거절하세요.");
+      setStatus("선택된 결정 없음");
       return null;
     }
 
@@ -754,16 +829,16 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     <div className={embedded ? undefined : "app-shell"}>
       <section className="toolbar">
         <div>
-          <h1>MouseKeeper Files</h1>
+          <h1>파일 정리</h1>
           <p>{status}</p>
         </div>
         <button type="button" onClick={refreshRoots}>
-          Refresh
+          새로고침
         </button>
       </section>
 
       <section className="panel">
-        <label htmlFor="root-path">Managed root path</label>
+        <label htmlFor="root-path">관리 폴더 경로</label>
         <div className="input-row">
           <input
             id="root-path"
@@ -772,30 +847,29 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
             placeholder={demoRootHint}
           />
           <button type="button" onClick={browseForRoot}>
-            Browse
+            폴더 찾기
           </button>
           <button type="button" onClick={() => void prepareDemoRootPath()}>
-            Demo
+            데모
           </button>
           <button type="button" onClick={registerRoot} disabled={!pathInput.trim()}>
-            Register
+            등록
           </button>
         </div>
         <p className="path-text">
-          Register is enabled after a path is entered. Tauri commands run inside the desktop app,
-          not a normal browser tab.
+          경로를 입력하면 등록 버튼이 활성화돼요.
         </p>
       </section>
 
       <section className="workspace-grid">
         <div className="panel">
-          <label htmlFor="root-select">Registered roots</label>
+          <label htmlFor="root-select">등록된 폴더</label>
           <select
             id="root-select"
             value={selectedRootId}
             onChange={(event) => selectRoot(event.target.value)}
           >
-            <option value="">No root selected</option>
+            <option value="">선택된 폴더 없음</option>
             {roots.map((root) => (
               <option key={root.root_id} value={root.root_id}>
                 {root.display_name}
@@ -813,7 +887,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                     void updateSelectedRootState({ enabled: event.target.checked })
                   }
                 />
-                Enabled
+                사용
               </label>
               <label>
                 <input
@@ -823,22 +897,29 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                     void updateSelectedRootState({ watch_on_startup: event.target.checked })
                   }
                 />
-                Watch on startup
+                시작 시 감시
               </label>
-              <small>{selectedRoot.last_seen_status}</small>
+              <small>{rootStatusLabel(selectedRoot.last_seen_status)}</small>
             </div>
           ) : null}
           {selectedRoot ? (
             <div className="agent-actions">
               <span className="path-text">
-                Mobile room: {roomSyncStates[selectedRoot.root_id] ?? "pending"}
+                휴대폰 방: {roomSyncLabel(roomSyncStates[selectedRoot.root_id])}
               </span>
               <button
                 type="button"
                 disabled={roomSyncStates[selectedRoot.root_id] === "syncing"}
                 onClick={() => void syncRootToMobile(selectedRoot, true)}
               >
-                Sync to mobile
+                휴대폰과 동기화
+              </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => void unregisterSelectedRoot()}
+              >
+                폴더 연결 해제
               </button>
             </div>
           ) : null}
@@ -852,7 +933,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                     void updateSelectedAutoApprovalPolicy({ enabled: event.target.checked })
                   }
                 />
-                Auto approve proposals
+                제안 자동 승인
               </label>
               <label>
                 <input
@@ -860,7 +941,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                   checked={autoApprovalPolicy.allowed_actions.includes("trash")}
                   onChange={(event) => setAutoApprovalAction("trash", event.target.checked)}
                 />
-                Trash
+                휴지통
               </label>
               <label>
                 <input
@@ -868,10 +949,10 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                   checked={autoApprovalPolicy.allowed_actions.includes("move")}
                   onChange={(event) => setAutoApprovalAction("move", event.target.checked)}
                 />
-                Move
+                이동
               </label>
               <label>
-                Max
+                최대
                 <input
                   type="number"
                   min="1"
@@ -884,48 +965,47 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                 />
               </label>
               <small className="auto-approval-hint">
-                Pre-checks ready proposal items for the actions above. It does not run file
-                operations by itself — precheck and execute below are still required, and this
-                policy never applies to proposals started from mobile or the agent.
+                위 동작에 대해 준비된 제안 항목을 미리 점검해요. 자동 승인만으로는 파일 작업을 실행하지 않으며,
+                아래의 사전 점검·실행이 여전히 필요해요. 이 정책은 휴대폰이나 에이전트가 시작한 제안에는 적용되지 않아요.
               </small>
             </div>
           ) : null}
 
           <div className="button-grid">
             <button type="button" onClick={analyzeSelectedRoot} disabled={!selectedRootId}>
-              Analyze
+              파일 분석
             </button>
             <button type="button" onClick={proposeForSelectedRoot} disabled={!selectedRootId}>
-              Build proposal
+              정리 제안 만들기
             </button>
             <button
               type="button"
               onClick={() => void calculateSelectedCleanliness()}
               disabled={!selectedRootId}
             >
-              Cleanliness
+              청결도 계산
             </button>
             <button
               type="button"
               onClick={() => void syncSelectedCleanliness()}
               disabled={!selectedRootId}
             >
-              Sync cleanliness
+              청결도 동기화
             </button>
             <button
               type="button"
               onClick={precheckSelectedRoot}
               disabled={!selectedRootId || !proposal}
             >
-              Precheck
+              사전 점검
             </button>
             <button
               type="button"
               onClick={() => void autoApproveSelectedProposal()}
               disabled={!selectedRootId || !proposal || !autoApprovalPolicy?.enabled}
-              title="Pre-checks ready proposal items only. Precheck and execute are still required."
+              title="준비된 제안만 정책으로 승인합니다. 실행 전 사전 점검은 그대로 필요합니다."
             >
-              Auto approve proposals
+              자동 승인 적용
             </button>
             <button
               type="button"
@@ -938,50 +1018,49 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                 !!journalCorruption
               }
             >
-              Execute
+              실행
             </button>
             <button
               type="button"
               onClick={undoSelectedRoot}
               disabled={!selectedRootId || !!journalCorruption}
             >
-              Undo
+              되돌리기
             </button>
             <button
               type="button"
               onClick={() => void toggleWatchSelectedRoot()}
               disabled={!selectedRootId}
             >
-              {isWatchingSelectedRoot ? "Stop watching" : "Watch for changes"}
+              {isWatchingSelectedRoot ? "감시 중지" : "변경 감시"}
             </button>
           </div>
           {proposal ? (
             <p className="path-text">
-              {readyProposalCount} ready, {approvedCount} approved, precheck{" "}
-              {activePrecheckReady ? "ready" : activePrecheck ? "blocked" : "required"}
+              준비 {readyProposalCount}건, 승인 {approvedCount}건, 사전 점검{" "}
+              {activePrecheckReady ? "완료" : activePrecheck ? "차단됨" : "필요"}
             </p>
           ) : null}
           {cleanlinessSnapshot ? (
             <p className="path-text">
-              Cleanliness {cleanlinessSnapshot.score}/100 |{" "}
-              {cleanlinessSnapshot.metrics.unorganizedFileCount} unorganized of{" "}
-              {cleanlinessSnapshot.metrics.totalFileCount}
+              청결도 {cleanlinessSnapshot.score}/100 | 전체{" "}
+              {cleanlinessSnapshot.metrics.totalFileCount}개 중 미정리{" "}
+              {cleanlinessSnapshot.metrics.unorganizedFileCount}개
             </p>
           ) : null}
           <p className="mode-note">
-            Delegated cleanup uses proposals only. Mobile, agent, and AI requests cannot run the
-            manual file tools directly.
+            모바일, 에이전트, AI 요청은 정리 제안만 만들 수 있습니다. 실제 파일 변경은 이 PC의 승인과 사전 점검을 거쳐 실행됩니다.
           </p>
           {journalCorruption ? (
-            <p className="error-text">Journal needs recovery before execute/undo will run.</p>
+            <p className="error-text">실행/되돌리기 전에 작업 기록 복구가 필요합니다.</p>
           ) : null}
           {isWatchingSelectedRoot ? (
-            <p className="path-text">Watching for changes — Browse and History refresh automatically.</p>
+            <p className="path-text">변경 감시 중입니다. 파일 목록과 기록이 자동으로 새로고침됩니다.</p>
           ) : null}
         </div>
 
         <div className="panel">
-          <h2>Delegated proposals</h2>
+          <h2>정리 제안</h2>
           <div className="proposal-list">
             {proposal?.proposals.map((item) => (
               <article key={item.proposal_id} className="proposal-row">
@@ -997,7 +1076,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                     <input
                       value={rejectionReasons[item.proposal_id] || ""}
                       onChange={(event) => setRejectionReason(item, event.target.value)}
-                      placeholder="Reason for rejection"
+                      placeholder="거절 사유"
                     />
                   ) : null}
                 </div>
@@ -1008,22 +1087,22 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                   }
                 >
                   <option value="approved" disabled={item.status !== "ready"}>
-                    Approve
+                    승인
                   </option>
-                  <option value="pending">Skip</option>
-                  <option value="rejected">Reject</option>
+                  <option value="pending">보류</option>
+                  <option value="rejected">거절</option>
                 </select>
               </article>
-            )) || <p>No proposal loaded.</p>}
+            )) || <p>불러온 제안이 없습니다.</p>}
           </div>
         </div>
       </section>
 
       <section className="panel">
         <div className="section-header">
-          <h2>Search</h2>
+          <h2>검색</h2>
           <button type="button" onClick={reindexSelectedRoot} disabled={!selectedRootId}>
-            Reindex
+            색인 새로 만들기
           </button>
         </div>
         <form
@@ -1036,11 +1115,11 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           <input
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Search indexed files by name"
+            placeholder="파일 이름으로 검색"
             disabled={!selectedRootId}
           />
           <button type="submit" disabled={!selectedRootId}>
-            Search
+            검색
           </button>
         </form>
         <div className="search-list">
@@ -1051,29 +1130,29 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
               <small>{formatBrowseSize(file.size_bytes)}</small>
             </article>
           ))}
-          {searchResults?.length === 0 ? <p>No indexed files match.</p> : null}
+          {searchResults?.length === 0 ? <p>일치하는 색인 파일이 없습니다.</p> : null}
           {searchResults === null && selectedRootId ? (
-            <p>Reindex, then search the managed root's files. Watching a root keeps its index fresh.</p>
+            <p>색인을 만든 뒤 관리 폴더의 파일을 검색할 수 있습니다. 변경 감시를 켜면 색인이 자동으로 갱신됩니다.</p>
           ) : null}
-          {!selectedRootId ? <p>Select a root to search its files.</p> : null}
+          {!selectedRootId ? <p>검색할 폴더를 먼저 선택하세요.</p> : null}
         </div>
       </section>
 
       <section className="panel">
         <div className="section-header">
           <div>
-            <h2>Manual file tools</h2>
+            <h2>파일 탐색</h2>
             <p className="path-text">
-              These buttons are local-only actions started by this desktop user.
+              이 영역의 작업은 현재 PC에서 사용자가 직접 누를 때만 실행됩니다.
             </p>
           </div>
           <button type="button" onClick={() => void refreshBrowse()} disabled={!selectedRootId}>
-            Refresh
+            새로고침
           </button>
         </div>
         <nav className="breadcrumb">
           <button type="button" onClick={() => setBrowsePath("")} disabled={!selectedRootId}>
-            {selectedRoot?.display_name || "root"}
+            {selectedRoot?.display_name || "루트"}
           </button>
           {browsePath
             .split("/")
@@ -1110,42 +1189,40 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                   onClick={() => void trashBrowseEntry(entry)}
                   disabled={!!journalCorruption}
                 >
-                  Trash
+                  휴지통
                 </button>
               ) : null}
             </article>
           ))}
-          {selectedRootId && browseEntries.length === 0 ? <p>This folder is empty.</p> : null}
-          {!selectedRootId ? <p>Select a root to browse its files.</p> : null}
+          {selectedRootId && browseEntries.length === 0 ? <p>이 폴더는 비어 있습니다.</p> : null}
+          {!selectedRootId ? <p>탐색할 폴더를 먼저 선택하세요.</p> : null}
         </div>
       </section>
 
       <section className="panel">
-        <h2>Output</h2>
+        <h2>결과</h2>
         {error ? <p className="error-text">{error}</p> : null}
-        <pre>{resultLines.join("\n") || "No output yet."}</pre>
+        <pre>{resultLines.join("\n") || "아직 출력이 없습니다."}</pre>
       </section>
 
       <section className="panel">
         <div className="section-header">
-          <h2>History</h2>
+          <h2>작업 기록</h2>
           <button type="button" onClick={() => void refreshHistory()} disabled={!selectedRootId}>
-            Refresh
+            새로고침
           </button>
         </div>
         {journalCorruption ? (
           <div className="recovery-banner">
             <p>
-              <strong>Recovery needed.</strong> Journal is unreadable starting at line{" "}
-              {journalCorruption.line}: {journalCorruption.message}
+              <strong>복구가 필요합니다.</strong> 작업 기록 {journalCorruption.line}번째 줄부터 읽을 수 없습니다:{" "}
+              {journalCorruption.message}
             </p>
             <p>
-              History above this point is still shown, but new executes and undos are blocked
-              until the broken journal is quarantined. Operations recorded before the break will
-              no longer be undoable through the app after recovery.
+              손상된 기록을 격리하기 전까지 새 실행과 되돌리기는 막힙니다. 격리 후에는 손상 지점 이전 작업을 앱에서 되돌릴 수 없습니다.
             </p>
             <button type="button" onClick={() => void recoverJournalForSelectedRoot()}>
-              Recover journal
+              작업 기록 복구
             </button>
           </div>
         ) : null}
@@ -1156,18 +1233,18 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
               <span>{`${operation.from} -> ${operation.to}`}</span>
               <small>{new Date(operation.created_unix_ms).toLocaleString()}</small>
               {!operation.can_undo && operation.undo_blocked_reason ? (
-                <small className="reason-text">Can't undo: {operation.undo_blocked_reason}</small>
+                <small className="reason-text">되돌릴 수 없음: {operation.undo_blocked_reason}</small>
               ) : null}
               <button
                 type="button"
                 onClick={() => void undoSelectedOperation(operation)}
                 disabled={!operation.can_undo || !!journalCorruption}
               >
-                Undo
+                되돌리기
               </button>
             </article>
           ))}
-          {history.length === 0 ? <p>No journal history yet.</p> : null}
+          {history.length === 0 ? <p>아직 작업 기록이 없습니다.</p> : null}
         </div>
       </section>
     </div>
@@ -1201,17 +1278,17 @@ function formatBrowseSize(sizeBytes: number | null) {
 }
 
 function formatProposal(item: Proposal) {
-  return `${item.status} | ${item.from} -> ${item.to} | ${item.reason}`;
+  return `${proposalStatusLabel(item.status)} | ${item.from} -> ${item.to} | ${item.reason}`;
 }
 
 function formatCleanlinessLines(snapshot: CleanlinessSnapshot) {
   return [
-    `score | ${snapshot.score}/100`,
-    `files | total ${snapshot.metrics.totalFileCount}, managed ${snapshot.metrics.managedFileCount}, unorganized ${snapshot.metrics.unorganizedFileCount}`,
-    `calculated | ${snapshot.calculatedAt}`,
+    `점수 | ${snapshot.score}/100`,
+    `파일 | 전체 ${snapshot.metrics.totalFileCount}, 관리됨 ${snapshot.metrics.managedFileCount}, 미정리 ${snapshot.metrics.unorganizedFileCount}`,
+    `계산 시각 | ${snapshot.calculatedAt}`,
     ...snapshot.metrics.deductions.map(
       (deduction) =>
-        `deduction | ${deduction.reasonCode} | count ${deduction.count} | -${deduction.points}`
+        `감점 | ${deduction.reasonCode} | ${deduction.count}건 | -${deduction.points}`
     )
   ];
 }
@@ -1221,9 +1298,9 @@ function formatExecuteLines(report: ExecuteReport) {
     const rows = report.results.filter((result) => result.status === status);
     if (rows.length === 0) return [];
     return [
-      `[${status}]`,
+      `[${executeStatusLabel(status as ExecuteReport["results"][number]["status"])}]`,
       ...rows.map((result) =>
-        [result.status, `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
+        [executeStatusLabel(result.status), `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
       )
     ];
   });
@@ -1231,19 +1308,19 @@ function formatExecuteLines(report: ExecuteReport) {
 
 function formatUndoLines(report: UndoReport) {
   return report.results.map((result) =>
-    [result.status, `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
+    [undoStatusLabel(result.status), `${result.from} -> ${result.to}`, result.reason].filter(Boolean).join(" | ")
   );
 }
 
 function formatPrecheckLines(report: PrecheckReport) {
   return report.checks.map((check) =>
-    [check.status, `${check.from} -> ${check.to}`, check.reason].filter(Boolean).join(" | ")
+    [precheckStatusLabel(check.status), `${check.from} -> ${check.to}`, check.reason].filter(Boolean).join(" | ")
   );
 }
 
 function formatPrecheckSummary(report: PrecheckReport, item: Proposal) {
   const check = report.checks.find((entry) => entry.from === item.from && entry.to === item.to);
-  return check ? `precheck: ${check.status}` : "precheck: not selected";
+  return check ? `사전 점검: ${precheckStatusLabel(check.status)}` : "사전 점검: 선택 안 됨";
 }
 
 function proposalSnapshotKey(
@@ -1255,13 +1332,52 @@ function proposalSnapshotKey(
 }
 
 function formatSkippedEntries(entries: Array<{ path: string; reason: string }>) {
-  return entries.map((entry) => `skipped | ${entry.path || "/"} | ${entry.reason}`);
+  return entries.map((entry) => `건너뜀 | ${entry.path || "/"} | ${entry.reason}`);
 }
 
 function formatCountWithSkipped(label: string, count: number, skipped: number, noun: string) {
-  return skipped > 0 ? `${label} ${count} ${noun}, skipped ${skipped}` : `${label} ${count} ${noun}`;
+  return skipped > 0 ? `${label} ${count} ${noun}, 건너뜀 ${skipped}` : `${label} ${count} ${noun}`;
 }
 
 function errorMessage(caught: unknown) {
   return caught instanceof Error ? caught.message : String(caught);
+}
+
+function rootStatusLabel(status: ManagedRoot["last_seen_status"]) {
+  return { ready: "정상", missing: "폴더 없음", error: "오류" }[status] ?? status;
+}
+
+function roomSyncLabel(state: RoomSyncState | undefined) {
+  switch (state) {
+    case "syncing":
+      return "동기화 중";
+    case "synced":
+      return "동기화됨";
+    case "failed":
+      return "실패";
+    default:
+      return "대기 중";
+  }
+}
+
+function proposalStatusLabel(status: Proposal["status"]) {
+  return { ready: "준비됨", destination_exists: "대상 있음" }[status] ?? status;
+}
+
+function executeStatusLabel(status: ExecuteReport["results"][number]["status"]) {
+  return { executed: "실행됨", skipped: "건너뜀", rejected: "거절됨" }[status] ?? status;
+}
+
+function undoStatusLabel(status: UndoReport["results"][number]["status"]) {
+  return { undone: "되돌림", skipped: "건너뜀" }[status] ?? status;
+}
+
+function precheckStatusLabel(status: PrecheckReport["checks"][number]["status"]) {
+  return {
+    ready: "준비됨",
+    destination_exists: "대상 있음",
+    missing_source: "원본 없음",
+    source_changed: "원본 변경됨",
+    rejected_path: "경로 거부됨"
+  }[status] ?? status;
 }
