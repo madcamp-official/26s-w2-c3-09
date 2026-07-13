@@ -89,6 +89,30 @@ export const devices = pgTable(
     index("devices_last_seen_idx").on(t.lastSeenAt),
   ],
 );
+export const pushNotificationTokens = pgTable(
+  "push_notification_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    token: text("token").notNull(),
+    tokenHash: varchar("token_hash", { length: 64 }).notNull(),
+    platform: platform("platform").notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("ACTIVE"),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("push_notification_tokens_hash_idx").on(t.tokenHash),
+    index("push_notification_tokens_user_status_idx").on(t.userId, t.status),
+  ],
+);
 export const pairingSessions = pgTable("pairing_sessions", {
   id: uuid("id").primaryKey().defaultRandom(),
   desktopNonce: varchar("desktop_nonce", { length: 128 }).notNull().unique(),
@@ -322,6 +346,36 @@ export const syncEvents = pgTable(
   (t) => [
     uniqueIndex("sync_events_user_sequence_idx").on(t.userId, t.sequence),
     index("sync_events_user_time_idx").on(t.userId, t.occurredAt),
+  ],
+);
+export const notificationJobs = pgTable(
+  "notification_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    syncEventId: uuid("sync_event_id")
+      .notNull()
+      .references(() => syncEvents.id),
+    eventType: varchar("event_type", { length: 100 }).notNull(),
+    title: varchar("title", { length: 120 }).notNull(),
+    body: varchar("body", { length: 500 }).notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("PENDING"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastErrorCode: varchar("last_error_code", { length: 80 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("notification_jobs_sync_event_idx").on(t.syncEventId),
+    index("notification_jobs_pending_idx").on(t.status, t.nextAttemptAt),
+    index("notification_jobs_user_status_idx").on(t.userId, t.status),
   ],
 );
 export const auditEvents = pgTable(
