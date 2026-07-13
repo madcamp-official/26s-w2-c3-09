@@ -17,6 +17,13 @@ const schema = z
     OBJECT_STORAGE_ACCESS_KEY_ID: optionalString,
     OBJECT_STORAGE_SECRET_ACCESS_KEY: optionalString,
     FILE_TRANSFER_TTL_SECONDS: z.coerce.number().int().min(60).max(3600),
+    FCM_ENABLED: z
+      .enum(["true", "false"])
+      .transform((value) => value === "true"),
+    FIREBASE_SERVICE_ACCOUNT_PATH: optionalString,
+    FIREBASE_PROJECT_ID: optionalString,
+    FIREBASE_CLIENT_EMAIL: optionalString,
+    FIREBASE_PRIVATE_KEY: optionalString,
   })
   .superRefine((value, context) => {
     const hasAccessKey = Boolean(value.OBJECT_STORAGE_ACCESS_KEY_ID);
@@ -31,6 +38,20 @@ const schema = z
         ],
         message:
           "object storage static credentials must be configured together",
+      });
+    }
+    if (
+      value.FCM_ENABLED &&
+      !value.FIREBASE_SERVICE_ACCOUNT_PATH &&
+      (!value.FIREBASE_PROJECT_ID ||
+        !value.FIREBASE_CLIENT_EMAIL ||
+        !value.FIREBASE_PRIVATE_KEY)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["FCM_ENABLED"],
+        message:
+          "FCM requires a service account path or complete direct credentials",
       });
     }
   });

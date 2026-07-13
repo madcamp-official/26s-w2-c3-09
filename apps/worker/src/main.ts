@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import {
   DeleteObjectCommand,
   ListObjectsV2Command,
@@ -10,12 +11,17 @@ import {
   createDatabase,
   fileTransfers,
   objectDeletionJobs,
+  notificationJobs,
+  pushNotificationTokens,
   rooms,
   syncEvents,
   type Database,
 } from "@housemouse/database";
-import { and, eq, inArray, lte, max, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, max, or, sql } from "drizzle-orm";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getMessaging, type Messaging } from "firebase-admin/messaging";
 import { loadWorkerConfig } from "./config";
+import { isPermanentlyInvalidTokenError } from "./notification-delivery";
 
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
@@ -39,6 +45,25 @@ const storage = new S3Client({
       }
     : {}),
 });
+
+function createMessaging(): Messaging | null {
+  if (!config.FCM_ENABLED) return null;
+  try {
+    const credential = config.FIREBASE_SERVICE_ACCOUNT_PATH
+      ? JSON.parse(readFileSync(config.FIREBASE_SERVICE_ACCOUNT_PATH, "utf8"))
+      : {
+          projectId: config.FIREBASE_PROJECT_ID,
+          clientEmail: config.FIREBASE_CLIENT_EMAIL,
+          privateKey: config.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+        };
+    const app = getApps()[0] ?? initializeApp({ credential: cert(credential) });
+    return getMessaging(app);
+  } catch {
+    throw new Error("UNCONFIGURED: FIREBASE_SERVICE_ACCOUNT_PATH");
+  }
+}
+
+const messaging = createMessaging();
 
 async function deleteObject(key: string) {
   await storage.send(
@@ -326,6 +351,118 @@ async function processReservationJob() {
   return true;
 }
 
+async function claimNotificationJob() {
+  const now = new Date();
+  return connection.db.transaction(async (tx) => {
+    const row = (
+      await tx
+        .select()
+        .from(notificationJobs)
+        .where(
+          and(
+            lte(notificationJobs.nextAttemptAt, now),
+            or(
+              eq(notificationJobs.status, "PENDING"),
+              eq(notificationJobs.status, "PROCESSING"),
+            ),
+          ),
+        )
+        .orderBy(asc(notificationJobs.nextAttemptAt))
+        .for("update", { skipLocked: true })
+        .limit(1)
+    )[0];
+    if (row) {
+      await tx
+        .update(notificationJobs)
+        .set({
+          status: "PROCESSING",
+          attemptCount: sql`${notificationJobs.attemptCount} + 1`,
+          // nextAttemptAt doubles as a lease so a crashed worker cannot strand a job.
+          nextAttemptAt: new Date(Date.now() + 5 * 60_000),
+        })
+        .where(eq(notificationJobs.id, row.id));
+    }
+    return row;
+  });
+}
+
+async function completeNotificationJob(
+  jobId: string,
+  lastErrorCode: string | null,
+) {
+  await connection.db
+    .update(notificationJobs)
+    .set({
+      status: "COMPLETED",
+      completedAt: new Date(),
+      lastErrorCode,
+    })
+    .where(eq(notificationJobs.id, jobId));
+}
+
+async function processNotificationJob() {
+  if (!messaging) return false;
+  const job = await claimNotificationJob();
+  if (!job) return false;
+  const tokens = await connection.db
+    .select()
+    .from(pushNotificationTokens)
+    .where(
+      and(
+        eq(pushNotificationTokens.userId, job.userId),
+        eq(pushNotificationTokens.status, "ACTIVE"),
+      ),
+    )
+    .orderBy(asc(pushNotificationTokens.createdAt));
+  if (tokens.length === 0) {
+    await completeNotificationJob(job.id, "NO_ACTIVE_TOKENS");
+    return true;
+  }
+
+  let retryRequired = false;
+  for (let offset = 0; offset < tokens.length; offset += 500) {
+    const batch = tokens.slice(offset, offset + 500);
+    try {
+      const response = await messaging.sendEachForMulticast({
+        tokens: batch.map((token) => token.token),
+        notification: { title: job.title, body: job.body },
+        data: { eventType: job.eventType, syncEventId: job.syncEventId },
+      });
+      const invalidIds: string[] = [];
+      response.responses.forEach((result, index) => {
+        if (result.success) return;
+        if (isPermanentlyInvalidTokenError(result.error)) {
+          invalidIds.push(batch[index].id);
+        } else {
+          retryRequired = true;
+        }
+      });
+      if (invalidIds.length > 0) {
+        await connection.db
+          .update(pushNotificationTokens)
+          .set({ status: "REVOKED", revokedAt: new Date() })
+          .where(inArray(pushNotificationTokens.id, invalidIds));
+      }
+    } catch {
+      retryRequired = true;
+    }
+  }
+
+  if (retryRequired) {
+    await connection.db
+      .update(notificationJobs)
+      .set({
+        status: "PENDING",
+        nextAttemptAt: new Date(Date.now() + 60_000),
+        lastErrorCode: "FCM_SEND_FAILED",
+      })
+      .where(eq(notificationJobs.id, job.id));
+  } else {
+    await completeNotificationJob(job.id, null);
+  }
+  return true;
+}
+
 async function sweepOrphanTransfers() {
   const cutoff = Date.now() - config.FILE_TRANSFER_TTL_SECONDS * 2 * 1000;
   let continuationToken: string | undefined;
@@ -370,6 +507,7 @@ async function tick() {
     while (await processTransferJob()) {}
     while (await processCacheFileJob()) {}
     while (await processReservationJob()) {}
+    while (await processNotificationJob()) {}
     if (Date.now() - lastOrphanSweepAt >= 60 * 60 * 1000) {
       await sweepOrphanTransfers();
       lastOrphanSweepAt = Date.now();

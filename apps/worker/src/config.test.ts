@@ -7,6 +7,7 @@ const base = {
   OBJECT_STORAGE_REGION: "ap-southeast-2",
   OBJECT_STORAGE_BUCKET: "housemouse-private",
   FILE_TRANSFER_TTL_SECONDS: "600",
+  FCM_ENABLED: "false",
 };
 
 test("worker accepts the EC2 instance role credential mode", () => {
@@ -14,6 +15,22 @@ test("worker accepts the EC2 instance role credential mode", () => {
   assert.equal(config.OBJECT_STORAGE_ENDPOINT, undefined);
   assert.equal(config.OBJECT_STORAGE_ACCESS_KEY_ID, undefined);
   assert.equal(config.OBJECT_STORAGE_SECRET_ACCESS_KEY, undefined);
+});
+
+test("worker rejects enabled FCM without credentials", () => {
+  assert.throws(
+    () => loadWorkerConfig({ ...base, FCM_ENABLED: "true" }),
+    /UNCONFIGURED: FCM_ENABLED/,
+  );
+});
+
+test("worker accepts enabled FCM with a service account path", () => {
+  const config = loadWorkerConfig({
+    ...base,
+    FCM_ENABLED: "true",
+    FIREBASE_SERVICE_ACCOUNT_PATH: "/etc/housemouse/firebase.json",
+  });
+  assert.equal(config.FCM_ENABLED, true);
 });
 
 test("worker accepts a complete static credential pair", () => {
