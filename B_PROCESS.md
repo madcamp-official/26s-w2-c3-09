@@ -491,3 +491,11 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - Android release keystore path/alias/password: signed APK/AAB와 Firebase release SHA 등록.
 - Sentry project DSN/dashboard 권한: 실제 redacted event 수신 확인.
 - A command/FileTransfer/smart-cache local adapter: managed root 전체 통합 E2E.
+
+## 2026-07-14 — 모바일 chat session 연결
+
+- 모바일 채팅 화면을 구형 room 단일 채팅 API에서 `/v1/rooms/:roomId/chat-sessions`, `/v1/chat-sessions/:sessionId/messages` 기반으로 전환했다.
+- 세션 목록 선택, 새 세션 생성, 선택 세션 soft delete 요청, 현재 세션 메시지 조회와 전송을 연결했다.
+- 메시지 전송 후 전체 채팅 reload를 하지 않고 서버가 반환한 사용자 메시지와 assistant 확인 카드만 로컬 목록에 append한다.
+- 6번째 세션 생성처럼 서버가 `CHAT_SESSION_LIMIT_REACHED`를 반환하는 경우 성공으로 가장하지 않고 최대 5개 제한 안내를 표시한다.
+- test-scope `ChatGateway` fake로 세션 선택, 전송 append, 5개 제한 안내를 widget test에서 검증했다.

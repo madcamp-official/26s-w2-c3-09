@@ -51,7 +51,7 @@
 - [x] file browse 요청, cursor page, timeout/offline/cursor 오류 상태
 - [x] FileTransfer 요청·signed PUT/GET·HEAD 크기 확인·SHA-256 metadata·ACK/cancel/expiry 상태
 - [x] character profile, affinity 원장과 중복 보상 방지; 기존 외형/테마 선택 API는 하위 호환용 deprecated 경로로만 유지
-- [x] chat message 영속화. AI 미설정은 assistant 성공을 만들지 않고 명시적으로 `UNCONFIGURED`
+- [x] chat session/message 영속화와 모바일 세션 선택·생성·삭제 UI. AI 미설정은 assistant 성공을 만들지 않고 명시적으로 `UNCONFIGURED`
 - [x] FCM token 등록/해제, notification outbox와 영구 무효 token 정리
 - [x] audit activity summary와 privacy-safe request/Sentry 경계
 
@@ -157,7 +157,7 @@
 4. **오프라인 복구:** server sync sequence, mobile mutation outbox, desktop SQLite cursor/outbox와 REST replay를 연결했다.
 5. **파일 접근 확장:** read-only browse와 별도 FileTransfer 상태 머신, signed object storage, checksum, ACK/TTL 삭제를 추가했다.
 6. **스마트 캐시 control plane:** opt-in policy, usage score, quota reservation, freshness metadata와 object deletion tombstone을 추가했다.
-7. **제품 경험 기반:** 모바일 home/room/rule/proposal/files/chat/character 설정과 Desktop Agent/file UI, 8종 PNG 상태 이미지를 연결했다.
+7. **제품 경험 기반:** 모바일 home/room/rule/proposal/files/chat session/character 설정과 Desktop Agent/file UI, 8종 PNG 상태 이미지를 연결했다.
 8. **운영 하드닝:** AWS EC2, private S3 IAM role, Nginx/systemd, FCM worker, PostgreSQL backup/restore, Sentry redaction 경계를 추가했다.
 9. **A/B 통합:** Desktop background processor가 server command, decision, browse, transfer, cache reservation 계약을 소비하도록 병합했다.
 10. **브랜드 표준화:** package scope, Rust crate, Flutter package, Android/iOS/Tauri identifier, 환경 변수, local state dir, 배포 unit/path를 MOUSEKEEPER로 통일했다.
