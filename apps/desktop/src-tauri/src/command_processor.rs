@@ -1,10 +1,13 @@
+use std::fs;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::proposal::{
-    propose_for_root, propose_for_root_with_rule_set, Proposal, ProposalAction, ProposalReport,
-    ProposalStatus,
+    proposal_id, propose_for_root, propose_for_root_with_rule_set, Proposal, ProposalAction,
+    ProposalReport, ProposalStatus,
 };
 use file_engine_cli::rules::RuleSet;
+use file_engine_cli::{fs_safety::is_link_or_reparse_point, path_guard::PathGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -18,10 +21,12 @@ use crate::storage::outbox::OutboxStore;
 /// This module may generate proposal submissions, but it must not call direct file operations
 /// such as create, rename, or trash. Those commands stay local/manual in `commands::file_engine`.
 const ANALYZE: &str = "ANALYZE";
+const RENAME: &str = "RENAME";
 const ORGANIZE: &str = "ORGANIZE";
 const ORGANIZE_FILES: &str = "organize_files";
 const ORGANIZE_ROOT: &str = "ORGANIZE_ROOT";
 const DEFAULT_MAX_PROPOSALS: usize = 50;
+const USER_REQUESTED_RENAME_REASON: &str = "USER_REQUESTED_RENAME";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CommandProcessingReport {
@@ -70,6 +75,14 @@ struct OrganizeFilesPayload {
     /// (see `resolve_proposal`), so malformed AI output is rejected before any file logic runs.
     #[serde(default)]
     rule_draft: Option<Value>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RenameCommandPayload {
+    root_id: String,
+    source_relative_path: String,
+    new_name: String,
 }
 
 impl OrganizeFilesPayload {
@@ -160,7 +173,7 @@ pub async fn process_commands(
     };
 
     for command in commands {
-        if !is_supported_organize_command(&command) || command.status != "QUEUED" {
+        if !is_supported_command(&command) || command.status != "QUEUED" {
             report.skipped_count += 1;
             report.results.push(CommandProcessingResult {
                 command_id: command.command_id,
@@ -176,7 +189,10 @@ pub async fn process_commands(
         }
 
         report.processed_count += 1;
-        let result = process_organize_command(agent, roots, outbox, &command).await;
+        let result = match command.command_type.as_str() {
+            RENAME => process_rename_command(agent, roots, outbox, &command).await,
+            _ => process_organize_command(agent, roots, outbox, &command).await,
+        };
         match result {
             Ok(item_count) => {
                 report.submitted_proposal_count += 1;
@@ -205,6 +221,45 @@ pub async fn process_commands(
     }
 
     Ok(report)
+}
+
+async fn process_rename_command(
+    agent: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    command: &AgentCommand,
+) -> Result<usize, String> {
+    let payload = parse_rename_payload(command)?;
+
+    // Claim the command before local disk inspection so a slow proposal cannot be polled and
+    // processed twice. This still performs no file mutation; it only moves the server command into
+    // the same analysis/proposal path used by organize commands.
+    agent
+        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let room = agent
+        .root_id_for_room(command.room_id.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    let managed_root = roots.ensure_active_room_binding(&room.root_id, &command.room_id)?;
+    if payload.root_id != managed_root.root_id {
+        return Err("command rootId does not match the room binding".to_string());
+    }
+    if !managed_root.enabled {
+        return Err(format!(
+            "managed root is disabled: {}",
+            managed_root.root_id
+        ));
+    }
+
+    let local_report = build_rename_proposal_report(&managed_root.root, &payload)?;
+    let submission = build_agent_proposal_submission(command, local_report, 1)?;
+    let item_count = submission.items.len();
+    enqueue_proposal(outbox, &submission)?;
+
+    Ok(item_count)
 }
 
 async fn process_organize_command(
@@ -255,6 +310,73 @@ async fn process_organize_command(
     enqueue_proposal(outbox, &submission)?;
 
     Ok(item_count)
+}
+
+fn parse_rename_payload(command: &AgentCommand) -> Result<RenameCommandPayload, String> {
+    serde_json::from_value(command.payload.clone())
+        .map_err(|error| format!("invalid rename payload: {error}"))
+}
+
+fn build_rename_proposal_report(
+    root: &str,
+    payload: &RenameCommandPayload,
+) -> Result<ProposalReport, String> {
+    validate_remote_relative_path(&payload.source_relative_path)?;
+    let new_name = validate_remote_file_name(&payload.new_name)?;
+    let destination_relative_path = sibling_relative_path(&payload.source_relative_path, &new_name);
+    if normalize_slashes(&payload.source_relative_path) == destination_relative_path {
+        return Err("rename newName must differ from the source file name".to_string());
+    }
+
+    let guard = PathGuard::new(root).map_err(|error| error.to_string())?;
+    let source = guard
+        .resolve_existing(&payload.source_relative_path)
+        .map_err(|error| error.to_string())?;
+    let raw_source = guard.root().join(&payload.source_relative_path);
+    let metadata = fs::symlink_metadata(&raw_source).map_err(|error| {
+        format!(
+            "cannot read source metadata {}: {error}",
+            raw_source.display()
+        )
+    })?;
+    if is_link_or_reparse_point(&metadata, metadata.file_type()) {
+        return Err("RENAME refuses symlinks, junctions, and reparse points".to_string());
+    }
+    if !metadata.is_file() {
+        return Err("RENAME currently supports regular files only".to_string());
+    }
+    if !source.starts_with(guard.root()) {
+        return Err("RENAME source escaped managed root".to_string());
+    }
+
+    let destination = guard
+        .resolve_for_create(&destination_relative_path)
+        .map_err(|error| error.to_string())?;
+    let status = if destination.exists() {
+        ProposalStatus::DestinationExists
+    } else {
+        ProposalStatus::Ready
+    };
+    let action = ProposalAction::Move;
+
+    Ok(ProposalReport {
+        root: guard.root().display().to_string(),
+        proposals: vec![Proposal {
+            proposal_id: proposal_id(
+                &action,
+                &payload.source_relative_path,
+                &destination_relative_path,
+            ),
+            action,
+            from: normalize_slashes(&payload.source_relative_path),
+            to: destination_relative_path,
+            content: None,
+            source_size_bytes: metadata.len(),
+            source_modified_unix_ms: modified_unix_ms(&metadata),
+            reason: USER_REQUESTED_RENAME_REASON.to_string(),
+            status,
+        }],
+    })
 }
 
 /// Computes the local proposal for a command. If the command carries an AI/server rule draft, the
@@ -338,6 +460,10 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
 }
 
 fn reason_code(proposal: &Proposal) -> String {
+    if proposal.reason == USER_REQUESTED_RENAME_REASON {
+        return USER_REQUESTED_RENAME_REASON.to_string();
+    }
+
     match proposal.action {
         ProposalAction::Move => "RULE_MOVE_BY_EXTENSION",
         ProposalAction::Trash => "RULE_QUARANTINE",
@@ -405,10 +531,98 @@ fn validate_relative_scope(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn is_supported_organize_command(command: &AgentCommand) -> bool {
+fn validate_remote_relative_path(path: &str) -> Result<(), String> {
+    if path.trim().is_empty()
+        || path.contains('\\')
+        || path.starts_with('/')
+        || path.starts_with("\\\\")
+        || path.contains(':')
+        || path.contains('\0')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err("remote command path must stay inside the managed root".to_string());
+    }
+    Ok(())
+}
+
+fn validate_remote_file_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    let stem = trimmed
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let reserved = matches!(
+        stem.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    );
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.contains('\0')
+        || trimmed.ends_with('.')
+        || trimmed.ends_with(' ')
+        || reserved
+    {
+        return Err("remote rename newName is not a safe file name".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn sibling_relative_path(source_relative_path: &str, new_name: &str) -> String {
+    let source = normalize_slashes(source_relative_path);
+    source
+        .rsplit_once('/')
+        .map(|(parent, _)| format!("{parent}/{new_name}"))
+        .unwrap_or_else(|| new_name.to_string())
+}
+
+fn normalize_slashes(path: &str) -> String {
+    Path::new(path)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
+    metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
+}
+
+fn is_supported_command(command: &AgentCommand) -> bool {
     matches!(
         command.command_type.as_str(),
-        ANALYZE | ORGANIZE | ORGANIZE_FILES | ORGANIZE_ROOT
+        ANALYZE | RENAME | ORGANIZE | ORGANIZE_FILES | ORGANIZE_ROOT
     )
 }
 
@@ -429,9 +643,10 @@ mod tests {
     use crate::storage::outbox::OutboxStore;
 
     use super::{
-        build_agent_proposal_submission, parse_organize_payload, process_commands,
-        resolve_proposal, validate_relative_scope, AgentCommand, AgentProposalActionType,
-        AgentProposalConflictState, OrganizeFilesPayload,
+        build_agent_proposal_submission, build_rename_proposal_report, parse_organize_payload,
+        process_commands, resolve_proposal, validate_relative_scope, AgentCommand,
+        AgentProposalActionType, AgentProposalConflictState, OrganizeFilesPayload,
+        RenameCommandPayload, USER_REQUESTED_RENAME_REASON,
     };
 
     fn command(payload: serde_json::Value) -> AgentCommand {
@@ -558,6 +773,103 @@ mod tests {
         assert_eq!(organize.scope(), "");
         assert_eq!(organize.max_proposals(), 50);
         assert_eq!(organize.user_intent.as_deref(), Some("clean up old pdfs"));
+    }
+
+    #[test]
+    fn rename_command_builds_a_move_proposal_without_touching_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("notes")).expect("notes");
+        std::fs::write(root.join("notes/old.txt"), "original").expect("old");
+
+        let payload = RenameCommandPayload {
+            root_id: "root:notes".to_string(),
+            source_relative_path: "notes/old.txt".to_string(),
+            new_name: "new.txt".to_string(),
+        };
+
+        let report = build_rename_proposal_report(&root.to_string_lossy(), &payload)
+            .expect("rename proposal");
+
+        assert!(root.join("notes/old.txt").exists());
+        assert!(!root.join("notes/new.txt").exists());
+        assert_eq!(report.proposals.len(), 1);
+        let proposal = &report.proposals[0];
+        assert_eq!(proposal.action, ProposalAction::Move);
+        assert_eq!(proposal.from, "notes/old.txt");
+        assert_eq!(proposal.to, "notes/new.txt");
+        assert_eq!(proposal.source_size_bytes, 8);
+        assert_eq!(proposal.reason, USER_REQUESTED_RENAME_REASON);
+        assert_eq!(proposal.status, ProposalStatus::Ready);
+
+        let submission =
+            build_agent_proposal_submission(&command(json!({"maxProposals": 1})), report, 1)
+                .expect("submission");
+        assert_eq!(submission.summary.item_count, 1);
+        assert_eq!(
+            submission.items[0].reason_code,
+            USER_REQUESTED_RENAME_REASON
+        );
+        assert_eq!(
+            submission.items[0].conflict_state,
+            AgentProposalConflictState::None
+        );
+    }
+
+    #[test]
+    fn rename_command_marks_destination_conflict_without_overwriting() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("notes")).expect("notes");
+        std::fs::write(root.join("notes/old.txt"), "original").expect("old");
+        std::fs::write(root.join("notes/new.txt"), "keep me").expect("new");
+
+        let payload = RenameCommandPayload {
+            root_id: "root:notes".to_string(),
+            source_relative_path: "notes/old.txt".to_string(),
+            new_name: "new.txt".to_string(),
+        };
+
+        let report = build_rename_proposal_report(&root.to_string_lossy(), &payload)
+            .expect("rename proposal");
+        let submission =
+            build_agent_proposal_submission(&command(json!({"maxProposals": 1})), report, 1)
+                .expect("submission");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("notes/new.txt")).expect("new"),
+            "keep me"
+        );
+        assert_eq!(
+            submission.items[0].conflict_state,
+            AgentProposalConflictState::NameConflict
+        );
+    }
+
+    #[test]
+    fn rename_command_rejects_unsafe_source_paths_and_names() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("notes")).expect("notes");
+        std::fs::write(root.join("notes/old.txt"), "original").expect("old");
+
+        let traversal = RenameCommandPayload {
+            root_id: "root:notes".to_string(),
+            source_relative_path: "../outside.txt".to_string(),
+            new_name: "new.txt".to_string(),
+        };
+        let error = build_rename_proposal_report(&root.to_string_lossy(), &traversal)
+            .expect_err("reject traversal");
+        assert!(error.contains("managed root"));
+
+        let slash_name = RenameCommandPayload {
+            root_id: "root:notes".to_string(),
+            source_relative_path: "notes/old.txt".to_string(),
+            new_name: "nested/new.txt".to_string(),
+        };
+        let error = build_rename_proposal_report(&root.to_string_lossy(), &slash_name)
+            .expect_err("reject name");
+        assert!(error.contains("safe file name"));
     }
 
     #[test]
