@@ -282,7 +282,7 @@
 - loading, empty, offline, error 상태와 다시 시도를 home/room/files/proposal/smart-cache 화면에서 명시한다.
 - 실시간 live/replay sequence는 owner별 cursor transaction에서 단조 증가시키고 이미 처리한 sequence의 UI invalidation을 억제한다.
 - 규칙 생성·수정·활성화와 optimistic version conflict 문구, 제안 파일별 상대 경로·이유·목적지·충돌, 실행의 STALE/ROLLED_BACK/부분 성공 표현을 연결했다.
-- chat은 사용자 메시지만 영속하고 AI provider가 없는 현재 assistant 성공을 만들지 않으며 `UNCONFIGURED`를 표시한다.
+- chat은 사용자 메시지를 영속한 뒤 AI provider 인터페이스를 호출한다. 현재 기본 provider는 실제 외부 AI가 없음을 `UNCONFIGURED`와 `AI_PROVIDER_UNCONFIGURED`로 명시하고 assistant 성공을 만들지 않는다.
 - 캐릭터 설정 화면에서 털 색상, 액세서리와 방 테마를 저장한다. Rive asset이 없는 현재도 설정 누락을 숨기지 않고 `UNCONFIGURED` 안내와 선택 metadata만 안전하게 저장한다.
 
 ### 운영·문서·빌드

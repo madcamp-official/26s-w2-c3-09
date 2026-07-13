@@ -945,9 +945,10 @@ paths:
             { schema: { $ref: "#/components/schemas/CreateChatMessage" } }
       responses:
         "201":
-          {
-            description: User message persisted; AI remains UNCONFIGURED without a provider,
-          }
+          description: User message persisted; AI remains UNCONFIGURED without a provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateChatMessageResponse" }
   /v1/chat-sessions/{sessionId}/command-drafts:
     parameters:
       - {
@@ -1030,9 +1031,10 @@ paths:
             { schema: { $ref: "#/components/schemas/CreateChatMessage" } }
       responses:
         "201":
-          {
-            description: User message persisted; AI remains UNCONFIGURED without a provider,
-          }
+          description: User message persisted; AI remains UNCONFIGURED without a provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateChatMessageResponse" }
   /v1/sync/events:
     get:
       parameters:
@@ -1794,6 +1796,25 @@ components:
         structuredPayload: { type: [object, "null"] }
         commandId: { type: [string, "null"], format: uuid }
         createdAt: { type: string, format: date-time }
+    AiProviderUnavailable:
+      type: object
+      additionalProperties: false
+      required: [status, code]
+      properties:
+        status: { type: string, enum: [UNCONFIGURED] }
+        code: { type: string, enum: [AI_PROVIDER_UNCONFIGURED] }
+    CreateChatMessageResponse:
+      type: object
+      additionalProperties: false
+      required: [message, assistant, aiStatus, ai]
+      properties:
+        message: { $ref: "#/components/schemas/ChatMessage" }
+        assistant:
+          oneOf:
+            - { $ref: "#/components/schemas/ChatMessage" }
+            - { type: "null" }
+        aiStatus: { type: string, enum: [UNCONFIGURED] }
+        ai: { $ref: "#/components/schemas/AiProviderUnavailable" }
     CreateCommandDraft:
       type: object
       additionalProperties: false

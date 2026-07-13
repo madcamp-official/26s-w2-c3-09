@@ -11,6 +11,7 @@ import {
   users,
 } from '@mousekeeper/database';
 import { eq } from 'drizzle-orm';
+import { UnconfiguredAiProvider } from '../ai/unconfigured-ai.provider';
 import { SyncService } from '../sync/sync.service';
 import { ChatService } from './chat.service';
 
@@ -29,7 +30,11 @@ describeDatabase('ChatService PostgreSQL integration', () => {
 
   beforeEach(async () => {
     connection = createDatabase(databaseUrl!);
-    service = new ChatService(connection.db, new SyncService());
+    service = new ChatService(
+      connection.db,
+      new SyncService(),
+      new UnconfiguredAiProvider(),
+    );
     const user = (
       await connection.db
         .insert(users)
@@ -104,6 +109,10 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     );
 
     expect(result.aiStatus).toBe('UNCONFIGURED');
+    expect(result.ai).toEqual({
+      status: 'UNCONFIGURED',
+      code: 'AI_PROVIDER_UNCONFIGURED',
+    });
     expect(result.assistant).toBeNull();
     expect(result.message).toMatchObject({
       sessionId: session.id,
@@ -129,6 +138,10 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     );
 
     expect(result.aiStatus).toBe('UNCONFIGURED');
+    expect(result.ai).toEqual({
+      status: 'UNCONFIGURED',
+      code: 'AI_PROVIDER_UNCONFIGURED',
+    });
     const legacyMessages = await service.listLegacyRoomMessages(userId, roomId);
     expect(legacyMessages).toHaveLength(1);
     expect(legacyMessages[0]).toMatchObject({

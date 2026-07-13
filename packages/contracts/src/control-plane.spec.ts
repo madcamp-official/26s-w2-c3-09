@@ -16,6 +16,7 @@ import {
   roomRemovedEventPayloadSchema,
   MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION,
   chatMessagesQuerySchema,
+  createChatMessageResponseSchema,
   commandDraftSummarySchema,
   createChatSessionSchema,
   createCommandDraftSchema,
@@ -415,6 +416,41 @@ describe("chat session contracts", () => {
     expect(chatMessagesQuerySchema.safeParse({ limit: "101" }).success).toBe(
       false,
     );
+  });
+
+  it("validates chat message responses with explicit AI unconfigured status", () => {
+    const response = {
+      message: {
+        id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+        roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+        sessionId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a3",
+        senderType: "USER",
+        messageType: "TEXT",
+        content: "Rename the old report",
+        structuredPayload: null,
+        commandId: null,
+        createdAt: "2026-07-13T01:02:03.000Z",
+      },
+      assistant: null,
+      aiStatus: "UNCONFIGURED",
+      ai: {
+        status: "UNCONFIGURED",
+        code: "AI_PROVIDER_UNCONFIGURED",
+      },
+    };
+
+    expect(createChatMessageResponseSchema.parse(response)).toEqual(response);
+    expect(
+      createChatMessageResponseSchema.safeParse({
+        ...response,
+        assistant: {
+          ...response.message,
+          senderType: "ASSISTANT",
+          content: "Pretend success",
+        },
+        aiStatus: "READY",
+      }).success,
+    ).toBe(false);
   });
 
   it("validates command draft summaries without command arguments or secrets", () => {

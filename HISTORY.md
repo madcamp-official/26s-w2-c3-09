@@ -127,7 +127,7 @@
 - [~] **온라인 파일 전달:** server 실제 S3 lifecycle E2E와 Desktop processor 단위 테스트는 있으나 Android↔Desktop↔server 한 기기 E2E 회귀가 현재 자동화되어 있지 않다.
 - [~] **오프라인 큐:** DB queue, mobile/desktop outbox와 cursor replay는 있으나 프로세스 강제 종료·서버 재시작을 포함한 전체 E2E script가 없다.
 - [~] **캐릭터 기본 상태:** 8종 PNG 상태 전환은 있으나 기획서의 실제 애니메이션 상태 머신은 없다.
-- [ ] **제한된 자연어 명령:** chat은 메시지만 저장하고 `assistant: null`, `aiStatus: UNCONFIGURED`를 반환한다. AI gateway와 schema-validated 자연어→command draft 변환이 없다.
+- [~] **제한된 자연어 명령:** chat은 메시지를 영속하고 AI provider 인터페이스를 호출한다. 실제 provider 미설정 상태에서는 assistant 성공을 만들지 않고 `assistant: null`, `aiStatus: UNCONFIGURED`, `AI_PROVIDER_UNCONFIGURED`를 반환한다. schema-validated 자연어→command draft 변환은 아직 없다.
 - [ ] **동일 환경 배포 완료:** 이름 변경 뒤 Windows installer, signed Android AAB, 실제 Firebase login/FCM, 운영 systemd/path migration을 다시 검증하지 않았다.
 
 ### 3.2 P1 및 운영 누락

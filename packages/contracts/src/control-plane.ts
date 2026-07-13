@@ -655,6 +655,33 @@ export const chatMessageTypeSchema = z.enum([
   "RULE_DRAFT",
   "EXECUTION_RESULT",
 ]);
+export const chatMessageSchema = z
+  .object({
+    id: uuidSchema,
+    roomId: uuidSchema,
+    sessionId: uuidSchema.nullable(),
+    senderType: chatMessageSenderSchema,
+    messageType: chatMessageTypeSchema,
+    content: z.string().min(1),
+    structuredPayload: z.record(z.string(), z.unknown()).nullable(),
+    commandId: uuidSchema.nullable(),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+export const aiProviderUnavailableSchema = z
+  .object({
+    status: z.literal("UNCONFIGURED"),
+    code: z.literal("AI_PROVIDER_UNCONFIGURED"),
+  })
+  .strict();
+export const createChatMessageResponseSchema = z
+  .object({
+    message: chatMessageSchema,
+    assistant: chatMessageSchema.nullable(),
+    aiStatus: z.literal("UNCONFIGURED"),
+    ai: aiProviderUnavailableSchema,
+  })
+  .strict();
 export const commandDraftStatusSchema = z.enum([
   "DRAFT",
   "APPROVED",

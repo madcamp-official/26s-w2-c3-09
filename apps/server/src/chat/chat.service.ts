@@ -16,6 +16,7 @@ import {
 } from '@mousekeeper/database';
 import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
+import { AI_PROVIDER, type AiProvider } from '../ai/ai.provider';
 import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
@@ -25,12 +26,24 @@ const DEFAULT_CHAT_TITLE = 'New chat';
 const DEFAULT_DRAFT_TTL_MS = 10 * 60 * 1000;
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 type DbExecutor = Database | Transaction;
+type PublicChatMessage = {
+  id: string;
+  roomId: string;
+  sessionId: string | null;
+  senderType: string;
+  messageType: string;
+  content: string;
+  structuredPayload: unknown;
+  commandId: string | null;
+  createdAt: Date;
+};
 
 @Injectable()
 export class ChatService {
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly sync: SyncService,
+    @Inject(AI_PROVIDER) private readonly ai: AiProvider,
   ) {}
 
   async listSessions(userId: string, roomId: string) {
@@ -425,7 +438,7 @@ export class ChatService {
     roomId: string,
     content: string,
   ) {
-    return this.db.transaction(async (tx) => {
+    const created = await this.db.transaction(async (tx) => {
       await this.requireOwnedRoomIn(tx, userId, roomId);
       let session = (
         await tx
@@ -449,8 +462,15 @@ export class ChatService {
             .returning()
         )[0]!;
       }
-      return this.createMessageForSessionIn(tx, userId, session, content);
+      const result = await this.createMessageForSessionIn(
+        tx,
+        userId,
+        session,
+        content,
+      );
+      return { session, message: result.message };
     });
+    return this.withAiResult(userId, created.session, created.message);
   }
 
   private async createMessageForSession(
@@ -458,9 +478,10 @@ export class ChatService {
     session: typeof chatSessions.$inferSelect,
     content: string,
   ) {
-    return this.db.transaction((tx) =>
+    const result = await this.db.transaction((tx) =>
       this.createMessageForSessionIn(tx, userId, session, content),
     );
+    return this.withAiResult(userId, session, result.message);
   }
 
   private async createMessageForSessionIn(
@@ -505,8 +526,28 @@ export class ChatService {
     });
     return {
       message: this.publicMessage(message),
+    };
+  }
+
+  private async withAiResult(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+    message: PublicChatMessage,
+  ) {
+    const ai = await this.ai.classifyAndRespond({
+      userId,
+      roomId: session.roomId,
+      sessionId: session.id,
+      sourceMessage: {
+        id: message.id,
+        content: message.content,
+      },
+    });
+    return {
+      message,
       assistant: null,
-      aiStatus: 'UNCONFIGURED' as const,
+      aiStatus: ai.status,
+      ai,
     };
   }
 
