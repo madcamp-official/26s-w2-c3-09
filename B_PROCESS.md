@@ -506,3 +506,4 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - `COMMAND_DRAFT` 결과는 `createCommandDraftSchema`를 다시 통과해야만 사용자 확인 카드로 저장된다.
 - AI가 server-owned command metadata를 주입하거나 만료 시각 같은 draft 필드를 잘못 만들면 product logic에 들어가기 전에 `AI_OUTPUT_INVALID`로 차단한다.
 - `UNCONFIGURED`와 `NO_ACTION`은 command draft를 만들지 않는 no-draft 경로로 고정했다.
+- DB opt-in ChatService integration suite에 test-only `ScriptedAiProvider`를 추가해 AI `COMMAND_DRAFT`가 command row가 아니라 confirmation draft로만 저장되는 경로를 검증한다.

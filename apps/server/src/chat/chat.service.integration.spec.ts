@@ -11,6 +11,12 @@ import {
   users,
 } from '@mousekeeper/database';
 import { eq } from 'drizzle-orm';
+import type {
+  AiProvider,
+  AiProviderResult,
+  ChatContext,
+  RuleTranslationContext,
+} from '../ai/ai.provider';
 import { UnconfiguredAiProvider } from '../ai/unconfigured-ai.provider';
 import { SyncService } from '../sync/sync.service';
 import { ChatService } from './chat.service';
@@ -154,6 +160,60 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     expect(await service.listLegacyRoomMessages(userId, roomId)).toHaveLength(
       0,
     );
+  });
+
+  it('materializes scripted AI command output only as a confirmation draft', async () => {
+    service = new ChatService(
+      connection.db,
+      new SyncService(),
+      new ScriptedAiProvider({
+        status: 'READY',
+        kind: 'COMMAND_DRAFT',
+        command: {
+          intent: 'RENAME',
+          payload: {
+            rootId: 'root:downloads',
+            sourceRelativePath: 'reports/old.pdf',
+            newName: 'final.pdf',
+          },
+        },
+        confirmationSummary: 'Rename reports/old.pdf to final.pdf',
+      }),
+    );
+    const session = await service.createSession(userId, roomId);
+    const result = await service.createMessage(
+      userId,
+      session.id,
+      'Rename old report to final.pdf',
+    );
+
+    expect(result.aiStatus).toBe('READY');
+    expect(result.ai).toMatchObject({
+      status: 'READY',
+      kind: 'COMMAND_DRAFT',
+    });
+    expect(result.assistant).toMatchObject({
+      senderType: 'ASSISTANT',
+      messageType: 'COMMAND_DRAFT',
+      content: 'Rename reports/old.pdf to final.pdf',
+    });
+
+    const drafts = await connection.db
+      .select()
+      .from(commandDrafts)
+      .where(eq(commandDrafts.sessionId, session.id));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      status: 'DRAFT',
+      intent: 'RENAME',
+      commandId: null,
+    });
+    expect(
+      await connection.db
+        .select()
+        .from(commands)
+        .where(eq(commands.roomId, roomId)),
+    ).toHaveLength(0);
   });
 
   it('materializes a command draft only after confirmation with an idempotency key', async () => {
@@ -309,3 +369,17 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     await connection.close();
   });
 });
+
+class ScriptedAiProvider implements AiProvider {
+  constructor(private readonly result: AiProviderResult) {}
+
+  async classifyAndRespond(_input: ChatContext): Promise<AiProviderResult> {
+    return this.result;
+  }
+
+  async translateRule(
+    _input: RuleTranslationContext,
+  ): Promise<AiProviderResult> {
+    return this.result;
+  }
+}
