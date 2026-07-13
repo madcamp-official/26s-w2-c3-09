@@ -682,6 +682,24 @@ export const chatMessagesQuerySchema = z
     limit: z.coerce.number().int().min(1).max(100).default(50),
   })
   .strict();
+export const createCommandDraftSchema = z
+  .object({
+    sourceMessageId: uuidSchema,
+    command: createCommandSchema,
+    confirmationSummary: z.string().trim().min(1).max(4000),
+    expiresAt: z.iso.datetime().optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.command.metadata) {
+      context.addIssue({
+        code: "custom",
+        path: ["command", "metadata"],
+        message:
+          "Command draft metadata is assigned by the server during confirmation",
+      });
+    }
+  });
 export const commandDraftSummarySchema = z
   .object({
     id: uuidSchema,

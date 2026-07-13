@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import {
   chatMessages,
   chatSessions,
+  commandDrafts,
+  commands,
   createDatabase,
   devices,
   rooms,
@@ -141,11 +143,150 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     );
   });
 
+  it('materializes a command draft only after confirmation with an idempotency key', async () => {
+    const session = await service.createSession(userId, roomId);
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Rename old report',
+    );
+    const draftResult = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'RENAME',
+        payload: {
+          rootId: 'root:downloads',
+          sourceRelativePath: 'reports/old.pdf',
+          newName: 'final.pdf',
+        },
+      },
+      confirmationSummary: 'Rename reports/old.pdf to final.pdf',
+    });
+
+    expect(draftResult.draft).toMatchObject({
+      intent: 'RENAME',
+      status: 'DRAFT',
+      commandId: null,
+    });
+    expect(draftResult.message).toMatchObject({
+      senderType: 'ASSISTANT',
+      messageType: 'COMMAND_DRAFT',
+      structuredPayload: expect.objectContaining({
+        id: draftResult.draft.id,
+        status: 'DRAFT',
+      }),
+    });
+    expect(
+      await connection.db
+        .select()
+        .from(commands)
+        .where(eq(commands.roomId, roomId)),
+    ).toHaveLength(0);
+
+    const materialized = await service.confirmCommandDraft(
+      userId,
+      draftResult.draft.id,
+      'confirm-draft-key',
+    );
+
+    expect(materialized.draft).toMatchObject({
+      id: draftResult.draft.id,
+      status: 'MATERIALIZED',
+      commandId: materialized.command.id,
+    });
+    expect(materialized.command).toMatchObject({
+      roomId,
+      targetDeviceId: deviceId,
+      intent: 'RENAME',
+      status: 'QUEUED',
+      payload: {
+        rootId: 'root:downloads',
+        sourceRelativePath: 'reports/old.pdf',
+        newName: 'final.pdf',
+      },
+      metadata: expect.objectContaining({
+        sessionId: session.id,
+        sourceMessageId: source.message.id,
+        commandDraftId: draftResult.draft.id,
+        idempotencyKey: 'confirm-draft-key',
+        requiresApproval: true,
+      }),
+    });
+    expect(materialized.command).not.toHaveProperty('idempotencyKey');
+    expect(materialized.command).not.toHaveProperty('createdByUserId');
+
+    const replay = await service.confirmCommandDraft(
+      userId,
+      draftResult.draft.id,
+      'confirm-draft-key',
+    );
+    expect(replay.command.id).toBe(materialized.command.id);
+    await expect(
+      service.confirmCommandDraft(userId, draftResult.draft.id, 'another-key'),
+    ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_CONFLICT' } });
+  });
+
+  it('rejects and expires command drafts without creating commands', async () => {
+    const session = await service.createSession(userId, roomId);
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Trash temp',
+    );
+    const rejected = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'TRASH',
+        payload: {
+          rootId: 'root:downloads',
+          sourceRelativePaths: ['tmp/noise.log'],
+        },
+      },
+      confirmationSummary: 'Move tmp/noise.log to trash',
+    });
+
+    expect(
+      (await service.rejectCommandDraft(userId, rejected.draft.id)).draft,
+    ).toMatchObject({ status: 'REJECTED' });
+    await expect(
+      service.confirmCommandDraft(userId, rejected.draft.id, 'reject-key'),
+    ).rejects.toMatchObject({
+      response: { code: 'INVALID_STATE_TRANSITION' },
+    });
+
+    const expired = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'MOVE',
+        payload: {
+          rootId: 'root:downloads',
+          sourceRelativePaths: ['reports/old.pdf'],
+          destinationRelativeDirectory: 'Archive',
+        },
+      },
+      confirmationSummary: 'Move reports/old.pdf to Archive',
+      expiresAt: '2026-01-01T00:00:00.000Z',
+    });
+    await expect(
+      service.confirmCommandDraft(userId, expired.draft.id, 'expired-key'),
+    ).rejects.toMatchObject({ response: { code: 'DRAFT_EXPIRED' } });
+    expect(
+      await connection.db
+        .select()
+        .from(commands)
+        .where(eq(commands.roomId, roomId)),
+    ).toHaveLength(0);
+  });
+
   afterEach(async () => {
     await connection.db.delete(syncEvents).where(eq(syncEvents.userId, userId));
     await connection.db
+      .delete(commandDrafts)
+      .where(eq(commandDrafts.roomId, roomId));
+    await connection.db
       .delete(chatMessages)
       .where(eq(chatMessages.roomId, roomId));
+    await connection.db.delete(commands).where(eq(commands.roomId, roomId));
     await connection.db
       .delete(chatSessions)
       .where(eq(chatSessions.roomId, roomId));

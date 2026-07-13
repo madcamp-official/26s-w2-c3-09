@@ -18,6 +18,7 @@ import {
   chatMessagesQuerySchema,
   commandDraftSummarySchema,
   createChatSessionSchema,
+  createCommandDraftSchema,
   updateChatSessionSchema,
 } from "./control-plane";
 
@@ -429,6 +430,41 @@ describe("chat session contracts", () => {
     expect(commandDraftSummarySchema.parse(draft)).toEqual(draft);
     expect(
       commandDraftSummarySchema.safeParse({ ...draft, arguments: {} }).success,
+    ).toBe(false);
+  });
+
+  it("validates command draft creation while reserving metadata for the server", () => {
+    const sourceMessageId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a2";
+    expect(
+      createCommandDraftSchema.safeParse({
+        sourceMessageId,
+        command: {
+          intent: "RENAME",
+          payload: {
+            rootId: "root:downloads",
+            sourceRelativePath: "reports/old.pdf",
+            newName: "final.pdf",
+          },
+        },
+        confirmationSummary: "Rename reports/old.pdf to final.pdf",
+      }).success,
+    ).toBe(true);
+    expect(
+      createCommandDraftSchema.safeParse({
+        sourceMessageId,
+        command: {
+          intent: "RENAME",
+          payload: {
+            rootId: "root:downloads",
+            sourceRelativePath: "reports/old.pdf",
+            newName: "final.pdf",
+          },
+          metadata: {
+            idempotencyKey: "client-key",
+          },
+        },
+        confirmationSummary: "Rename reports/old.pdf to final.pdf",
+      }).success,
     ).toBe(false);
   });
 });

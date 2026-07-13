@@ -12,14 +12,18 @@ import {
 } from '@nestjs/common';
 import {
   chatMessagesQuerySchema,
+  confirmCommandDraftSchema,
   createChatMessageSchema,
   createChatSessionSchema,
+  createCommandDraftSchema,
+  rejectCommandDraftSchema,
   updateChatSessionSchema,
 } from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';
 import type { AuthPrincipal } from '../auth/auth-principal';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
+import { requireIdempotencyKey } from '../connections/idempotency-key';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { ChatService } from './chat.service';
 
@@ -87,6 +91,38 @@ export class ChatController {
     body: z.infer<typeof createChatMessageSchema>,
   ) {
     return this.chat.createMessage(p.userId, sessionId, body.content);
+  }
+
+  @Post('chat-sessions/:sessionId/command-drafts')
+  createCommandDraft(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(createCommandDraftSchema))
+    body: z.infer<typeof createCommandDraftSchema>,
+  ) {
+    return this.chat.createCommandDraft(p.userId, sessionId, body);
+  }
+
+  @Post('command-drafts/:draftId/confirm')
+  confirmCommandDraft(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('draftId') draftId: string,
+    @Headers('idempotency-key') rawKey: string | undefined,
+    @Body(new ZodValidationPipe(confirmCommandDraftSchema))
+    _body: z.infer<typeof confirmCommandDraftSchema>,
+  ) {
+    const key = requireIdempotencyKey(rawKey);
+    return this.chat.confirmCommandDraft(p.userId, draftId, key);
+  }
+
+  @Post('command-drafts/:draftId/reject')
+  rejectCommandDraft(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('draftId') draftId: string,
+    @Body(new ZodValidationPipe(rejectCommandDraftSchema))
+    _body: z.infer<typeof rejectCommandDraftSchema>,
+  ) {
+    return this.chat.rejectCommandDraft(p.userId, draftId);
   }
 
   @Get('rooms/:roomId/chat')

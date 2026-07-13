@@ -948,6 +948,67 @@ paths:
           {
             description: User message persisted; AI remains UNCONFIGURED without a provider,
           }
+  /v1/chat-sessions/{sessionId}/command-drafts:
+    parameters:
+      - {
+          in: path,
+          name: sessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      description: Stores a validated command draft and emits a confirmation-card chat message. This does not queue a desktop command.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateCommandDraft" } }
+      responses:
+        "201":
+          { description: Command draft persisted for explicit confirmation }
+  /v1/command-drafts/{draftId}/confirm:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          {
+            description: Draft materialized into a durable command exactly once,
+          }
+        "409": { description: DRAFT_EXPIRED or IDEMPOTENCY_CONFLICT }
+  /v1/command-drafts/{draftId}/reject:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201": { description: Draft rejected without creating a command }
   /v1/rooms/{roomId}/chat:
     parameters:
       - {
@@ -1733,6 +1794,18 @@ components:
         structuredPayload: { type: [object, "null"] }
         commandId: { type: [string, "null"], format: uuid }
         createdAt: { type: string, format: date-time }
+    CreateCommandDraft:
+      type: object
+      additionalProperties: false
+      required: [sourceMessageId, command, confirmationSummary]
+      properties:
+        sourceMessageId: { type: string, format: uuid }
+        command:
+          allOf:
+            - { $ref: "#/components/schemas/CreateCommand" }
+          description: The command payload to queue only after explicit confirmation. Client-supplied command metadata is rejected by the server contract.
+        confirmationSummary: { type: string, minLength: 1, maxLength: 4000 }
+        expiresAt: { type: string, format: date-time }
     CommandDraftSummary:
       type: object
       additionalProperties: false
