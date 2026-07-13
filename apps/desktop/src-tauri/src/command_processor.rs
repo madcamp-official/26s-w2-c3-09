@@ -17,8 +17,11 @@ use crate::storage::outbox::OutboxStore;
 ///
 /// This module may generate proposal submissions, but it must not call direct file operations
 /// such as create, rename, or trash. Those commands stay local/manual in `commands::file_engine`.
+const ANALYZE: &str = "ANALYZE";
+const ORGANIZE: &str = "ORGANIZE";
 const ORGANIZE_FILES: &str = "organize_files";
 const ORGANIZE_ROOT: &str = "ORGANIZE_ROOT";
+const DEFAULT_MAX_PROPOSALS: usize = 50;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CommandProcessingReport {
@@ -51,17 +54,35 @@ pub enum CommandProcessingStatus {
 #[serde(rename_all = "camelCase")]
 struct OrganizeFilesPayload {
     #[serde(default)]
+    root_id: Option<String>,
+    #[serde(default)]
     relative_path: Option<String>,
-    max_proposals: usize,
+    #[serde(default)]
+    scope_relative_path: Option<String>,
+    #[serde(default)]
+    max_proposals: Option<usize>,
     #[serde(default)]
     rule_mode: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "instruction")]
     user_intent: Option<String>,
     /// An AI/server-produced Rule DSL draft (plan item 12). When present the desktop uses this
     /// draft instead of the root's saved rules — but only after strictly parsing and validating it
     /// (see `resolve_proposal`), so malformed AI output is rejected before any file logic runs.
     #[serde(default)]
     rule_draft: Option<Value>,
+}
+
+impl OrganizeFilesPayload {
+    fn scope(&self) -> &str {
+        self.scope_relative_path
+            .as_deref()
+            .or(self.relative_path.as_deref())
+            .unwrap_or_default()
+    }
+
+    fn max_proposals(&self) -> usize {
+        self.max_proposals.unwrap_or(DEFAULT_MAX_PROPOSALS)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -193,7 +214,7 @@ async fn process_organize_command(
     command: &AgentCommand,
 ) -> Result<usize, String> {
     let payload = parse_organize_payload(command)?;
-    validate_relative_scope(payload.relative_path.as_deref().unwrap_or_default())?;
+    validate_relative_scope(payload.scope())?;
 
     // ANALYZING stays a synchronous claim: it moves the command out of QUEUED so it is not polled
     // and re-processed again before the proposal is built. (Symmetric with the execution claim.)
@@ -207,6 +228,11 @@ async fn process_organize_command(
         .await
         .map_err(|error| error.to_string())?;
     let managed_root = roots.ensure_active_room_binding(&room.root_id, &command.room_id)?;
+    if let Some(requested_root_id) = payload.root_id.as_deref() {
+        if requested_root_id != managed_root.root_id {
+            return Err("command rootId does not match the room binding".to_string());
+        }
+    }
     if !managed_root.enabled {
         return Err(format!(
             "managed root is disabled: {}",
@@ -215,7 +241,8 @@ async fn process_organize_command(
     }
 
     let local_report = resolve_proposal(&managed_root.root, &payload)?;
-    let submission = build_agent_proposal_submission(command, local_report, payload.max_proposals)?;
+    let submission =
+        build_agent_proposal_submission(command, local_report, payload.max_proposals())?;
     let item_count = submission.items.len();
     if item_count == 0 {
         return Err("proposal command produced no proposal items".to_string());
@@ -320,9 +347,29 @@ fn reason_code(proposal: &Proposal) -> String {
 }
 
 fn parse_organize_payload(command: &AgentCommand) -> Result<OrganizeFilesPayload, String> {
-    let payload: OrganizeFilesPayload = serde_json::from_value(command.payload.clone())
-        .map_err(|error| format!("invalid organize_files payload: {error}"))?;
-    if !(1..=200).contains(&payload.max_proposals) {
+    let payload: OrganizeFilesPayload = if command.command_type == ANALYZE {
+        if !command.payload.is_object()
+            || command
+                .payload
+                .as_object()
+                .is_some_and(|payload| !payload.is_empty())
+        {
+            return Err("ANALYZE payload must be an empty object".to_string());
+        }
+        OrganizeFilesPayload {
+            root_id: None,
+            relative_path: None,
+            scope_relative_path: None,
+            max_proposals: Some(DEFAULT_MAX_PROPOSALS),
+            rule_mode: None,
+            user_intent: None,
+            rule_draft: None,
+        }
+    } else {
+        serde_json::from_value(command.payload.clone())
+            .map_err(|error| format!("invalid organize_files payload: {error}"))?
+    };
+    if !(1..=200).contains(&payload.max_proposals()) {
         return Err("organize_files.maxProposals must be between 1 and 200".to_string());
     }
     if let Some(rule_mode) = payload.rule_mode.as_deref() {
@@ -361,7 +408,7 @@ fn validate_relative_scope(path: &str) -> Result<(), String> {
 fn is_supported_organize_command(command: &AgentCommand) -> bool {
     matches!(
         command.command_type.as_str(),
-        ORGANIZE_FILES | ORGANIZE_ROOT
+        ANALYZE | ORGANIZE | ORGANIZE_FILES | ORGANIZE_ROOT
     )
 }
 
@@ -399,8 +446,10 @@ mod tests {
 
     fn organize_payload(rule_draft: Option<serde_json::Value>) -> OrganizeFilesPayload {
         OrganizeFilesPayload {
+            root_id: None,
             relative_path: None,
-            max_proposals: 50,
+            scope_relative_path: None,
+            max_proposals: Some(50),
             rule_mode: None,
             user_intent: None,
             rule_draft,
@@ -470,7 +519,7 @@ mod tests {
         })))
         .expect("payload");
 
-        assert_eq!(parsed.max_proposals, 10);
+        assert_eq!(parsed.max_proposals(), 10);
 
         let error = parse_organize_payload(&command(json!({
             "relativePath": "../outside",
@@ -478,6 +527,51 @@ mod tests {
         })))
         .expect_err("reject maxProposals");
         assert!(error.contains("maxProposals"));
+    }
+
+    #[test]
+    fn parses_rest_analyze_and_organize_intents_for_proposal_generation() {
+        let analyze = parse_organize_payload(&AgentCommand {
+            command_id: "command-1".to_string(),
+            command_type: "ANALYZE".to_string(),
+            room_id: "room-1".to_string(),
+            status: "QUEUED".to_string(),
+            payload: json!({}),
+        })
+        .expect("ANALYZE defaults");
+        assert_eq!(analyze.scope(), "");
+        assert_eq!(analyze.max_proposals(), 50);
+
+        let organize = parse_organize_payload(&AgentCommand {
+            command_id: "command-2".to_string(),
+            command_type: "ORGANIZE".to_string(),
+            room_id: "room-1".to_string(),
+            status: "QUEUED".to_string(),
+            payload: json!({
+                "rootId": "root:downloads",
+                "scopeRelativePath": "",
+                "instruction": "clean up old pdfs"
+            }),
+        })
+        .expect("ORGANIZE payload");
+        assert_eq!(organize.root_id.as_deref(), Some("root:downloads"));
+        assert_eq!(organize.scope(), "");
+        assert_eq!(organize.max_proposals(), 50);
+        assert_eq!(organize.user_intent.as_deref(), Some("clean up old pdfs"));
+    }
+
+    #[test]
+    fn analyze_rejects_non_empty_payloads() {
+        let error = parse_organize_payload(&AgentCommand {
+            command_id: "command-1".to_string(),
+            command_type: "ANALYZE".to_string(),
+            room_id: "room-1".to_string(),
+            status: "QUEUED".to_string(),
+            payload: json!({"shell": "nope"}),
+        })
+        .expect_err("ANALYZE stays empty");
+
+        assert!(error.contains("empty object"));
     }
 
     #[test]
