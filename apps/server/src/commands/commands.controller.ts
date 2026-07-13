@@ -41,6 +41,14 @@ export class CommandsController {
         code: 'VALIDATION_FAILED',
         message: 'Valid Idempotency-Key is required',
       });
+    if (
+      body.metadata?.idempotencyKey &&
+      body.metadata.idempotencyKey !== key.data
+    )
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'Command metadata idempotencyKey must match the header',
+      });
     return this.commands.create(p.userId, roomId, key.data, body);
   }
   @Get('devices/:deviceId/commands/pending')

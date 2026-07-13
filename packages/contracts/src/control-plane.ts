@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { idempotencyKeySchema, relativePathSchema, uuidSchema } from "./common";
+import {
+  fileNameSchema,
+  idempotencyKeySchema,
+  relativeDirectorySchema,
+  relativePathSchema,
+  uuidSchema,
+} from "./common";
 
 export const platformSchema = z.enum(["WINDOWS", "MACOS", "ANDROID", "IOS"]);
 export const registerPushNotificationTokenSchema = z
@@ -57,6 +63,14 @@ export const commandIntentSchema = z.enum([
   "CREATE_RULE",
   "ANALYZE",
   "README",
+  "RENAME",
+  "MOVE",
+  "ORGANIZE",
+  "CREATE",
+  "TRASH",
+  "FIND",
+  "DOWNLOAD",
+  "UPLOAD",
 ]);
 
 export const createPairingSessionSchema = z
@@ -193,6 +207,20 @@ export const createRoomSnapshotSchema = z
   .strict();
 
 const emptyCommandPayloadSchema = z.object({}).strict();
+const commandRootIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(160)
+  .refine((value) => !value.includes("\0"), "rootId must be opaque text");
+const commandMetadataSchema = z
+  .object({
+    sessionId: uuidSchema.optional(),
+    sourceMessageId: uuidSchema.optional(),
+    idempotencyKey: idempotencyKeySchema.optional(),
+    requiresApproval: z.boolean().optional(),
+  })
+  .strict();
 export const readmeCommandPayloadSchema = z
   .object({
     purpose: z.string().trim().min(1).max(500),
@@ -201,28 +229,160 @@ export const readmeCommandPayloadSchema = z
     sections: z.array(z.string().trim().min(1).max(120)).max(20),
   })
   .strict();
+const commandEnvelope = <T extends z.ZodRawShape>(shape: T) =>
+  z
+    .object({
+      ...shape,
+      metadata: commandMetadataSchema.optional(),
+    })
+    .strict();
+
+export const renameCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    sourceRelativePath: relativePathSchema,
+    newName: fileNameSchema,
+  })
+  .strict();
+
+export const moveCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    sourceRelativePaths: z.array(relativePathSchema).min(1).max(200),
+    destinationRelativeDirectory: relativeDirectorySchema,
+  })
+  .strict();
+
+export const organizeCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    scopeRelativePath: relativeDirectorySchema,
+    instruction: z.string().trim().min(1).max(2000).optional(),
+  })
+  .strict();
+
+export const createFileCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    kind: z.enum(["FILE", "DIRECTORY"]),
+    relativePath: relativePathSchema,
+    content: z.string().max(200_000).optional(),
+  })
+  .strict();
+
+export const trashCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    sourceRelativePaths: z.array(relativePathSchema).min(1).max(200),
+  })
+  .strict();
+
+export const findCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    query: z.string().trim().min(1).max(200),
+    extensions: z
+      .array(z.string().regex(/^\.[a-z0-9]+$/i))
+      .min(1)
+      .max(50)
+      .optional(),
+    scopeRelativePath: relativeDirectorySchema.optional(),
+    limit: z.number().int().min(1).max(200),
+  })
+  .strict();
+
+export const fileIdentitySchema = z
+  .object({
+    fileId: z.string().min(1).max(512).optional(),
+    sizeBytes: z.number().int().nonnegative().optional(),
+    modifiedAt: z.iso.datetime().optional(),
+    sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, "empty file identity");
+
+export const downloadCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    sourceRelativePath: relativePathSchema,
+    expectedIdentity: fileIdentitySchema.optional(),
+  })
+  .strict();
+
+export const uploadCommandPayloadSchema = z
+  .object({
+    rootId: commandRootIdSchema,
+    destinationRelativePath: relativePathSchema,
+    transferId: uuidSchema,
+    expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    expectedSize: z.number().int().positive(),
+  })
+  .strict();
+
 export const createCommandSchema = z.discriminatedUnion("intent", [
   z
-    .object({ intent: z.literal("SCAN"), payload: emptyCommandPayloadSchema })
+    .object({
+      intent: z.literal("SCAN"),
+      payload: emptyCommandPayloadSchema,
+      metadata: commandMetadataSchema.optional(),
+    })
     .strict(),
   z
     .object({
       intent: z.literal("ANALYZE"),
       payload: emptyCommandPayloadSchema,
+      metadata: commandMetadataSchema.optional(),
     })
     .strict(),
   z
     .object({
       intent: z.literal("CREATE_RULE"),
       payload: z.object({ rule: createRuleSchema }).strict(),
+      metadata: commandMetadataSchema.optional(),
     })
     .strict(),
   z
     .object({
       intent: z.literal("README"),
       payload: readmeCommandPayloadSchema,
+      metadata: commandMetadataSchema.optional(),
     })
     .strict(),
+  commandEnvelope({
+    intent: z.literal("RENAME"),
+    payload: renameCommandPayloadSchema,
+  }),
+  commandEnvelope({
+    intent: z.literal("MOVE"),
+    payload: moveCommandPayloadSchema,
+  }),
+  commandEnvelope({
+    intent: z.literal("ORGANIZE"),
+    payload: organizeCommandPayloadSchema,
+  }),
+  commandEnvelope({
+    intent: z.literal("CREATE"),
+    payload: createFileCommandPayloadSchema,
+  }),
+  commandEnvelope({
+    intent: z.literal("TRASH"),
+    payload: trashCommandPayloadSchema,
+  }),
+  commandEnvelope({
+    intent: z.literal("FIND"),
+    payload: findCommandPayloadSchema,
+  }),
+  commandEnvelope({
+    intent: z.literal("DOWNLOAD"),
+    payload: downloadCommandPayloadSchema,
+  }),
+  commandEnvelope({
+    intent: z.literal("UPLOAD"),
+    payload: uploadCommandPayloadSchema,
+  }),
 ]);
 
 export const updateCommandStatusSchema = z

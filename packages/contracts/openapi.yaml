@@ -1074,6 +1074,138 @@ components:
         desktopDeviceId: { type: string, format: uuid }
         name: { type: string, minLength: 1, maxLength: 120 }
         rootAlias: { type: string, minLength: 1, maxLength: 120 }
+    SafeCommandRelativePath:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: '^(?!(?:[A-Za-z]:|[\\/]))(?!.*[\\/]{2})(?!.*(?:^|[\\/])\.{1,2}(?:[\\/]|$))(?!.*(?:^|[\\/])(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?(?:[\\/]|$))[^\u0000]+$'
+    SafeCommandRelativeDirectory:
+      oneOf:
+        - { const: "" }
+        - { $ref: "#/components/schemas/SafeCommandRelativePath" }
+    SafeCommandFileName:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: '^(?!(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$)(?!\.{1,2}$)(?!.*[\\/])(?=\S)(?!.*\s$)[^\u0000]+$'
+    CommandRootId:
+      type: string
+      minLength: 1
+      maxLength: 160
+    CommandMetadata:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionId: { type: string, format: uuid }
+        sourceMessageId: { type: string, format: uuid }
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
+        requiresApproval: { type: boolean }
+    EmptyCommandPayload:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+    RenameCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePath, newName]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        newName: { $ref: "#/components/schemas/SafeCommandFileName" }
+    MoveCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePaths, destinationRelativeDirectory]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePaths:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        destinationRelativeDirectory:
+          { $ref: "#/components/schemas/SafeCommandRelativeDirectory" }
+    OrganizeCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, scopeRelativePath]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        scopeRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativeDirectory" }
+        instruction: { type: string, minLength: 1, maxLength: 2000 }
+    CreateFileCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, kind, relativePath]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        kind: { type: string, enum: [FILE, DIRECTORY] }
+        relativePath: { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        content: { type: string, maxLength: 200000 }
+    TrashCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePaths]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePaths:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/SafeCommandRelativePath" }
+    FindCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, query, limit]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        query: { type: string, minLength: 1, maxLength: 200 }
+        extensions:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { type: string, pattern: '^\\.[a-zA-Z0-9]+$' }
+        scopeRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativeDirectory" }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+    FileIdentity:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        fileId: { type: string, minLength: 1, maxLength: 512 }
+        sizeBytes: { type: integer, minimum: 0 }
+        modifiedAt: { type: string, format: date-time }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+    DownloadCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePath]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        expectedIdentity: { $ref: "#/components/schemas/FileIdentity" }
+    UploadCommandPayload:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          rootId,
+          destinationRelativePath,
+          transferId,
+          expectedSha256,
+          expectedSize,
+        ]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        destinationRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        transferId: { type: string, format: uuid }
+        expectedSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        expectedSize: { type: integer, minimum: 1 }
     CreateCommand:
       oneOf:
         - type: object
@@ -1081,15 +1213,15 @@ components:
           required: [intent, payload]
           properties:
             intent: { const: SCAN }
-            payload:
-              { type: object, additionalProperties: false, maxProperties: 0 }
+            payload: { $ref: "#/components/schemas/EmptyCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
         - type: object
           additionalProperties: false
           required: [intent, payload]
           properties:
             intent: { const: ANALYZE }
-            payload:
-              { type: object, additionalProperties: false, maxProperties: 0 }
+            payload: { $ref: "#/components/schemas/EmptyCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
         - type: object
           additionalProperties: false
           required: [intent, payload]
@@ -1101,6 +1233,7 @@ components:
               required: [rule]
               properties:
                 rule: { $ref: "#/components/schemas/CreateRule" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
         - type: object
           additionalProperties: false
           required: [intent, payload]
@@ -1118,6 +1251,63 @@ components:
                   type: array
                   maxItems: 20
                   items: { type: string, minLength: 1, maxLength: 120 }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: RENAME }
+            payload: { $ref: "#/components/schemas/RenameCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: MOVE }
+            payload: { $ref: "#/components/schemas/MoveCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: ORGANIZE }
+            payload: { $ref: "#/components/schemas/OrganizeCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: CREATE }
+            payload: { $ref: "#/components/schemas/CreateFileCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: TRASH }
+            payload: { $ref: "#/components/schemas/TrashCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: FIND }
+            payload: { $ref: "#/components/schemas/FindCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: DOWNLOAD }
+            payload: { $ref: "#/components/schemas/DownloadCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: UPLOAD }
+            payload: { $ref: "#/components/schemas/UploadCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
     UpdateCommandStatus:
       type: object
       additionalProperties: false

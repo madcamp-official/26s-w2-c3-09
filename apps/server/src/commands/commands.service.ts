@@ -89,6 +89,7 @@ export class CommandsService {
             createdByUserId: userId,
             intent: body.intent,
             payload: body.payload,
+            metadata: body.metadata ?? {},
             idempotencyKey: key,
           })
           .onConflictDoNothing()
@@ -111,7 +112,9 @@ export class CommandsService {
         if (
           existing.roomId !== roomId ||
           existing.intent !== body.intent ||
-          canonicalJson(existing.payload) !== canonicalJson(body.payload)
+          canonicalJson(existing.payload) !== canonicalJson(body.payload) ||
+          canonicalJson(existing.metadata) !==
+            canonicalJson(body.metadata ?? {})
         )
           throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
         return this.publicCommand(existing);

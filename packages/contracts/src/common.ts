@@ -2,6 +2,16 @@ import { z } from "zod";
 
 export const uuidSchema = z.uuid();
 export const idempotencyKeySchema = z.string().min(8).max(128);
+
+const windowsReservedFileNamePattern =
+  /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
+const isSafePathSegment = (segment: string) =>
+  segment.length > 0 &&
+  segment !== "." &&
+  segment !== ".." &&
+  !windowsReservedFileNamePattern.test(segment);
+
 export const relativePathSchema = z
   .string()
   .min(1)
@@ -13,11 +23,25 @@ export const relativePathSchema = z
       !value.startsWith("/") &&
       !value.startsWith("\\") &&
       !/^[A-Za-z]:/.test(value) &&
-      segments.every(
-        (segment) => segment.length > 0 && segment !== "." && segment !== "..",
-      )
+      segments.every(isSafePathSegment)
     );
   }, "Only managed-root-relative paths are allowed");
+
+export const relativeDirectorySchema = relativePathSchema.or(z.literal(""));
+
+export const fileNameSchema = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine(
+    (value) =>
+      value === value.trim() &&
+      !value.includes("\0") &&
+      !value.includes("/") &&
+      !value.includes("\\") &&
+      isSafePathSegment(value),
+    "Only a single safe file name is allowed",
+  );
 
 export const errorCodeSchema = z.enum([
   "UNAUTHENTICATED",

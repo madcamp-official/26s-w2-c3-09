@@ -1,5 +1,6 @@
 import {
   createCommandSchema,
+  commandIntentSchema,
   createFileBrowseRequestSchema,
   createProposalSchema,
   createRoomSnapshotSchema,
@@ -227,6 +228,8 @@ describe("character contract", () => {
 });
 
 describe("command contracts", () => {
+  const rootId = "root:downloads";
+
   it("accepts a bounded structured README request", () => {
     expect(
       createCommandSchema.safeParse({
@@ -239,6 +242,118 @@ describe("command contracts", () => {
         },
       }).success,
     ).toBe(true);
+  });
+
+  it("accepts safe file command payloads without shell-shaped escape hatches", () => {
+    expect(commandIntentSchema.parse("RENAME")).toBe("RENAME");
+    expect(
+      createCommandSchema.parse({
+        intent: "RENAME",
+        payload: {
+          rootId,
+          sourceRelativePath: "reports/old.pdf",
+          newName: "final.pdf",
+        },
+        metadata: {
+          sessionId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+          sourceMessageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+          idempotencyKey: "rename-018f4c7b",
+          requiresApproval: true,
+        },
+      }),
+    ).toEqual({
+      intent: "RENAME",
+      payload: {
+        rootId,
+        sourceRelativePath: "reports/old.pdf",
+        newName: "final.pdf",
+      },
+      metadata: {
+        sessionId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+        sourceMessageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+        idempotencyKey: "rename-018f4c7b",
+        requiresApproval: true,
+      },
+    });
+    expect(
+      createCommandSchema.safeParse({
+        intent: "MOVE",
+        payload: {
+          rootId,
+          sourceRelativePaths: ["reports/final.pdf", "reports/notes.txt"],
+          destinationRelativeDirectory: "Archive",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "FIND",
+        payload: {
+          rootId,
+          query: "invoice",
+          extensions: [".pdf"],
+          scopeRelativePath: "",
+          limit: 50,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "UPLOAD",
+        payload: {
+          rootId,
+          destinationRelativePath: "incoming/photo.png",
+          transferId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a3",
+          expectedSha256:
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          expectedSize: 42,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects unsafe file command paths, reserved names, and oversized searches", () => {
+    expect(
+      createCommandSchema.safeParse({
+        intent: "RENAME",
+        payload: {
+          rootId,
+          sourceRelativePath: "../outside.txt",
+          newName: "safe.txt",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "RENAME",
+        payload: {
+          rootId,
+          sourceRelativePath: "reports/old.pdf",
+          newName: "nested/final.pdf",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "CREATE",
+        payload: {
+          rootId,
+          kind: "FILE",
+          relativePath: "CON.txt",
+          content: "blocked reserved Windows name",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "FIND",
+        payload: {
+          rootId,
+          query: "x",
+          limit: 201,
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects arbitrary payloads and invalid rule drafts", () => {
