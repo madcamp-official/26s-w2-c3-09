@@ -29,13 +29,9 @@ jest.mock('../auth/firebase-auth.guard', () => ({
 
 const databaseUrl = process.env.DATABASE_URL;
 const redisUrl = process.env.REDIS_URL;
-const hasStorageConfig = [
-  'OBJECT_STORAGE_ENDPOINT',
-  'OBJECT_STORAGE_REGION',
-  'OBJECT_STORAGE_BUCKET',
-  'OBJECT_STORAGE_ACCESS_KEY_ID',
-  'OBJECT_STORAGE_SECRET_ACCESS_KEY',
-].every((key) => Boolean(process.env[key]));
+const hasStorageConfig = Boolean(
+  process.env.OBJECT_STORAGE_REGION && process.env.OBJECT_STORAGE_BUCKET,
+);
 const describeDatabase =
   databaseUrl &&
   redisUrl &&
