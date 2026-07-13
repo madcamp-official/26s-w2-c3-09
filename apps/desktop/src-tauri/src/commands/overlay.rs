@@ -35,9 +35,17 @@ pub fn show_overlay(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, OverlayRuntime>,
 ) -> Result<OverlayStatus, String> {
+    show_overlay_window(&app, &runtime)
+}
+
+#[cfg(feature = "tauri-commands")]
+pub fn show_overlay_window(
+    app: &tauri::AppHandle,
+    runtime: &OverlayRuntime,
+) -> Result<OverlayStatus, String> {
     let window = match app.get_webview_window(OVERLAY_WINDOW_LABEL) {
         Some(window) => window,
-        None => build_overlay_window(&app)?,
+        None => build_overlay_window(app)?,
     };
     window
         .show()

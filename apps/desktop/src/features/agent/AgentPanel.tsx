@@ -75,6 +75,15 @@ function connectionStateLabel(state?: string | null) {
 function commandStatusLabel(status: string) {
   return commandStatusLabels[status] ?? status;
 }
+
+function hasRecentHeartbeat(background: BackgroundRuntimeStatus | null) {
+  return (
+    background?.state === "running" &&
+    background.last_heartbeat_unix_ms !== null &&
+    Date.now() - background.last_heartbeat_unix_ms < backgroundRefreshIntervalMs * 3
+  );
+}
+
 export function AgentPanel() {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
   const [background, setBackground] = useState<BackgroundRuntimeStatus | null>(null);
@@ -87,6 +96,7 @@ export function AgentPanel() {
   const [replayMotion, setReplayMotion] = useState<MouseKeeperMotion | null>(null);
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectFailed, setDisconnectFailed] = useState(false);
@@ -223,7 +233,7 @@ export function AgentPanel() {
   }
 
   async function changeAutostart(enabled: boolean) {
-    setBusy(true);
+    setAutostartBusy(true);
     setError(null);
     try {
       if (enabled) {
@@ -235,7 +245,7 @@ export function AgentPanel() {
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      setAutostartBusy(false);
     }
   }
 
@@ -452,12 +462,20 @@ export function AgentPanel() {
     }
   }
 
+  const heartbeatOnline = hasRecentHeartbeat(background);
+  const effectiveConnectionState =
+    connection?.state === "offline" && heartbeatOnline ? "online" : connection?.state;
+  const effectiveConnection = connection
+    ? { ...connection, state: effectiveConnectionState ?? connection.state }
+    : connection;
+  const showConnectionError = !heartbeatOnline && connection?.last_error_message;
+
   const mascotMotion = motionForAgent({
-    connection,
+    connection: effectiveConnection,
     pairing: pairing !== null || disconnecting,
     commandStatuses: commands.map((command) => command.status),
     replayMotion,
-    localError: error !== null
+    localError: error !== null && !heartbeatOnline
   });
 
   return (
@@ -477,9 +495,9 @@ export function AgentPanel() {
           </div>
         </div>
         <span
-          className={`status-badge status-${disconnecting ? "disconnecting" : connection?.state ?? "unconfigured"}`}
+          className={`status-badge status-${disconnecting ? "disconnecting" : effectiveConnectionState ?? "unconfigured"}`}
         >
-          {disconnecting ? "연결 해제 중" : connectionStateLabel(connection?.state)}
+          {disconnecting ? "연결 해제 중" : connectionStateLabel(effectiveConnectionState)}
         </span>
       </div>
 
@@ -630,7 +648,7 @@ export function AgentPanel() {
           <input
             type="checkbox"
             checked={autostart}
-            disabled={busy}
+            disabled={autostartBusy}
             onChange={(event) => void changeAutostart(event.target.checked)}
           />
           컴퓨터에 로그인하면 MouseKeeper 자동 실행
@@ -660,7 +678,7 @@ export function AgentPanel() {
         </div>
       ) : null}
 
-      {connection?.last_error_message ? (
+      {showConnectionError ? (
         <p className="error-text">
           {connection.last_error_code}: {connection.last_error_message}
         </p>

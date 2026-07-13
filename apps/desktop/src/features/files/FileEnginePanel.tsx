@@ -706,6 +706,10 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       const autoApprovedItems = proposal.proposals.filter((item) =>
         autoApprovedIds.has(item.proposal_id)
       );
+      const precheck = await precheckFileChanges(selectedRootId, proposal, autoDecisions);
+      if (proposalDecisionKey) {
+        setPrecheckSnapshot({ key: proposalDecisionKey, report: precheck });
+      }
       setResultLines([
         `제안 ${autoDecisions.length}건 자동 승인됨 — 여전히 사전 점검과 실행이 필요해요:`,
         ...autoApprovedItems.map((item) => `자동 승인 | ${item.from} -> ${item.to}`)
