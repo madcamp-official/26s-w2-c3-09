@@ -2,6 +2,12 @@ import { z } from "zod";
 import { idempotencyKeySchema, relativePathSchema, uuidSchema } from "./common";
 
 export const platformSchema = z.enum(["WINDOWS", "MACOS", "ANDROID", "IOS"]);
+export const registerPushNotificationTokenSchema = z
+  .object({
+    token: z.string().min(20).max(4096),
+    platform: z.enum(["ANDROID", "IOS"]),
+  })
+  .strict();
 export const presenceSchema = z.enum([
   "ONLINE_IDLE",
   "ONLINE_SCANNING",

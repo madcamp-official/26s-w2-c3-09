@@ -4,9 +4,33 @@ import {
   createRoomSnapshotSchema,
   createRuleSchema,
   failFileTransferSchema,
+  registerPushNotificationTokenSchema,
   updateCharacterSchema,
   updateRuleSchema,
 } from "./control-plane";
+
+describe("push notification token contract", () => {
+  it("accepts only bounded mobile provider tokens", () => {
+    expect(
+      registerPushNotificationTokenSchema.safeParse({
+        token: "provider-token-with-enough-entropy",
+        platform: "ANDROID",
+      }).success,
+    ).toBe(true);
+    expect(
+      registerPushNotificationTokenSchema.safeParse({
+        token: "short",
+        platform: "ANDROID",
+      }).success,
+    ).toBe(false);
+    expect(
+      registerPushNotificationTokenSchema.safeParse({
+        token: "provider-token-with-enough-entropy",
+        platform: "WINDOWS",
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe("rule contracts", () => {
   it("accepts a deterministic extension move rule", () => {

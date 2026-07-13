@@ -18,6 +18,7 @@ import { SmartCacheModule } from './smart-cache/smart-cache.module';
 import { SnapshotsModule } from './snapshots/snapshots.module';
 import { SyncModule } from './sync/sync.module';
 import { TransfersModule } from './transfers/transfers.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { TransfersModule } from './transfers/transfers.module';
     ExecutionsModule,
     FileAccessModule,
     HealthModule,
+    NotificationsModule,
     PairingModule,
     PresenceModule,
     ProposalsModule,

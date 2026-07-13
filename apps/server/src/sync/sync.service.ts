@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { syncEvents, type Database } from '@housemouse/database';
+import {
+  notificationJobs,
+  syncEvents,
+  type Database,
+} from '@housemouse/database';
 import { and, asc, eq, gt, max, sql } from 'drizzle-orm';
+import { notificationForEvent } from '../notifications/notification-event';
 
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
@@ -30,7 +35,7 @@ export class SyncService {
           .from(syncEvents)
           .where(eq(syncEvents.userId, input.userId))
       )[0]?.value ?? 0;
-    return (
+    const event = (
       await tx
         .insert(syncEvents)
         .values({
@@ -41,6 +46,20 @@ export class SyncService {
         })
         .returning()
     )[0];
+    const notification = notificationForEvent(input.eventType, input.payload);
+    if (notification) {
+      await tx
+        .insert(notificationJobs)
+        .values({
+          userId: input.userId,
+          syncEventId: event.id,
+          eventType: input.eventType,
+          title: notification.title,
+          body: notification.body,
+        })
+        .onConflictDoNothing();
+    }
+    return event;
   }
 
   async replay(db: Database, userId: string, after: number, limit: number) {

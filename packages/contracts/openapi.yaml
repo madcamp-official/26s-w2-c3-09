@@ -76,6 +76,29 @@ paths:
           {
             description: Device revoked and active transfer/cache cleanup scheduled,
           }
+  /v1/notification-tokens:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            {
+              schema:
+                { $ref: "#/components/schemas/RegisterPushNotificationToken" },
+            }
+      responses:
+        "201": { description: Mobile push token registered or refreshed }
+  /v1/notification-tokens/{notificationTokenId}:
+    parameters:
+      - {
+          in: path,
+          name: notificationTokenId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    delete:
+      responses:
+        "200": { description: Mobile push token revoked }
   /v1/devices/{deviceId}/presence:
     parameters:
       - {
@@ -838,6 +861,13 @@ components:
       scheme: bearer
       bearerFormat: hm_device_ JWT
   schemas:
+    RegisterPushNotificationToken:
+      type: object
+      additionalProperties: false
+      required: [token, platform]
+      properties:
+        token: { type: string, minLength: 20, maxLength: 4096 }
+        platform: { type: string, enum: [ANDROID, IOS] }
     CreatePairingSession:
       type: object
       additionalProperties: false
