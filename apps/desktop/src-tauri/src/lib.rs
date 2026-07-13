@@ -28,6 +28,7 @@ pub fn run() {
         .manage(storage::auto_approval::AutoApprovalStore::default())
         .manage(storage::managed_roots::ManagedRootStore::default())
         .manage(storage::outbox::OutboxStore::default())
+        .manage(storage::smart_cache::SmartCacheStore::default())
         .manage(storage::watchers::WatcherStore::default())
         .setup(|app| {
             use tauri::Manager;
@@ -70,6 +71,15 @@ pub fn run() {
             outbox
                 .load_from_db(outbox_path)
                 .map_err(|error| format!("cannot load desktop outbox: {error}"))?;
+            let smart_cache = app.state::<storage::smart_cache::SmartCacheStore>();
+            let smart_cache_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("cannot resolve app data directory: {error}"))?
+                .join("smart-cache.db");
+            smart_cache
+                .load_from_db(smart_cache_path)
+                .map_err(|error| format!("cannot load smart cache metadata: {error}"))?;
             let watchers = app.state::<storage::watchers::WatcherStore>();
             let restore_results = watcher_lifecycle::restore_startup_watchers(
                 app.handle().clone(),
@@ -136,6 +146,9 @@ pub fn run() {
             commands::overlay::emit_character_event,
             commands::overlay::show_overlay,
             commands::overlay::hide_overlay,
+            commands::smart_cache::record_smart_cache_usage_event,
+            commands::smart_cache::update_smart_cache_file_preference,
+            commands::smart_cache::list_smart_cache_candidates,
             commands::watcher::start_watching_root,
             commands::watcher::stop_watching_root,
             commands::watcher::is_watching_root,

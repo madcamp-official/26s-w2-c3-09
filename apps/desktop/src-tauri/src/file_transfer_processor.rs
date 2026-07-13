@@ -888,9 +888,22 @@ mod tests {
         let address = listener.local_addr().expect("address");
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept upload");
-            let mut buffer = [0_u8; 8192];
-            let length = stream.read(&mut buffer).expect("read upload");
-            let request = String::from_utf8_lossy(&buffer[..length]);
+            let mut request_bytes = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let length = stream.read(&mut buffer).expect("read upload");
+                if length == 0 {
+                    break;
+                }
+                request_bytes.extend_from_slice(&buffer[..length]);
+                if request_bytes
+                    .windows(b"\r\n\r\nhello upload".len())
+                    .any(|window| window == b"\r\n\r\nhello upload")
+                {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request_bytes);
             assert!(request.starts_with("PUT /upload-target HTTP/1.1"));
             assert!(request.ends_with("hello upload"));
             let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";

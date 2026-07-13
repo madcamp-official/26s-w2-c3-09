@@ -1,0 +1,22 @@
+[
+  {
+    "rootId": "root-demo",
+    "relativePath": "docs/readme.md",
+    "kind": "browse"
+  },
+  {
+    "rootId": "root-demo",
+    "relativePath": "docs/readme.md",
+    "kind": "preview"
+  },
+  {
+    "rootId": "root-demo",
+    "relativePath": "media/demo.mp4",
+    "kind": "download"
+  },
+  {
+    "rootId": "root-demo",
+    "relativePath": "reports/week-2.pdf",
+    "kind": "proposal_candidate"
+  }
+]
