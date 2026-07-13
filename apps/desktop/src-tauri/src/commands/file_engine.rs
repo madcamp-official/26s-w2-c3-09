@@ -34,8 +34,10 @@ const DEMO_ROOT_DIR_NAME: &str = "housemouse-ui-demo";
 #[tauri::command]
 pub fn register_managed_root(
     path: String,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<ManagedRoot, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     register_managed_root_in_store(path, &store)
 }
 
@@ -62,9 +64,11 @@ pub fn list_managed_roots(store: &ManagedRootStore) -> Result<Vec<ManagedRoot>, 
 pub fn update_managed_root_state(
     root_id: String,
     patch: ManagedRootStatePatch,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
     watchers: tauri::State<'_, WatcherStore>,
 ) -> Result<ManagedRoot, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     update_managed_root_state_impl(root_id, patch, &store, Some(&watchers))
 }
 
@@ -79,7 +83,8 @@ pub fn update_managed_root_state(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
-pub fn prepare_demo_root() -> Result<String, String> {
+pub fn prepare_demo_root(window: tauri::Window) -> Result<String, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     prepare_demo_root_impl()
 }
 
@@ -229,9 +234,11 @@ pub fn get_auto_approval_policy(
 pub fn update_auto_approval_policy(
     root_id: String,
     patch: AutoApprovalPolicyPatch,
+    window: tauri::Window,
     roots: tauri::State<'_, ManagedRootStore>,
     policies: tauri::State<'_, AutoApprovalStore>,
 ) -> Result<AutoApprovalPolicyRecord, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     update_auto_approval_policy_impl(root_id, patch, &roots, &policies)
 }
 
@@ -250,9 +257,11 @@ pub fn update_auto_approval_policy(
 pub fn auto_approve_file_changes(
     root_id: String,
     proposal: ProposalReport,
+    window: tauri::Window,
     roots: tauri::State<'_, ManagedRootStore>,
     policies: tauri::State<'_, AutoApprovalStore>,
 ) -> Result<Vec<DecisionEntry>, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     auto_approve_file_changes_impl(root_id, proposal, &roots, &policies)
 }
 
@@ -295,8 +304,10 @@ pub fn execute_file_changes(
     root_id: String,
     proposal: ProposalReport,
     decisions: Vec<DecisionEntry>,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<ExecuteReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     execute_file_changes_impl(root, proposal, decisions)
 }
@@ -317,8 +328,10 @@ pub fn execute_file_changes(
 pub fn trash_file(
     root_id: String,
     path: String,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<TrashReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     trash_file_impl(root, path)
 }
@@ -338,8 +351,10 @@ pub fn trash_file(
 pub fn create_file(
     root_id: String,
     path: String,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<CreateFileReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     create_file_impl(root, path)
 }
@@ -360,8 +375,10 @@ pub fn rename_file(
     root_id: String,
     path: String,
     new_name: String,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<RenameFileReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     rename_file_impl(root, path, new_name)
 }
@@ -381,8 +398,10 @@ pub fn rename_file(
 #[tauri::command]
 pub fn undo_last_file_operation(
     root_id: String,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<UndoReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     undo_last_file_operation_impl(root)
 }
@@ -401,8 +420,10 @@ pub fn undo_last_file_operation(
 pub fn undo_operation(
     root_id: String,
     operation_id: String,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<UndoReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     undo_operation_impl(root, operation_id)
 }
@@ -440,8 +461,10 @@ pub fn list_operation_history(
 #[tauri::command]
 pub fn recover_journal(
     root_id: String,
+    window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<JournalRecoveryReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     recover_journal_impl(root)
 }

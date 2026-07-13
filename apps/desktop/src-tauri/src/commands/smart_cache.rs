@@ -11,8 +11,10 @@ use crate::{
 #[tauri::command]
 pub fn record_smart_cache_usage_event(
     draft: SmartCacheUsageEventDraft,
+    window: tauri::Window,
     store: tauri::State<'_, SmartCacheStore>,
 ) -> Result<SmartCacheUsageEvent, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     store.record_usage_event(draft)
 }
 
@@ -30,8 +32,10 @@ pub fn update_smart_cache_file_preference(
     root_id: String,
     relative_path: String,
     patch: SmartCacheFilePreferencePatch,
+    window: tauri::Window,
     store: tauri::State<'_, SmartCacheStore>,
 ) -> Result<SmartCacheFilePreference, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     store.update_file_preference(root_id, relative_path, patch)
 }
 
@@ -50,8 +54,10 @@ pub fn update_smart_cache_file_preference(
 pub fn list_smart_cache_candidates(
     root_id: String,
     limit: Option<i64>,
+    window: tauri::Window,
     store: tauri::State<'_, SmartCacheStore>,
 ) -> Result<Vec<SmartCacheCandidate>, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     store.list_candidates(root_id, limit.unwrap_or(25))
 }
 
@@ -60,11 +66,13 @@ pub fn list_smart_cache_candidates(
 pub async fn process_smart_cache_for_room(
     room_id: String,
     limit: Option<i64>,
+    window: tauri::Window,
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
     smart_cache: tauri::State<'_, SmartCacheStore>,
     outbox: tauri::State<'_, OutboxStore>,
 ) -> Result<SmartCacheProcessingReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
     crate::smart_cache_processor::process_smart_cache_for_room(
         &runtime,
         &roots,
