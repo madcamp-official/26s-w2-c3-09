@@ -94,6 +94,26 @@ final realtimeHomeUpdateProvider =
       RealtimeHomeUpdateController.new,
     );
 
+class RealtimeFileTransferUpdate {
+  const RealtimeFileTransferUpdate({
+    required this.transferId,
+    required this.status,
+    this.roomId,
+    this.failureCode,
+  });
+
+  final String transferId;
+  final String status;
+  final String? roomId;
+  final String? failureCode;
+}
+
+final realtimeFileTransferUpdateProvider =
+    NotifierProvider<
+      RealtimeFileTransferUpdateController,
+      RealtimeFileTransferUpdate?
+    >(RealtimeFileTransferUpdateController.new);
+
 class RealtimeHomeUpdateController extends Notifier<RealtimeHomeUpdate?> {
   @override
   RealtimeHomeUpdate? build() {
@@ -102,6 +122,17 @@ class RealtimeHomeUpdateController extends Notifier<RealtimeHomeUpdate?> {
   }
 
   void emit(RealtimeHomeUpdate update) => state = update;
+}
+
+class RealtimeFileTransferUpdateController
+    extends Notifier<RealtimeFileTransferUpdate?> {
+  @override
+  RealtimeFileTransferUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeFileTransferUpdate update) => state = update;
 }
 
 RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
@@ -321,8 +352,10 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
 
 bool realtimeUpdateSuppressesGenericRevision(
   String event,
-  RealtimeHomeUpdate? update,
-) {
+  RealtimeHomeUpdate? update, [
+  RealtimeFileTransferUpdate? fileTransferUpdate,
+]) {
+  if (fileTransferUpdate != null) return true;
   if (event == 'presence.updated') return true;
   return switch (update?.kind) {
     RealtimeHomeUpdateKind.presence ||
@@ -337,12 +370,57 @@ bool realtimeUpdateSuppressesGenericRevision(
   };
 }
 
+RealtimeFileTransferUpdate? realtimeFileTransferUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (event != 'file.transfer.updated' || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final transferId = switch (payload['transferId'] ?? value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final status = payload['status'];
+  final failureCode = payload['failureCode'];
+  if (transferId == null ||
+      status is! String ||
+      !_validFileTransferStatuses.contains(status)) {
+    return null;
+  }
+  return RealtimeFileTransferUpdate(
+    transferId: transferId,
+    roomId: roomId,
+    status: status,
+    failureCode: failureCode is String && failureCode.isNotEmpty
+        ? failureCode
+        : null,
+  );
+}
+
 const _validPresences = <String>{
   'OFFLINE',
   'ONLINE_IDLE',
   'ONLINE_SCANNING',
   'ONLINE_EXECUTING',
   'DEGRADED',
+};
+
+const _validFileTransferStatuses = <String>{
+  'REQUESTED',
+  'UPLOADING',
+  'READY',
+  'FAILED',
+  'COMPLETED',
+  'CANCELLED',
+  'EXPIRED',
 };
 
 const _summaryRefreshEvents = <String>{'device.paired'};
@@ -564,6 +642,14 @@ class RealtimeController extends Notifier<int> {
     if (characterKind != null && _isActiveSocket(session, socket)) {
       ref.read(realtimeCharacterKindProvider.notifier).emit(characterKind);
     }
+    final fileTransferUpdate = realtimeFileTransferUpdateFor(event, data);
+    if (shouldRefresh &&
+        fileTransferUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeFileTransferUpdateProvider.notifier)
+          .emit(fileTransferUpdate);
+    }
     final homeUpdate = realtimeHomeUpdateFor(event, data);
     if (shouldRefresh &&
         homeUpdate != null &&
@@ -573,7 +659,11 @@ class RealtimeController extends Notifier<int> {
     // Complete realtime projections are patched by their owning controllers.
     // Generic invalidation is reserved for incomplete or unknown projections.
     if (shouldRefresh &&
-        !realtimeUpdateSuppressesGenericRevision(event, homeUpdate) &&
+        !realtimeUpdateSuppressesGenericRevision(
+          event,
+          homeUpdate,
+          fileTransferUpdate,
+        ) &&
         _isActiveSocket(session, socket)) {
       state++;
     }
@@ -608,6 +698,15 @@ class RealtimeController extends Notifier<int> {
           if (eventType is String) {
             await _applyConnectionLifecycle(session, eventType, event);
             if (!_isCurrent(session)) return;
+            final fileTransferUpdate = realtimeFileTransferUpdateFor(
+              eventType,
+              event,
+            );
+            if (fileTransferUpdate != null) {
+              ref
+                  .read(realtimeFileTransferUpdateProvider.notifier)
+                  .emit(fileTransferUpdate);
+            }
             final homeUpdate = realtimeHomeUpdateFor(eventType, event);
             if (homeUpdate != null) {
               ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
@@ -615,6 +714,7 @@ class RealtimeController extends Notifier<int> {
             if (!realtimeUpdateSuppressesGenericRevision(
               eventType,
               homeUpdate,
+              fileTransferUpdate,
             )) {
               requiresGenericRevision = true;
             }

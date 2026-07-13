@@ -102,6 +102,41 @@ void main() {
     expect(snapshot?.kind, RealtimeHomeUpdateKind.refreshSummary);
   });
 
+  test('file transfer updates become transfer-scoped realtime patches', () {
+    final ready = realtimeFileTransferUpdateFor('file.transfer.updated', {
+      'eventId': 'transfer-event',
+      'eventType': 'file.transfer.updated',
+      'aggregateId': 'transfer-a',
+      'roomId': 'room-a',
+      'payload': {
+        'transferId': 'transfer-a',
+        'roomId': 'room-a',
+        'status': 'READY',
+      },
+    });
+    final failed = realtimeFileTransferUpdateFor('file.transfer.updated', {
+      'eventId': 'transfer-event',
+      'eventType': 'file.transfer.updated',
+      'aggregateId': 'transfer-b',
+      'payload': {
+        'transferId': 'transfer-b',
+        'status': 'FAILED',
+        'failureCode': 'SOURCE_CHANGED',
+      },
+    });
+
+    expect(ready?.transferId, 'transfer-a');
+    expect(ready?.roomId, 'room-a');
+    expect(ready?.status, 'READY');
+    expect(failed?.failureCode, 'SOURCE_CHANGED');
+    expect(
+      realtimeFileTransferUpdateFor('file.transfer.updated', {
+        'payload': {'transferId': 'transfer-c', 'status': 'MADE_UP'},
+      }),
+      isNull,
+    );
+  });
+
   test('complete realtime patches suppress generic page revision fan-out', () {
     final presence = realtimeHomeUpdateFor('presence.updated', {
       'deviceId': 'device-a',
@@ -173,6 +208,12 @@ void main() {
     final roomRemoved = realtimeHomeUpdateFor('room.removed', {
       'payload': {'roomId': 'room-a'},
     });
+    final fileTransfer = realtimeFileTransferUpdateFor(
+      'file.transfer.updated',
+      {
+        'payload': {'transferId': 'transfer-a', 'status': 'READY'},
+      },
+    );
 
     for (final entry in <(String, RealtimeHomeUpdate?)>[
       ('presence.updated', presence),
@@ -188,6 +229,14 @@ void main() {
     }
     expect(
       realtimeUpdateSuppressesGenericRevision('presence.updated', null),
+      true,
+    );
+    expect(
+      realtimeUpdateSuppressesGenericRevision(
+        'file.transfer.updated',
+        null,
+        fileTransfer,
+      ),
       true,
     );
   });

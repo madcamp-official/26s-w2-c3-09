@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mousekeeper/core/sync/realtime_controller.dart';
 import 'package:mousekeeper/features/files/files_page.dart';
 
 void main() {
@@ -40,5 +41,42 @@ void main() {
       fileOperationErrorMessage(StateError('SOURCE_CHANGED')),
       contains('원본 파일이 변경'),
     );
+  });
+  test('file transfer realtime update patches only the matching transfer', () {
+    final current = {
+      'id': 'transfer-a',
+      'status': 'REQUESTED',
+      'failureCode': 'OLD',
+    };
+
+    final unrelated = patchFileTransferStateForRealtimeUpdate(
+      current: current,
+      update: const RealtimeFileTransferUpdate(
+        transferId: 'transfer-b',
+        status: 'READY',
+      ),
+    );
+    expect(identical(unrelated, current), isTrue);
+
+    final ready = patchFileTransferStateForRealtimeUpdate(
+      current: current,
+      update: const RealtimeFileTransferUpdate(
+        transferId: 'transfer-a',
+        status: 'READY',
+      ),
+    );
+    expect(ready['status'], 'READY');
+    expect(ready.containsKey('failureCode'), isFalse);
+
+    final failed = patchFileTransferStateForRealtimeUpdate(
+      current: ready,
+      update: const RealtimeFileTransferUpdate(
+        transferId: 'transfer-a',
+        status: 'FAILED',
+        failureCode: 'SOURCE_CHANGED',
+      ),
+    );
+    expect(failed['status'], 'FAILED');
+    expect(failed['failureCode'], 'SOURCE_CHANGED');
   });
 }

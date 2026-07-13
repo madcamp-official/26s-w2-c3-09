@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/files/verified_download.dart';
 import '../../core/network/api_client.dart';
+import '../../core/sync/realtime_controller.dart';
 import '../auth/connection_gate_controller.dart';
 
 // Shared v1.4 contract names the current-directory scope explicitly.
@@ -53,6 +54,24 @@ List<Map<String, dynamic>> mergeBrowseEntries({
   required List<Map<String, dynamic>> received,
   required bool append,
 }) => append ? [...existing, ...received] : [...received];
+
+Map<String, dynamic> patchFileTransferStateForRealtimeUpdate({
+  required Map<String, dynamic> current,
+  required RealtimeFileTransferUpdate update,
+}) {
+  if (current['id'] != update.transferId) return current;
+  if (current['status'] == update.status &&
+      current['failureCode'] == update.failureCode) {
+    return current;
+  }
+  final next = <String, dynamic>{...current, 'status': update.status};
+  if (update.failureCode != null) {
+    next['failureCode'] = update.failureCode;
+  } else {
+    next.remove('failureCode');
+  }
+  return Map<String, dynamic>.unmodifiable(next);
+}
 
 String fileOperationErrorCode(Object error) {
   if (error is DioException) {
@@ -139,8 +158,11 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   bool _browseLoading = false;
   bool _transferLoading = false;
   String? _activeTransferId;
+  String? _activeTransferStatus;
   double? _downloadProgress;
   CancelToken? _downloadCancelToken;
+  RealtimeFileTransferUpdate? _lastTransferUpdate;
+  Completer<RealtimeFileTransferUpdate?>? _transferUpdateWaiter;
   Timer? _searchDebounce;
   String _searchQuery = '';
   String _searchScope = fileSearchScopeDirectory;
@@ -169,6 +191,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     _requestVersion++;
     _searchDebounce?.cancel();
     _downloadCancelToken?.cancel('Files page disposed');
+    _transferUpdateWaiter?.complete(null);
     final transferId = _activeTransferId;
     if (transferId != null) {
       unawaited(
@@ -335,6 +358,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       _transferLoading = true;
       _error = null;
       _downloadProgress = null;
+      _activeTransferStatus = 'REQUESTED';
     });
     try {
       final api = ref.read(apiClientProvider);
@@ -351,11 +375,14 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           throw StateError('CANCELLED');
         }
       }
-      setState(() => _activeTransferId = id);
+      setState(() {
+        _activeTransferId = id;
+        _activeTransferStatus = transfer['status'] as String? ?? 'REQUESTED';
+      });
       Map<String, dynamic> state = transfer;
       for (
         var attempt = 0;
-        attempt < 300 && state['status'] != 'READY';
+        attempt < 40 && state['status'] != 'READY';
         attempt++
       ) {
         _throwIfTransferStopped();
@@ -366,9 +393,19 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                 'TRANSFER_FAILED',
           );
         }
-        await Future<void>.delayed(const Duration(seconds: 2));
+        final realtimeUpdate = await _waitForTransferUpdate(id);
         _throwIfTransferStopped();
-        state = await api.get('/v1/file-transfers/$id');
+        if (realtimeUpdate == null) {
+          state = await api.get('/v1/file-transfers/$id');
+        } else {
+          state = patchFileTransferStateForRealtimeUpdate(
+            current: state,
+            update: realtimeUpdate,
+          );
+        }
+        if (mounted) {
+          setState(() => _activeTransferStatus = state['status'] as String?);
+        }
         _throwIfTransferStopped();
       }
       _throwIfTransferStopped();
@@ -406,6 +443,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         setState(() {
           _transferLoading = false;
           _activeTransferId = null;
+          _activeTransferStatus = null;
           _downloadProgress = null;
           _downloadCancelToken = null;
           _transferCancelled = false;
@@ -436,8 +474,45 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
   }
 
+  Future<RealtimeFileTransferUpdate?> _waitForTransferUpdate(
+    String transferId,
+  ) async {
+    final latest = _lastTransferUpdate;
+    if (latest != null && latest.transferId == transferId) {
+      _lastTransferUpdate = null;
+      return latest;
+    }
+    final completer = Completer<RealtimeFileTransferUpdate?>();
+    _transferUpdateWaiter = completer;
+    final timer = Timer(const Duration(seconds: 15), () {
+      if (!completer.isCompleted) completer.complete(null);
+    });
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      if (identical(_transferUpdateWaiter, completer)) {
+        _transferUpdateWaiter = null;
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen(realtimeFileTransferUpdateProvider, (previous, next) {
+      if (next == null ||
+          identical(previous, next) ||
+          next.transferId != _activeTransferId ||
+          !mounted) {
+        return;
+      }
+      _lastTransferUpdate = next;
+      final waiter = _transferUpdateWaiter;
+      if (waiter != null && !waiter.isCompleted) {
+        waiter.complete(next);
+      }
+      setState(() => _activeTransferStatus = next.status);
+    });
     if (widget.enforceConnectionGuard) {
       ref.listen(connectionGateControllerProvider, (previous, next) {
         final gate = next.asData?.value;
@@ -455,6 +530,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       body: Column(
         children: [
           if (_busy) LinearProgressIndicator(value: _downloadProgress),
+          if (_activeTransferId != null && _downloadProgress == null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Transfer status: ${_activeTransferStatus ?? 'REQUESTED'}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
             child: Row(
