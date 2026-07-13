@@ -415,3 +415,30 @@
 6. Render 운영 권한과 secret, Sentry project/DSN
 
 이 값 없이 성공 흐름을 추가하면 `AI_implement_rule.txt`의 fake provider, dummy asset, secret hardcoding 금지 원칙을 위반한다. 따라서 저장소 내부에서 의미 있게 진행할 B 작업은 모두 완료된 상태로 유지하고, 목표 전체는 위 입력이 들어올 때까지 외부 차단 상태로 전환한다.
+
+## 2026-07-13 — AWS EC2 배포 재개
+
+사용자가 `mousekeeper.madcamp-kaist.org`의 A record를 EC2 `13.237.248.194`에 연결했다. 공용 DNS `8.8.8.8`과 `1.1.1.1`에서 TTL 60의 동일 record를 확인했다.
+
+Render 중심이던 잔여 배포 계획을 AWS EC2로 갱신하고 다음 저장소 구성을 추가했다.
+
+- `infra/aws/nginx/housemouse.conf`: Socket.IO upgrade를 포함한 `127.0.0.1:3000` reverse proxy
+- `infra/aws/systemd/housemouse-server.service`, `housemouse-worker.service`: root가 아닌 전용 계정, 외부 환경 파일, 재시작 정책
+- `docs/AWS_EC2_DEPLOYMENT.md`: IAM role, migration, build, systemd, Nginx, Certbot, 클라이언트 URL 주입 절차
+- `scripts/check-production-endpoint.ps1`: HTTPS 강제 및 `/health`, `/ready` payload 검증
+
+AWS SDK object storage 설정은 endpoint와 static access key를 선택 사항으로 바꿨다. AWS 기본 S3에서는 endpoint를 생략하고 EC2 instance role의 temporary credential chain을 사용한다. 다른 S3-compatible provider는 기존 endpoint·static credential 방식을 유지한다. static credential은 access key와 secret key 중 하나만 설정하면 `UNCONFIGURED`로 거절한다.
+
+EC2에 Ubuntu 전용 `housemouse` 계정, 2GB swap, Node 24.18.0, pnpm 11.11.0, Docker PostgreSQL 17·Valkey 8, migration `0000~0014`, API systemd, Nginx reverse proxy와 Certbot TLS를 실제 구성했다. 외부 `https://mousekeeper.madcamp-kaist.org/health`는 `200 {status: ok}`, `/ready`는 `200 {status: ready}`를 반환한다. 80은 443으로 redirect하며 3000·5432·6379는 외부에서 닫혀 있고 DB·cache 컨테이너는 loopback에만 bind된다.
+
+Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecycle worker는 `UNCONFIGURED` 상태로 disable했다. Android release keystore와 Sentry DSN도 외부 입력 대기다. API 배포 완료와 object storage/worker 완료를 구분해 기록한다.
+
+### 배포 후 회귀 검증
+
+- 공용 운영 주소 검사: DNS `13.237.248.194`, TLS, `/health=ok`, `/ready=ready` 통과.
+- contracts: controller 58개 OpenAPI coverage, 17 tests 통과.
+- Node workspace: 전체 typecheck와 production build 통과.
+- server 일반 모드: 11 suites, 24 tests 통과. 실제 DB가 필요한 4 suites는 의도적으로 skip된다.
+- worker: EC2 IAM role credential chain, 완전한 static credential pair, 불완전 pair 거절 3 tests 통과.
+- Flutter: `flutter analyze` 0건, 23 tests 통과.
+- 배포 bootstrap은 bucket과 EC2 IAM role 또는 완전한 static credential pair가 함께 확인될 때만 worker를 켠다. 그 전에는 `UNCONFIGURED` 정지를 유지한다.

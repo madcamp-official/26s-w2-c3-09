@@ -2,7 +2,7 @@
 
 > 폴더 룸메이트 MVP의 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md)을 기준으로 합니다.
 >
-> 현재 통합 기준: `dev` / `3d43800` (`2026-07-12`), `origin/dev`와 동기화 완료
+> 현재 작업 기준: `B` / `72eb4f9` (`2026-07-13`), `origin/B` 기반 AWS 배포 변경 검증 완료
 
 ## 공통과제 II : 협업형 실전 산출물 제작 (2인 1팀)
 
@@ -117,9 +117,9 @@ Tauri Desktop
 - Socket.IO `/realtime`, idempotency, audit, cursor replay
 - Flutter home/room/rule/proposal/result/chat/files/smart-cache UI와 Drift cache/outbox
 - P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
-- worker, Render blueprint, backup/restore 및 안전 문서
+- worker, AWS EC2 systemd/Nginx 구성, Render blueprint, backup/restore 및 안전 문서
 
-실제 S3-compatible storage, Rive asset, Android release keystore, Sentry와 운영 배포 secret은 아직 설정되지 않았다. 따라서 관련 기능은 `UNCONFIGURED` 또는 검증 대기 상태다.
+AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`까지 운영 검증됐다. 실제 private S3 bucket/IAM role이 없어 object lifecycle worker는 정지 상태이며, Rive asset, Android release keystore, Sentry가 없는 기능도 `UNCONFIGURED` 또는 검증 대기 상태다.
 
 ### Phase별 판정
 
@@ -132,10 +132,10 @@ Tauri Desktop
 | 4 실행·Undo·README·파일 전달 | 부분 구현 | README와 A FileTransfer, 실제 storage E2E |
 | 5 캐릭터·채팅 | skeleton/metadata | Rive asset, 실제 overlay window, AI provider 선택 |
 | 6 오프라인·재접속 | Desktop cursor/replay 구현 | durable outbox, Socket.IO 재접속과 reconnect E2E |
-| 7 하드닝·배포 | Rust CI·tray·autostart·installer 구성 | updater, release signing, 운영 배포 |
+| 7 하드닝·배포 | EC2 Nginx·HTTPS·systemd API·PostgreSQL·Valkey 운영 검증 | S3 worker, updater, release signing |
 | 8 P1 스마트 캐시 | B control plane만 선행 | P0 안정화 뒤 A usage scoring/upload/stale 처리 |
 
-## 검증 기록 (`2026-07-12`)
+## 검증 기록 (`2026-07-13`)
 
 | 검사 | 결과 |
 |---|---|
@@ -143,10 +143,11 @@ Tauri Desktop
 | `pnpm typecheck` | Node/React workspace 전체 통과 |
 | Desktop `tsc + vite build` | production web bundle 성공 |
 | contracts test | 17개 통과 |
-| server test | 실제 PostgreSQL 기준 23개 통과, 실제 object storage가 필요한 2개 suite 제외 |
+| server test | 일반 모드 24개 통과·DB 통합 4개 skip, 별도 실제 PostgreSQL 검증 23개 통과 |
+| worker test | EC2 IAM role·static credential·불완전 credential 거절 3개 통과 |
 | desktop-agent-simulator test | 1개 통과 |
 | `flutter analyze` | 오류 0개 |
-| Flutter test | 19개 통과 |
+| Flutter test | 23개 통과 |
 | Rust file-engine CLI | unit 92개 + integration 3개, 총 95개 통과 |
 | Rust Desktop/Tauri core | 53개 통과 |
 | Rust fixture E2E | proposal → precheck → execute → undo 통과 |
@@ -155,6 +156,7 @@ Tauri Desktop
 | Desktop ↔ server presence | `ONLINE_IDLE` heartbeat `201`, REST replay `200` 확인 |
 | Android ↔ server | SM S901N `adb reverse` 연결, devices/rooms/presence API `200` 확인 |
 | Managed root ↔ mobile room | Desktop `POST /v1/rooms` `201`, 자동 동기화 계약 test 통과 |
+| AWS production | DNS·TLS·HTTP→HTTPS·`/health=ok`·`/ready=ready` 통과, 3000·5432·6379 외부 차단 |
 
 CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 Tauri feature check를 실행한다.
 
@@ -164,9 +166,10 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 2. Socket.IO는 새 데이터 알림으로만 연결하고, 실패 시 현재 REST cursor replay로 복구한다. 전송 실패 event는 SQLite durable outbox에 적재한다.
 3. 첫 P0 vertical slice(command → proposal → mobile approval → journaled execute → result → undo)를 한 managed root로 연결한다.
 4. A의 FileTransfer validation/chunk/SHA-256/cancel/source-change를 B의 transfer session에 연결한다.
-5. 실제 private S3-compatible bucket에서 PUT/HEAD/GET/delete/TTL lifecycle E2E를 수행한다.
-6. updater와 Windows release signing을 마무리한다.
-7. Rive·FCM·Sentry를 마무리한다. P1 스마트 캐시는 두 P0 slice가 안정화된 뒤 진행한다.
+5. AWS EC2 API 배포는 완료됐다. private S3 bucket과 최소 권한 IAM role을 연결한 뒤 worker를 활성화한다.
+6. 실제 private S3 bucket에서 IAM role로 PUT/HEAD/GET/delete/TTL lifecycle E2E를 수행한다.
+7. updater와 Windows release signing을 마무리한다.
+8. Rive·FCM·Sentry를 마무리한다. P1 스마트 캐시는 두 P0 slice가 안정화된 뒤 진행한다.
 
 ## 실행 방법
 
@@ -202,6 +205,19 @@ flutter run `
   --dart-define=HOUSEMOUSE_API_URL=http://127.0.0.1:3000 `
   --dart-define=GOOGLE_SERVER_CLIENT_ID=<Google-Web-OAuth-Client-ID>
 ```
+
+### AWS EC2 운영 주소
+
+운영 주소는 `https://mousekeeper.madcamp-kaist.org`다. 2026-07-13 기준 공용 DNS, 80 → 443 redirect, TLS, `/health=ok`, PostgreSQL·Valkey를 포함한 `/ready=ready`를 확인했다. 3000·5432·6379는 외부에서 닫혀 있다.
+
+EC2의 Nginx·systemd·IAM role·TLS 설정은 [AWS EC2 배포 절차](docs/AWS_EC2_DEPLOYMENT.md)를 따른다. 다음 명령은 `/health=ok`, `/ready=ready`를 모두 확인한다.
+
+```powershell
+.\scripts\check-production-endpoint.ps1 `
+  -BaseUrl https://mousekeeper.madcamp-kaist.org
+```
+
+Desktop과 모바일에는 HTTPS URL을 환경으로 주입한다. 운영 주소에서는 `adb reverse`를 사용하지 않는다.
 
 핵심 검증 명령:
 
