@@ -174,4 +174,44 @@ void main() {
 
     expect(proposal?.kind, RealtimeHomeUpdateKind.refreshSummary);
   });
+
+  test('decision created becomes a room-scoped proposal and command patch', () {
+    final decision = realtimeHomeUpdateFor('decision.created', {
+      'eventId': 'decision-event',
+      'eventType': 'decision.created',
+      'aggregateId': 'decision-a',
+      'roomId': 'room-a',
+      'payload': {
+        'decisionId': 'decision-a',
+        'proposalId': 'proposal-a',
+        'roomId': 'room-a',
+        'commandId': 'command-a',
+        'decisionType': 'APPROVE',
+        'proposalStatus': 'APPROVED',
+        'commandStatus': 'APPROVED',
+        'pendingProposalCount': 0,
+      },
+    });
+
+    expect(decision?.kind, RealtimeHomeUpdateKind.decisionCreated);
+    expect(decision?.decisionId, 'decision-a');
+    expect(decision?.proposalId, 'proposal-a');
+    expect(decision?.roomId, 'room-a');
+    expect(decision?.commandId, 'command-a');
+    expect(decision?.decisionType, 'APPROVE');
+    expect(decision?.proposalStatus, 'APPROVED');
+    expect(decision?.commandStatus, 'APPROVED');
+    expect(decision?.pendingProposalCount, 0);
+  });
+
+  test('incomplete decision created events request one summary fallback', () {
+    final decision = realtimeHomeUpdateFor('decision.created', {
+      'eventId': 'decision-event',
+      'eventType': 'decision.created',
+      'aggregateId': 'decision-a',
+      'payload': {'proposalId': 'proposal-a'},
+    });
+
+    expect(decision?.kind, RealtimeHomeUpdateKind.refreshSummary);
+  });
 }

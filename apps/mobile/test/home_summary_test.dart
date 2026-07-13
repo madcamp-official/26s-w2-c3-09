@@ -98,6 +98,24 @@ void main() {
       final removed = reduceHomeDataForRealtimeUpdate(
         current: proposal,
         update: const RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.decisionCreated,
+          eventType: 'decision.created',
+          roomId: 'room-a',
+          proposalId: 'proposal-a',
+          decisionId: 'decision-a',
+          decisionType: 'APPROVE',
+          proposalStatus: 'APPROVED',
+          commandStatus: 'APPROVED',
+          pendingProposalCount: 0,
+        ),
+        activeDeviceIds: const {'device-a', 'device-b'},
+        activeRoomIds: const {'room-a'},
+      )!;
+      expect(removed.rooms.single['pendingProposalCount'], 0);
+
+      final revoked = reduceHomeDataForRealtimeUpdate(
+        current: removed,
+        update: const RealtimeHomeUpdate(
           kind: RealtimeHomeUpdateKind.deviceRemoved,
           eventType: 'device.revoked',
           deviceId: 'device-a',
@@ -105,8 +123,8 @@ void main() {
         activeDeviceIds: const {'device-b'},
         activeRoomIds: const <String>{},
       )!;
-      expect(removed.devices.map((item) => item['id']), ['device-b']);
-      expect(removed.rooms, isEmpty);
+      expect(revoked.devices.map((item) => item['id']), ['device-b']);
+      expect(revoked.rooms, isEmpty);
     },
   );
 

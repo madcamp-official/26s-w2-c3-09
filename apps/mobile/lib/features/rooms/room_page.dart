@@ -50,14 +50,19 @@ List<Map<String, dynamic>> patchCommandItemsForRealtimeUpdate({
   required RealtimeHomeUpdate update,
   required String roomId,
 }) {
-  if (update.kind != RealtimeHomeUpdateKind.commandStatus ||
-      update.roomId != roomId ||
-      update.commandId == null ||
-      update.commandStatus == null) {
+  final commandId = switch (update.kind) {
+    RealtimeHomeUpdateKind.commandStatus ||
+    RealtimeHomeUpdateKind.decisionCreated => update.commandId,
+    _ => null,
+  };
+  final status = switch (update.kind) {
+    RealtimeHomeUpdateKind.commandStatus ||
+    RealtimeHomeUpdateKind.decisionCreated => update.commandStatus,
+    _ => null,
+  };
+  if (update.roomId != roomId || commandId == null || status == null) {
     return commands;
   }
-  final commandId = update.commandId!;
-  final status = update.commandStatus!;
   var changed = false;
   var matched = false;
   final next = commands
@@ -81,14 +86,22 @@ List<Map<String, dynamic>> patchProposalItemsForRealtimeUpdate({
   required RealtimeHomeUpdate update,
   required String roomId,
 }) {
-  if (update.kind != RealtimeHomeUpdateKind.proposalCreated ||
-      update.roomId != roomId ||
+  if (update.roomId != roomId ||
       update.proposalId == null ||
-      update.proposalStatus == null) {
+      update.proposalStatus == null ||
+      (update.kind != RealtimeHomeUpdateKind.proposalCreated &&
+          update.kind != RealtimeHomeUpdateKind.decisionCreated)) {
     return proposals;
   }
   final proposalId = update.proposalId!;
   final status = update.proposalStatus!;
+  if (update.kind == RealtimeHomeUpdateKind.decisionCreated &&
+      status != 'OPEN') {
+    final next = proposals
+        .where((proposal) => proposal['id'] != proposalId)
+        .toList(growable: false);
+    return next.length == proposals.length ? proposals : next;
+  }
   Map<String, dynamic> patch(Map<String, dynamic> proposal) {
     final next = {...proposal, 'status': status};
     if (update.commandId != null) next['commandId'] = update.commandId!;

@@ -173,6 +173,7 @@ HomeData? reduceHomeDataForRealtimeUpdate({
           ? current
           : current.copyWith(rooms: rooms);
     case RealtimeHomeUpdateKind.proposalCreated:
+    case RealtimeHomeUpdateKind.decisionCreated:
       final roomId = update.roomId;
       final pendingProposalCount = update.pendingProposalCount;
       if (roomId == null || !activeRoomIds.contains(roomId)) {

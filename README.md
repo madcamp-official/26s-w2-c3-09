@@ -8,6 +8,7 @@
 - Mobile Room now patches/upserts only the affected execution row for `execution.updated` realtime events and skips the redundant full room reload that follows from the generic revision signal.
 - `command.updated` events now also carry `commandId`, `roomId`, and `status`; Mobile Room patches only the affected command row instead of reloading the entire room projection.
 - `proposal.created` events now carry `proposalId`, `roomId`, `commandId`, `status`, `summary`, `itemCount`, and the authoritative `pendingProposalCount`; mobile patches the Home badge and Room proposal row without a full summary/room reload.
+- `decision.created` events now carry `decisionId`, `proposalId`, `roomId`, `commandId`, final proposal/command statuses, and authoritative `pendingProposalCount`; mobile removes the closed proposal and patches the related command without reloading the room.
 - Desktop background runtime keeps heartbeat at 5 seconds, splits scheduled REST reconciliation into 15-second fast control-plane passes and 30-second heavy file-transfer/smart-cache passes, while Socket.IO wakeups still trigger an immediate full reconcile.
 - Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
 - Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.

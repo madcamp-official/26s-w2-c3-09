@@ -44,6 +44,29 @@ void main() {
     ]);
   });
 
+  test('decision realtime update patches the related command row', () {
+    final original = [
+      {'id': 'command-a', 'intent': 'ANALYZE', 'status': 'WAITING_APPROVAL'},
+    ];
+
+    final patched = patchCommandItemsForRealtimeUpdate(
+      commands: original,
+      roomId: 'room-a',
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.decisionCreated,
+        eventType: 'decision.created',
+        roomId: 'room-a',
+        proposalId: 'proposal-a',
+        commandId: 'command-a',
+        proposalStatus: 'APPROVED',
+        commandStatus: 'APPROVED',
+        pendingProposalCount: 0,
+      ),
+    );
+
+    expect(patched.single['status'], 'APPROVED');
+  });
+
   test('execution realtime update patches only the matching execution row', () {
     final original = [
       {
@@ -199,6 +222,33 @@ void main() {
         'summary': {'title': '정리 제안'},
         'itemCount': 3,
       },
+    ]);
+  });
+
+  test('decision realtime update removes a closed proposal from open list', () {
+    final original = [
+      {'id': 'proposal-a', 'status': 'OPEN'},
+      {'id': 'proposal-b', 'status': 'OPEN'},
+    ];
+
+    final patched = patchProposalItemsForRealtimeUpdate(
+      proposals: original,
+      roomId: 'room-a',
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.decisionCreated,
+        eventType: 'decision.created',
+        roomId: 'room-a',
+        proposalId: 'proposal-a',
+        commandId: 'command-a',
+        decisionType: 'REJECT',
+        proposalStatus: 'REJECTED',
+        commandStatus: 'REJECTED',
+        pendingProposalCount: 1,
+      ),
+    );
+
+    expect(patched, [
+      {'id': 'proposal-b', 'status': 'OPEN'},
     ]);
   });
 }

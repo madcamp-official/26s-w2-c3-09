@@ -40,6 +40,7 @@ enum RealtimeHomeUpdateKind {
   deviceRemoved,
   roomRemoved,
   proposalCreated,
+  decisionCreated,
   commandStatus,
   executionStatus,
   refreshSummary,
@@ -52,8 +53,10 @@ class RealtimeHomeUpdate {
     this.deviceId,
     this.roomId,
     this.proposalId,
+    this.decisionId,
     this.commandId,
     this.executionId,
+    this.decisionType,
     this.proposalStatus,
     this.proposalSummary,
     this.proposalItemCount,
@@ -68,8 +71,10 @@ class RealtimeHomeUpdate {
   final String? deviceId;
   final String? roomId;
   final String? proposalId;
+  final String? decisionId;
   final String? commandId;
   final String? executionId;
+  final String? decisionType;
   final String? proposalStatus;
   final Map<String, dynamic>? proposalSummary;
   final int? proposalItemCount;
@@ -117,6 +122,12 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
   };
   final proposalId = switch (payload['proposalId'] ??
       value['proposalId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final decisionId = switch (payload['decisionId'] ??
+      value['decisionId'] ??
       value['aggregateId']) {
     final String id when id.isNotEmpty => id,
     _ => null,
@@ -177,6 +188,34 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
             ? Map<String, dynamic>.from(summary)
             : null,
         proposalItemCount: itemCount is int ? itemCount : null,
+        pendingProposalCount: pendingProposalCount,
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (event == 'decision.created') {
+    final decisionType = payload['decisionType'];
+    final proposalStatus = payload['proposalStatus'];
+    final commandStatus = payload['commandStatus'];
+    final pendingProposalCount = payload['pendingProposalCount'];
+    if (roomId != null &&
+        proposalId != null &&
+        proposalStatus is String &&
+        proposalStatus.isNotEmpty &&
+        pendingProposalCount is int) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.decisionCreated,
+        eventType: event,
+        roomId: roomId,
+        proposalId: proposalId,
+        decisionId: decisionId,
+        commandId: commandId,
+        decisionType: decisionType is String ? decisionType : null,
+        proposalStatus: proposalStatus,
+        commandStatus: commandStatus is String ? commandStatus : null,
         pendingProposalCount: pendingProposalCount,
       );
     }
@@ -246,7 +285,6 @@ const _validPresences = <String>{
 
 const _summaryRefreshEvents = <String>{
   'device.paired',
-  'decision.created',
   'room.snapshot.updated',
 };
 
