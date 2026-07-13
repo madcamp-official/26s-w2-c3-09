@@ -109,6 +109,50 @@ pub struct AgentExecution {
     pub status: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentFileBrowseRequest {
+    pub request_id: String,
+    pub room_id: String,
+    pub relative_directory: String,
+    pub cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileBrowseResult {
+    pub entries: Vec<AgentFileBrowseEntry>,
+    pub next_cursor: Option<String>,
+    pub desktop_generation: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileBrowseEntry {
+    pub name: String,
+    pub relative_path: String,
+    #[serde(rename = "type")]
+    pub entry_type: AgentFileBrowseEntryType,
+    pub size_bytes: Option<u64>,
+    pub modified_at: String,
+    pub file_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AgentFileBrowseEntryType {
+    File,
+    Directory,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AgentFileBrowseFailureCode {
+    DeviceOffline,
+    TimedOut,
+    CursorInvalidated,
+    OutsideManagedRoot,
+}
+
 /// Connection parameters for the realtime Socket.IO client. Intentionally not `Serialize`: the
 /// device token must never leave the process through a Tauri command or a serialized log line.
 pub struct RealtimeCredentials {
@@ -666,6 +710,96 @@ impl AgentRuntime {
         result
     }
 
+    pub async fn pending_file_browse_requests(
+        &self,
+    ) -> Result<Vec<AgentFileBrowseRequest>, AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<FileBrowseRequestResponse>>(
+                self.http
+                    .get(format!(
+                        "{base_url}/v1/devices/{}/file-browse-requests/pending",
+                        credential.device_id
+                    ))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(validate_file_browse_requests);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn complete_file_browse_request(
+        &self,
+        request_id: String,
+        result: AgentFileBrowseResult,
+    ) -> Result<(), AgentError> {
+        validate_opaque_value("file browse request id", &request_id, 200)?;
+        if result.entries.len() > 200 {
+            return Err(validation_error(
+                "file browse result cannot contain more than 200 entries",
+            ));
+        }
+        if result.desktop_generation.is_empty() || result.desktop_generation.len() > 128 {
+            return Err(validation_error(
+                "file browse desktopGeneration must contain between 1 and 128 characters",
+            ));
+        }
+        if result
+            .next_cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.len() > 512)
+        {
+            return Err(validation_error(
+                "file browse nextCursor cannot exceed 512 characters",
+            ));
+        }
+
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let response = self
+            .send_empty(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-browse-requests/{request_id}/result"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .json(&result),
+            )
+            .await;
+        match &response {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        response
+    }
+
+    pub async fn fail_file_browse_request(
+        &self,
+        request_id: String,
+        failure_code: AgentFileBrowseFailureCode,
+    ) -> Result<(), AgentError> {
+        validate_opaque_value("file browse request id", &request_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let response = self
+            .send_empty(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-browse-requests/{request_id}/failure"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({ "failureCode": failure_code })),
+            )
+            .await;
+        match &response {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        response
+    }
+
     /// Claims an approved decision for local execution. Uses the decision id as the
     /// idempotency key so a retry after a crash or network failure cannot create a second
     /// execution for the same approval.
@@ -986,6 +1120,16 @@ struct PendingDecisionResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct FileBrowseRequestResponse {
+    id: String,
+    room_id: String,
+    relative_directory: String,
+    cursor: Option<String>,
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExecutionResponse {
     id: String,
     status: String,
@@ -1203,6 +1347,39 @@ fn validate_pending_decision(
         proposal_id: response.proposal.id,
         room_id: response.proposal.room_id,
         items,
+    })
+}
+
+fn validate_file_browse_requests(
+    responses: Vec<FileBrowseRequestResponse>,
+) -> Result<Vec<AgentFileBrowseRequest>, AgentError> {
+    responses
+        .into_iter()
+        .map(validate_file_browse_request)
+        .collect()
+}
+
+fn validate_file_browse_request(
+    response: FileBrowseRequestResponse,
+) -> Result<AgentFileBrowseRequest, AgentError> {
+    if response.id.is_empty()
+        || response.room_id.is_empty()
+        || response.relative_directory.len() > 1024
+        || response
+            .cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.len() > 512)
+        || response.status != "REQUESTED"
+    {
+        return Err(invalid_response_error(
+            "file browse request failed response validation",
+        ));
+    }
+    Ok(AgentFileBrowseRequest {
+        request_id: response.id,
+        room_id: response.room_id,
+        relative_directory: response.relative_directory,
+        cursor: response.cursor,
     })
 }
 

@@ -17,6 +17,7 @@ import {
   pauseBackgroundRuntime,
   processAgentCommands,
   processAgentDecisions,
+  processAgentFileBrowseRequests,
   flushAgentOutbox,
   pollAgentCommands,
   pollAgentPairing,
@@ -240,6 +241,24 @@ export function AgentPanel() {
     }
   }
 
+  async function processFileBrowseNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await processAgentFileBrowseRequests();
+      setLastProcessedSummary(
+        `file browse: ${report.completed_count} completed, ${report.failed_count} failed of ${report.inspected_count}`
+      );
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function flushOutboxNow() {
     setBusy(true);
     setError(null);
@@ -333,6 +352,9 @@ export function AgentPanel() {
           <button disabled={busy} onClick={() => void processDecisionsNow()}>
             Process approved decisions
           </button>
+          <button disabled={busy} onClick={() => void processFileBrowseNow()}>
+            Process file browse
+          </button>
           <button disabled={busy} onClick={() => void flushOutboxNow()}>
             Flush outbox
           </button>
@@ -381,6 +403,12 @@ export function AgentPanel() {
             </small>
             <small>
               realtime signal {formatRuntimeTime(background.last_realtime_signal_unix_ms)}
+            </small>
+            <small>
+              file browse {background.last_file_browse_completed_count}/
+              {background.last_file_browse_count} | failed{" "}
+              {background.last_file_browse_failed_count} | poll{" "}
+              {formatRuntimeTime(background.last_file_browse_poll_unix_ms)}
             </small>
             <small>
               outbox sent {background.last_outbox_sent_count} | failed{" "}

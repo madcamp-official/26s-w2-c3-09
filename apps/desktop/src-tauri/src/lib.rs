@@ -3,6 +3,7 @@ pub mod background;
 pub mod command_processor;
 pub mod commands;
 pub mod execution_processor;
+pub mod file_browse_processor;
 pub mod outbox_processor;
 pub mod overlay;
 pub mod storage;
@@ -123,6 +124,7 @@ pub fn run() {
             commands::agent::poll_agent_commands,
             commands::agent::process_agent_commands,
             commands::agent::process_agent_decisions,
+            commands::agent::process_agent_file_browse_requests,
             commands::agent::flush_agent_outbox,
             commands::agent::ensure_agent_room,
             commands::agent::replay_agent_events,

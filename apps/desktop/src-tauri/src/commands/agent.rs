@@ -4,6 +4,9 @@ use crate::agent::{
 };
 use crate::command_processor::{process_pending_commands, CommandProcessingReport};
 use crate::execution_processor::{process_pending_decisions, DecisionProcessingReport};
+use crate::file_browse_processor::{
+    process_pending_file_browse_requests, FileBrowseProcessingReport,
+};
 use crate::storage::agent_sync::AgentSyncStore;
 use crate::storage::managed_roots::ManagedRootStore;
 use crate::storage::outbox::OutboxStore;
@@ -156,6 +159,23 @@ pub async fn process_agent_decisions(
     outbox: &OutboxStore,
 ) -> Result<DecisionProcessingReport, String> {
     process_pending_decisions(runtime, roots, outbox).await
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn process_agent_file_browse_requests(
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+) -> Result<FileBrowseProcessingReport, String> {
+    process_pending_file_browse_requests(&runtime, &roots).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn process_agent_file_browse_requests(
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<FileBrowseProcessingReport, String> {
+    process_pending_file_browse_requests(runtime, roots).await
 }
 
 #[cfg(feature = "tauri-commands")]

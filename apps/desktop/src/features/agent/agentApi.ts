@@ -76,6 +76,10 @@ export type BackgroundRuntimeStatus = {
   last_executed_item_count: number;
   last_execution_failed_count: number;
   last_realtime_signal_unix_ms: number | null;
+  last_file_browse_poll_unix_ms: number | null;
+  last_file_browse_count: number;
+  last_file_browse_completed_count: number;
+  last_file_browse_failed_count: number;
   last_outbox_flush_unix_ms: number | null;
   last_outbox_sent_count: number;
   last_outbox_failed_count: number;
@@ -126,6 +130,23 @@ export type DecisionProcessingReport = {
   skipped_item_count: number;
   failed_count: number;
   results: DecisionProcessingResult[];
+};
+
+export type FileBrowseProcessingStatus = "completed" | "failed";
+
+export type FileBrowseProcessingResult = {
+  request_id: string;
+  status: FileBrowseProcessingStatus;
+  entry_count: number;
+  next_cursor: string | null;
+  message: string | null;
+};
+
+export type FileBrowseProcessingReport = {
+  inspected_count: number;
+  completed_count: number;
+  failed_count: number;
+  results: FileBrowseProcessingResult[];
 };
 
 export type SyncEvent = {
@@ -186,6 +207,10 @@ export function processAgentCommands() {
 
 export function processAgentDecisions() {
   return invokeAgentCommand<DecisionProcessingReport>("process_agent_decisions");
+}
+
+export function processAgentFileBrowseRequests() {
+  return invokeAgentCommand<FileBrowseProcessingReport>("process_agent_file_browse_requests");
 }
 
 export function flushAgentOutbox() {
