@@ -138,7 +138,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | 0 계약·파일 안전 POC | 완료 | Rust 안전 회귀와 fixture E2E 유지 |
 | 1 로그인·페어링·Presence | 코드 경로와 새 Firebase debug build | Google login과 background/terminated FCM 수신 확인 |
 | 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결 | file ID와 scheduled reconcile scan |
-| 3 규칙·명령·제안 | Desktop/server/mobile processor 연결 | 실제 3자 release E2E |
+| 3 규칙·명령·제안 | Desktop/server/mobile processor 연결, 확장 Rule DSL 서버 계약 | 확장 DSL Desktop evaluator 통합과 실제 3자 release E2E |
 | 4 실행·Undo·README·파일 전달 | MOVE/격리/README/transfer 구현 | CREATE_DIR과 실제 3자 transfer E2E |
 | 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI·cursor pagination, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
 | 6 오프라인·재접속 | 양쪽 outbox·cursor replay, pairing gate pixel-fill loading 구현 | 강제 종료·서버 재시작 E2E |

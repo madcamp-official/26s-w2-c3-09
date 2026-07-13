@@ -522,3 +522,10 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - rule enable toggle, 생성, 수정은 서버가 반환한 rule 객체만 `upsertRule`로 반영하고 전체 목록 재조회는 초기 진입·수동 새로고침·에러 재시도에만 사용한다.
 - version conflict, room/rule not found는 fake success 없이 사용자 안내로 표시하고 로컬 rule 상태를 임의 성공 처리하지 않는다.
 - test-scope fake gateway로 toggle 후 list reload 없음, 생성 후 upsert, priority 정렬을 widget/unit test에서 검증했다.
+
+## 2026-07-14 — Rule DSL 계약 확장
+
+- `RuleDefinition` 계약에 `modifiedAgeDays`, `createdAgeDays`, `sizeBytes`, `relativePath`, `fileKind` 조건을 additive하게 추가했다.
+- action은 기존 `MOVE`, `QUARANTINE`을 유지하면서 `TRASH`, `CREATE_DIR`을 추가했다.
+- `relativePath` 조건과 `CREATE_DIR.relativePath`는 기존 `relativePathSchema`를 사용해 절대 경로, `..`, 예약명, unsafe segment를 계약 단계에서 거절한다.
+- 이 단계는 서버/API/AI draft가 받을 수 있는 안전 계약 확장이다. 실제 Desktop rule evaluator의 전체 실행 연결은 별도 A-side integration 대상이다.

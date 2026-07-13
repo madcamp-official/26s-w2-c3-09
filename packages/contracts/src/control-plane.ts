@@ -114,6 +114,38 @@ const ageConditionSchema = z
   })
   .strict();
 
+const fileAgeConditionSchema = z
+  .object({
+    field: z.enum(["modifiedAgeDays", "createdAgeDays"]),
+    operator: z.enum(["GTE", "GT"]),
+    value: z.number().int().nonnegative().max(36500),
+  })
+  .strict();
+
+const sizeConditionSchema = z
+  .object({
+    field: z.literal("sizeBytes"),
+    operator: z.enum(["GTE", "LTE"]),
+    value: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const relativePathConditionSchema = z
+  .object({
+    field: z.literal("relativePath"),
+    operator: z.literal("STARTS_WITH"),
+    value: relativePathSchema,
+  })
+  .strict();
+
+const fileKindConditionSchema = z
+  .object({
+    field: z.literal("fileKind"),
+    operator: z.literal("EQ"),
+    value: z.enum(["FILE", "DIRECTORY"]),
+  })
+  .strict();
+
 const nameConditionSchema = z
   .object({
     field: z.literal("name"),
@@ -130,6 +162,10 @@ export const ruleDefinitionSchema = z
         z.discriminatedUnion("field", [
           extensionConditionSchema,
           ageConditionSchema,
+          fileAgeConditionSchema,
+          sizeConditionSchema,
+          relativePathConditionSchema,
+          fileKindConditionSchema,
           nameConditionSchema,
         ]),
       )
@@ -143,6 +179,13 @@ export const ruleDefinitionSchema = z
         })
         .strict(),
       z.object({ type: z.literal("QUARANTINE") }).strict(),
+      z.object({ type: z.literal("TRASH") }).strict(),
+      z
+        .object({
+          type: z.literal("CREATE_DIR"),
+          relativePath: relativePathSchema,
+        })
+        .strict(),
     ]),
   })
   .strict();

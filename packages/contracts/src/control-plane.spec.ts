@@ -64,6 +64,45 @@ describe("rule contracts", () => {
     ).toBe(true);
   });
 
+  it("accepts additive rule DSL conditions and safe actions", () => {
+    expect(
+      createRuleSchema.safeParse({
+        name: "Large old reports",
+        definition: {
+          match: "ALL",
+          conditions: [
+            { field: "modifiedAgeDays", operator: "GTE", value: 30 },
+            { field: "createdAgeDays", operator: "GT", value: 7 },
+            { field: "sizeBytes", operator: "LTE", value: 20_000_000 },
+            {
+              field: "relativePath",
+              operator: "STARTS_WITH",
+              value: "reports",
+            },
+            { field: "fileKind", operator: "EQ", value: "FILE" },
+            { field: "name", operator: "CONTAINS", value: "draft" },
+          ],
+          action: { type: "TRASH" },
+        },
+        priority: 100,
+        enabled: true,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      createRuleSchema.safeParse({
+        name: "Create archive directory",
+        definition: {
+          conditions: [
+            { field: "relativePath", operator: "STARTS_WITH", value: "inbox" },
+          ],
+          action: { type: "CREATE_DIR", relativePath: "Archive/Reports" },
+        },
+        priority: 101,
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects an unsafe destination and an empty version-only update", () => {
     const unsafe = createRuleSchema.safeParse({
       name: "Unsafe",
@@ -75,6 +114,35 @@ describe("rule contracts", () => {
     });
     expect(unsafe.success).toBe(false);
     expect(updateRuleSchema.safeParse({ version: 1 }).success).toBe(false);
+  });
+
+  it("rejects unsafe expanded rule DSL paths and unsupported operators", () => {
+    expect(
+      createRuleSchema.safeParse({
+        name: "Unsafe prefix",
+        definition: {
+          conditions: [
+            {
+              field: "relativePath",
+              operator: "STARTS_WITH",
+              value: "../outside",
+            },
+          ],
+          action: { type: "TRASH" },
+        },
+        priority: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      createRuleSchema.safeParse({
+        name: "Unsupported size operator",
+        definition: {
+          conditions: [{ field: "sizeBytes", operator: "GT", value: 1024 }],
+          action: { type: "CREATE_DIR", relativePath: "Archive" },
+        },
+        priority: 1,
+      }).success,
+    ).toBe(false);
   });
 });
 

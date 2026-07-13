@@ -75,7 +75,7 @@
 - [x] SQLite WAL 기반 managed root, file index, operation journal, sync cursor/outbox
 - [x] Tauri Tokio worker와 동기 SQLite API 사이의 nested-runtime-safe bridge
 - [x] 전체 scan, 이름 검색, 상대 경로 browse, watcher incremental upsert/remove
-- [x] 확장자·기간·이름 조건 Rule DSL과 결정론적 proposal 생성
+- [x] 확장자·기간·이름 조건 Rule DSL과 결정론적 proposal 생성; 서버 계약은 modified/created age, size, relative path, file kind, TRASH, CREATE_DIR까지 additive 확장
 - [x] source size/mtime precondition, destination 충돌 검출, no-overwrite move
 - [x] journal-before-write, 복구형 `.mousekeeper_trash`, operation history, undo, journal recovery
 - [x] README draft/hash/write/backup/undo 로컬 경로
@@ -209,7 +209,7 @@
 | 명시적 관리 루트 | 완료 | native picker와 canonical root store |
 | 로컬 파일 인덱스 | 부분 | SQLite 존재, OS file ID 누락 |
 | watcher + 재조정 | 부분 | watcher/overflow reindex 존재, 주기 scan 누락 |
-| Rule DSL | 완료 | extension/age/name 결정론 평가 |
+| Rule DSL | 부분 완료 | extension/age/name 결정론 평가 완료, 확장 DSL은 서버 계약 추가 후 Desktop evaluator 통합 대기 |
 | 파일별 제안 | 완료 | reason/destination/collision UI |
 | 전체 승인·거절 | 완료 | DB 영속·idempotency |
 | 파일 실행 | 부분 | MOVE/QUARANTINE/README, CREATE_DIR 누락 |

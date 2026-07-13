@@ -2002,6 +2002,35 @@ components:
                 additionalProperties: false
                 required: [field, operator, value]
                 properties:
+                  field:
+                    { type: string, enum: [modifiedAgeDays, createdAgeDays] }
+                  operator: { type: string, enum: [GTE, GT] }
+                  value: { type: integer, minimum: 0, maximum: 36500 }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: sizeBytes }
+                  operator: { type: string, enum: [GTE, LTE] }
+                  value: { type: integer, minimum: 0 }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: relativePath }
+                  operator: { const: STARTS_WITH }
+                  value: { type: string, minLength: 1, maxLength: 1024 }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: fileKind }
+                  operator: { const: EQ }
+                  value: { type: string, enum: [FILE, DIRECTORY] }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
                   field: { const: name }
                   operator:
                     { type: string, enum: [CONTAINS, STARTS_WITH, ENDS_WITH] }
@@ -2019,6 +2048,17 @@ components:
               required: [type]
               properties:
                 type: { const: QUARANTINE }
+            - type: object
+              additionalProperties: false
+              required: [type]
+              properties:
+                type: { const: TRASH }
+            - type: object
+              additionalProperties: false
+              required: [type, relativePath]
+              properties:
+                type: { const: CREATE_DIR }
+                relativePath: { type: string, minLength: 1, maxLength: 1024 }
     CreateRule:
       type: object
       additionalProperties: false
