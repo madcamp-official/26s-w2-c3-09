@@ -499,3 +499,10 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - 메시지 전송 후 전체 채팅 reload를 하지 않고 서버가 반환한 사용자 메시지와 assistant 확인 카드만 로컬 목록에 append한다.
 - 6번째 세션 생성처럼 서버가 `CHAT_SESSION_LIMIT_REACHED`를 반환하는 경우 성공으로 가장하지 않고 최대 5개 제한 안내를 표시한다.
 - test-scope `ChatGateway` fake로 세션 선택, 전송 append, 5개 제한 안내를 widget test에서 검증했다.
+
+## 2026-07-14 — AI 구조화 출력 검증 경계
+
+- AI provider 결과를 command draft 입력으로 바꾸는 순수 mapper를 분리했다.
+- `COMMAND_DRAFT` 결과는 `createCommandDraftSchema`를 다시 통과해야만 사용자 확인 카드로 저장된다.
+- AI가 server-owned command metadata를 주입하거나 만료 시각 같은 draft 필드를 잘못 만들면 product logic에 들어가기 전에 `AI_OUTPUT_INVALID`로 차단한다.
+- `UNCONFIGURED`와 `NO_ACTION`은 command draft를 만들지 않는 no-draft 경로로 고정했다.

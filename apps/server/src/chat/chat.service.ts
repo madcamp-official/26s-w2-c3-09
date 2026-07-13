@@ -16,6 +16,7 @@ import {
 } from '@mousekeeper/database';
 import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
+import { mapAiResultToCommandDraft } from '../ai/ai-command-draft.mapper';
 import { AI_PROVIDER, type AiProvider } from '../ai/ai.provider';
 import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
@@ -543,52 +544,19 @@ export class ChatService {
         content: message.content,
       },
     });
-    if (ai.status === 'UNCONFIGURED') {
+    const mapped = mapAiResultToCommandDraft(message.id, ai);
+    if (mapped.kind === 'NO_DRAFT' || mapped.kind === 'INVALID') {
       return {
         message,
         assistant: null,
-        aiStatus: ai.status,
-        ai,
-      };
-    }
-    if (ai.status === 'INVALID') {
-      return {
-        message,
-        assistant: null,
-        aiStatus: ai.status,
-        ai,
-      };
-    }
-    if (ai.kind === 'NO_ACTION') {
-      return {
-        message,
-        assistant: null,
-        aiStatus: ai.status,
-        ai,
-      };
-    }
-
-    const draftInput = createCommandDraftSchema.safeParse({
-      sourceMessageId: message.id,
-      command: ai.command,
-      confirmationSummary: ai.confirmationSummary,
-      expiresAt: ai.expiresAt,
-    });
-    if (!draftInput.success) {
-      return {
-        message,
-        assistant: null,
-        aiStatus: 'INVALID' as const,
-        ai: {
-          status: 'INVALID' as const,
-          code: 'AI_OUTPUT_INVALID' as const,
-        },
+        aiStatus: mapped.aiStatus,
+        ai: mapped.ai,
       };
     }
     const draft = await this.createCommandDraft(
       userId,
       session.id,
-      draftInput.data,
+      mapped.draftInput,
     );
     return {
       message,
