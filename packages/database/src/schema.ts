@@ -216,6 +216,7 @@ export const commands = pgTable(
       .references(() => users.id),
     intent: varchar("intent", { length: 40 }).notNull(),
     payload: jsonb("payload").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
     status: commandStatus("status").notNull().default("QUEUED"),
     idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

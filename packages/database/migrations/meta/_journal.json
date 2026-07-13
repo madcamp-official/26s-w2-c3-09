@@ -127,6 +127,13 @@
       "when": 1783950863031,
       "tag": "0017_glossy_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1783953058844,
+      "tag": "0018_aromatic_smiling_tiger",
+      "breakpoints": true
     }
   ]
 }
