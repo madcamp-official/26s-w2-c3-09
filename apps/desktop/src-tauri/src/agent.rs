@@ -851,10 +851,7 @@ impl AgentRuntime {
     /// Counts the proposals still awaiting a decision in a room
     /// (`GET /v1/rooms/:id/proposals/open`). The autonomous cleanup path uses this to avoid piling
     /// up duplicate proposals every tick: it only submits a new one when the room has none open.
-    pub async fn open_proposal_count_for_room(
-        &self,
-        room_id: String,
-    ) -> Result<usize, AgentError> {
+    pub async fn open_proposal_count_for_room(&self, room_id: String) -> Result<usize, AgentError> {
         validate_opaque_value("room id", &room_id, 200)?;
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
@@ -2647,7 +2644,10 @@ mod tests {
         assert_eq!(error.code, AgentErrorCode::Unauthenticated);
         assert_eq!(status.state, AgentConnectionState::Revoked);
         assert_eq!(status.device_id, None);
-        assert_eq!(status.last_error_code, Some(AgentErrorCode::Unauthenticated));
+        assert_eq!(
+            status.last_error_code,
+            Some(AgentErrorCode::Unauthenticated)
+        );
         assert_eq!(status.last_error_message.as_deref(), Some("device revoked"));
         assert!(runtime.realtime_credentials().is_none());
         assert!(store.load().expect("credential store").is_none());

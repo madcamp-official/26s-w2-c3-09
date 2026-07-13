@@ -101,6 +101,18 @@ pub fn run() {
             if let Err(error) = tray::install_tray(app) {
                 eprintln!("failed to install tray skeleton: {error}");
             }
+            let agent_status = app.state::<agent::AgentRuntime>().connection_status();
+            if agent_status.device_id.is_some() {
+                tray::hide_main_window(app.handle());
+                let overlay_runtime = app.state::<overlay::OverlayRuntime>();
+                if let Err(error) =
+                    commands::overlay::show_overlay_window(app.handle(), &overlay_runtime)
+                {
+                    eprintln!("failed to show overlay at startup: {error}");
+                }
+            } else {
+                tray::show_main_window(app.handle());
+            }
 
             Ok(())
         })
