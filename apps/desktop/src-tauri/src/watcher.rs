@@ -173,7 +173,7 @@ fn relative_path(root: &Path, path: &Path) -> Option<String> {
 }
 
 fn coalesce_changes(changes: Vec<WatchChange>) -> Vec<WatchChange> {
-    if changes.iter().any(|change| *change == WatchChange::Reindex) {
+    if changes.len() > 1 || changes.contains(&WatchChange::Reindex) {
         return vec![WatchChange::Reindex];
     }
 

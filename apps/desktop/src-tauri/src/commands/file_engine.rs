@@ -138,9 +138,12 @@ pub fn browse_root_tree(
 pub fn reindex_managed_root(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
+    app: tauri::AppHandle,
 ) -> Result<FileIndexReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
-    reindex_managed_root_impl(root)
+    let report = reindex_managed_root_impl(root)?;
+    crate::cleanliness::reconcile_cleanliness_snapshot(&app, &root_id)?;
+    Ok(report)
 }
 
 #[cfg(not(feature = "tauri-commands"))]
@@ -197,9 +200,42 @@ pub fn propose_file_changes(
 pub fn calculate_cleanliness_snapshot(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
+    app: tauri::AppHandle,
 ) -> Result<CleanlinessSnapshot, String> {
-    let root = resolve_root_id(&store, &root_id)?;
-    calculate_cleanliness_snapshot_impl(root)
+    use tauri::Manager;
+
+    let managed = store.get(&root_id)?;
+    let root = managed.root.clone();
+    if managed.room_binding_status == crate::storage::managed_roots::RoomBindingStatus::Detached {
+        return calculate_cleanliness_snapshot_impl(root);
+    }
+    if let Some(update) = crate::cleanliness::reconcile_cleanliness_snapshot(&app, &root_id)? {
+        Ok(update.snapshot)
+    } else if let Some(snapshot) = app
+        .state::<crate::storage::cleanliness_snapshots::CleanlinessSnapshotStore>()
+        .get(&root_id)?
+    {
+        Ok(snapshot)
+    } else {
+        calculate_cleanliness_snapshot_impl(root)
+    }
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn get_latest_cleanliness_snapshot(
+    root_id: String,
+    snapshots: tauri::State<'_, crate::storage::cleanliness_snapshots::CleanlinessSnapshotStore>,
+) -> Result<Option<CleanlinessSnapshot>, String> {
+    snapshots.get(&root_id)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn get_latest_cleanliness_snapshot(
+    root_id: String,
+    snapshots: &crate::storage::cleanliness_snapshots::CleanlinessSnapshotStore,
+) -> Result<Option<CleanlinessSnapshot>, String> {
+    snapshots.get(&root_id)
 }
 
 #[cfg(not(feature = "tauri-commands"))]

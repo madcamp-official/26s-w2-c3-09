@@ -155,7 +155,7 @@ async fn execute_approved_decision(
         .root_id_for_room(decision.room_id.clone())
         .await
         .map_err(|error| error.to_string())?;
-    let managed_root = roots.get(&room.root_id)?;
+    let managed_root = roots.ensure_active_room_binding(&room.root_id, &decision.room_id)?;
     if !managed_root.enabled {
         return Err(format!(
             "managed root is disabled: {}",

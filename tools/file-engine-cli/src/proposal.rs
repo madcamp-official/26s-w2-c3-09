@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::analyzer::{analyze_root, AnalyzeError};
+use crate::analyzer::{analyze_root, AnalyzeError, AnalyzeReport};
 use crate::rules::{
     load_rule_set_for_root, normalize_relative_path, RuleContext, RuleError, RuleSet,
 };
@@ -61,6 +61,16 @@ pub fn propose_for_root(root: impl AsRef<Path>) -> Result<ProposalReport, Propos
     propose_for_root_with_rule_set(root, rule_set)
 }
 
+/// Builds proposals from a scan the caller already completed. Cleanliness snapshots use this
+/// path so their total-file metrics and proposal deductions always describe one filesystem view.
+pub fn propose_for_analysis(
+    root: impl AsRef<Path>,
+    report: &AnalyzeReport,
+) -> Result<ProposalReport, ProposalError> {
+    let rule_set = load_rule_set_for_root(root).map_err(ProposalError::Rule)?;
+    propose_for_analysis_with_rule_set(report, rule_set)
+}
+
 /// Computes a proposal by applying a caller-supplied rule set to the managed root, rather than the
 /// root's persisted `rules.json`. This is the deterministic engine an AI/rule-draft flow feeds
 /// into: the draft is validated (`RuleSet::validate`) before it reaches this function, and the
@@ -71,8 +81,15 @@ pub fn propose_for_root_with_rule_set(
     rule_set: RuleSet,
 ) -> Result<ProposalReport, ProposalError> {
     let root = root.as_ref();
-    rule_set.validate().map_err(ProposalError::Rule)?;
     let report = analyze_root(root).map_err(ProposalError::Analyze)?;
+    propose_for_analysis_with_rule_set(&report, rule_set)
+}
+
+fn propose_for_analysis_with_rule_set(
+    report: &AnalyzeReport,
+    rule_set: RuleSet,
+) -> Result<ProposalReport, ProposalError> {
+    rule_set.validate().map_err(ProposalError::Rule)?;
     let existing_paths = report
         .files
         .iter()
@@ -90,7 +107,7 @@ pub fn propose_for_root_with_rule_set(
         .collect::<Vec<_>>();
 
     Ok(ProposalReport {
-        root: report.root,
+        root: report.root.clone(),
         proposals,
     })
 }

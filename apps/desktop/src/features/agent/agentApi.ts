@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 declare global {
   interface Window {
@@ -60,6 +61,7 @@ export type AgentRoomSync = {
 };
 
 export type CleanlinessSnapshot = {
+  formulaVersion: string;
   score: number;
   metrics: {
     totalFileCount: number;
@@ -77,6 +79,7 @@ export type CleanlinessSnapshot = {
 export type AgentRoomSnapshot = {
   snapshot_id: string;
   room_id: string;
+  formula_version: string;
   score: number;
   metrics: unknown;
   calculated_at: string;
@@ -88,6 +91,22 @@ export type CleanlinessSnapshotSyncReport = {
   room_created: boolean;
   snapshot: CleanlinessSnapshot;
   server_snapshot: AgentRoomSnapshot;
+};
+
+export type RoomDisconnectPreflight = {
+  root_id: string;
+  room_id: string;
+  blocking_reasons: string[];
+  undoable_operation_count: number;
+  requires_confirmation: boolean;
+};
+
+export type RoomDisconnectReport = {
+  root_id: string;
+  room_id: string;
+  watcher_stopped: boolean;
+  index_cleared: boolean;
+  undoable_operation_count: number;
 };
 
 export type BackgroundRuntimeState = "stopped" | "running" | "suspended";
@@ -317,6 +336,33 @@ export function updateAgentCommandStatus(commandId: string, status: string) {
 
 export function forgetAgentDevice() {
   return invokeAgentCommand<AgentConnectionStatus>("forget_agent_device");
+}
+
+export function revokeAgentDevice(idempotencyKey: string) {
+  return invokeAgentCommand<AgentConnectionStatus>("revoke_agent_device", { idempotencyKey });
+}
+
+export function preflightAgentRoomDisconnect(rootId: string) {
+  return invokeAgentCommand<RoomDisconnectPreflight>("preflight_agent_room_disconnect", {
+    rootId
+  });
+}
+
+export function disconnectAgentRoom(
+  rootId: string,
+  idempotencyKey: string,
+  acknowledgeUndoable: boolean
+) {
+  return invokeAgentCommand<RoomDisconnectReport>("disconnect_agent_room", {
+    rootId,
+    idempotencyKey,
+    acknowledgeUndoable
+  });
+}
+
+export function listenForDesktopDeviceRevoked(handler: () => void) {
+  ensureTauriRuntime();
+  return listen<string | null>("desktop-device-revoked", () => handler());
 }
 
 function invokeAgentCommand<T>(command: string, args?: Record<string, unknown>) {

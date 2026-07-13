@@ -338,7 +338,7 @@ pub async fn validate_transfer_source_for_request(
             message: error.to_string(),
         })?;
     let managed_root = roots
-        .get(&room.root_id)
+        .ensure_active_room_binding(&room.root_id, &transfer.room_id)
         .map_err(|error| TransferSourceValidationError {
             failure_code: AgentFileTransferFailureCode::OutsideManagedRoot,
             message: error,

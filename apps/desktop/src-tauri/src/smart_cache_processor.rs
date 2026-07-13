@@ -109,7 +109,7 @@ async fn process_smart_cache_for_known_room(
         });
     }
 
-    let root = roots.get(&room.root_id)?;
+    let root = roots.ensure_active_room_binding(&room.root_id, &room.room_id)?;
     if !root.enabled {
         return Ok(SmartCacheProcessingReport {
             inspected_count: 0,

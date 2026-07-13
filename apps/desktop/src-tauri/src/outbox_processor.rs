@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::AgentRuntime;
+use crate::cleanliness::CleanlinessSnapshot;
 use crate::command_processor::AgentProposalSubmission;
 use crate::storage::outbox::OutboxStore;
 
@@ -21,6 +22,7 @@ const KIND_PROPOSAL: &str = "proposal";
 const KIND_COMMAND_STATUS: &str = "command_status";
 const KIND_FILE_TRANSFER_COMPLETION: &str = "file_transfer_completion";
 const KIND_SMART_CACHE_COMPLETION: &str = "smart_cache_completion";
+const KIND_ROOM_SNAPSHOT_PREFIX: &str = "room_snapshot:";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OutboxFlushReport {
@@ -61,6 +63,13 @@ struct SmartCacheCompletionPayload {
     sha256: String,
     usage_score: i64,
     manual_pin: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct RoomSnapshotPayload {
+    room_id: String,
+    snapshot: CleanlinessSnapshot,
 }
 
 /// Queues the terminal result of a claimed execution. Uses the execution id as both the dedup key
@@ -146,6 +155,24 @@ pub fn enqueue_smart_cache_completion(
     outbox.enqueue(KIND_SMART_CACHE_COMPLETION, &key, &payload_json)
 }
 
+/// Persists the exact snapshot object calculated by the Rust engine. A newer snapshot supersedes
+/// older unsent values for this room so a delayed retry cannot move the room sequence backwards.
+pub fn enqueue_room_snapshot(
+    outbox: &OutboxStore,
+    room_id: &str,
+    snapshot: &CleanlinessSnapshot,
+) -> Result<bool, String> {
+    let payload = RoomSnapshotPayload {
+        room_id: room_id.to_string(),
+        snapshot: snapshot.clone(),
+    };
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| format!("cannot encode room snapshot: {error}"))?;
+    let kind = format!("{KIND_ROOM_SNAPSHOT_PREFIX}{room_id}");
+    let key = format!("{room_id}-{}", snapshot.calculated_at);
+    outbox.enqueue_replacing_pending(&kind, &key, &payload_json)
+}
+
 /// Delivers pending outbox rows to the server. Transient failures leave the row pending for the
 /// next flush; terminal failures (bad payload, server rejection) dead-letter the row so it cannot
 /// retry forever. Only leak-free error codes are stored.
@@ -190,6 +217,17 @@ async fn dispatch(
     agent: &AgentRuntime,
     item: &crate::storage::outbox::OutboxItem,
 ) -> Result<(), DispatchError> {
+    if item.kind.starts_with(KIND_ROOM_SNAPSHOT_PREFIX) {
+        let payload = decode::<RoomSnapshotPayload>(&item.payload_json)?;
+        if item.kind != format!("{KIND_ROOM_SNAPSHOT_PREFIX}{}", payload.room_id) {
+            return Err(DispatchError::Terminal("CORRUPT_PAYLOAD".to_string()));
+        }
+        return agent
+            .submit_room_snapshot(payload.room_id, payload.snapshot)
+            .await
+            .map(|_| ())
+            .map_err(classify);
+    }
     match item.kind.as_str() {
         KIND_EXECUTION_RESULT => {
             let payload = decode::<ExecutionResultPayload>(&item.payload_json)?;
@@ -277,9 +315,10 @@ mod tests {
 
     use super::{
         enqueue_command_status, enqueue_execution_result, enqueue_file_transfer_completion,
-        enqueue_proposal, enqueue_smart_cache_completion, file_transfer_completion_key,
-        smart_cache_completion_key, KIND_COMMAND_STATUS, KIND_EXECUTION_RESULT,
-        KIND_FILE_TRANSFER_COMPLETION, KIND_PROPOSAL, KIND_SMART_CACHE_COMPLETION,
+        enqueue_proposal, enqueue_room_snapshot, enqueue_smart_cache_completion,
+        file_transfer_completion_key, smart_cache_completion_key, RoomSnapshotPayload,
+        KIND_COMMAND_STATUS, KIND_EXECUTION_RESULT, KIND_FILE_TRANSFER_COMPLETION, KIND_PROPOSAL,
+        KIND_ROOM_SNAPSHOT_PREFIX, KIND_SMART_CACHE_COMPLETION,
     };
     use crate::command_processor::{
         AgentProposalActionType, AgentProposalConflictState, AgentProposalItem,
@@ -389,5 +428,73 @@ mod tests {
         );
         assert!(batch[0].payload_json.contains(r#""usageScore":42"#));
         assert!(batch[0].payload_json.contains(r#""manualPin":true"#));
+    }
+
+    #[test]
+    fn room_snapshot_outbox_keeps_the_exact_newest_object() {
+        let (_temp, store) = store();
+        let mut older = crate::cleanliness::CleanlinessSnapshot {
+            formula_version: crate::cleanliness::CLEANLINESS_FORMULA_VERSION.to_string(),
+            score: 10,
+            metrics: crate::cleanliness::CleanlinessMetrics {
+                total_file_count: 2,
+                managed_file_count: 1,
+                unorganized_file_count: 1,
+                deductions: vec![crate::cleanliness::CleanlinessDeduction {
+                    reason_code: "UNORGANIZED_FILES".to_string(),
+                    count: 1,
+                    points: 50,
+                }],
+            },
+            calculated_at: "2026-07-13T00:00:00.001Z".to_string(),
+        };
+        enqueue_room_snapshot(&store, "room-1", &older).expect("older");
+        older.score = 50;
+        older.calculated_at = "2026-07-13T00:00:00.002Z".to_string();
+        let newest = older;
+        enqueue_room_snapshot(&store, "room-1", &newest).expect("newest");
+
+        let batch = store.pending_batch(10).expect("batch");
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].kind, format!("{KIND_ROOM_SNAPSHOT_PREFIX}room-1"));
+        let decoded: RoomSnapshotPayload =
+            serde_json::from_str(&batch[0].payload_json).expect("payload");
+        assert_eq!(decoded.room_id, "room-1");
+        assert_eq!(decoded.snapshot, newest);
+    }
+
+    #[test]
+    fn delayed_older_snapshot_cannot_replace_a_newer_sequence() {
+        let (_temp, store) = store();
+        let newer = crate::cleanliness::CleanlinessSnapshot {
+            formula_version: crate::cleanliness::CLEANLINESS_FORMULA_VERSION.to_string(),
+            score: 90,
+            metrics: crate::cleanliness::CleanlinessMetrics {
+                total_file_count: 1,
+                managed_file_count: 1,
+                unorganized_file_count: 0,
+                deductions: Vec::new(),
+            },
+            calculated_at: "2026-07-13T00:00:00.002Z".to_string(),
+        };
+        let mut older = newer.clone();
+        older.score = 10;
+        older.calculated_at = "2026-07-13T00:00:00.001Z".to_string();
+
+        assert!(enqueue_room_snapshot(&store, "room-1", &newer).expect("newer"));
+        assert!(!enqueue_room_snapshot(&store, "room-1", &older).expect("delayed older"));
+
+        let batch = store.pending_batch(10).expect("batch");
+        assert_eq!(batch.len(), 1);
+        let decoded: RoomSnapshotPayload =
+            serde_json::from_str(&batch[0].payload_json).expect("payload");
+        assert_eq!(decoded.snapshot, newer);
+
+        store.mark_sent(batch[0].id).expect("mark newer sent");
+        assert!(!enqueue_room_snapshot(&store, "room-1", &older).expect("older after send"));
+        assert!(store
+            .pending_batch(10)
+            .expect("no regression pending")
+            .is_empty());
     }
 }

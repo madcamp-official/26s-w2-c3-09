@@ -23,11 +23,19 @@ pub fn start_root_watcher(
     let event_root_id = root_id.clone();
     let index_root = root.clone();
 
+    // Startup/reconnect performs a full reconcile before incremental watching. The snapshot
+    // produced immediately afterward is the one persisted for the dashboard and queued intact.
+    file_engine_cli::file_index::reindex_root(&root).map_err(|error| error.to_string())?;
+    crate::cleanliness::reconcile_cleanliness_snapshot(&app, &root_id)?;
+
     let watcher = crate::watcher::watch_root_changes(root, move |change| {
         if apply_index_change(&index_root, change).is_err() {
             // Never emit the managed root or filesystem error text: both can contain an
             // absolute user path. The UI receives the root-scoped refresh event below.
             eprintln!("MANAGED_ROOT_INDEX_UPDATE_FAILED");
+        } else if crate::cleanliness::reconcile_cleanliness_snapshot(&app, &event_root_id).is_err()
+        {
+            eprintln!("CLEANLINESS_RECONCILE_FAILED root_id={event_root_id}");
         }
         let _ = app.emit(ROOT_CHANGED_EVENT, &event_root_id);
     })?;
@@ -51,7 +59,12 @@ pub fn restore_startup_watchers(
     let candidates = roots
         .list()?
         .into_iter()
-        .filter(|root| root.enabled && root.watch_on_startup)
+        .filter(|root| {
+            root.enabled
+                && root.watch_on_startup
+                && root.room_binding_status
+                    != crate::storage::managed_roots::RoomBindingStatus::Detached
+        })
         .collect::<Vec<_>>();
     let mut results = Vec::with_capacity(candidates.len());
 
@@ -93,6 +106,20 @@ pub struct StartupWatcherResult {
     pub root_id: String,
     pub started: bool,
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+fn start_root_watcher_for_test(
+    root_id: String,
+    roots: &crate::storage::managed_roots::ManagedRootStore,
+    watchers: &crate::storage::watchers::WatcherStore,
+) -> Result<(), String> {
+    let managed = roots.get(&root_id)?;
+    if !managed.enabled {
+        return Err(format!("managed root is disabled: {root_id}"));
+    }
+    let watcher = crate::watcher::watch_root(managed.root, || {})?;
+    watchers.start(root_id, watcher)
 }
 
 #[cfg(test)]
@@ -181,18 +208,4 @@ mod tests {
         );
         assert!(indexed, "watcher should index new file");
     }
-}
-
-#[cfg(test)]
-fn start_root_watcher_for_test(
-    root_id: String,
-    roots: &crate::storage::managed_roots::ManagedRootStore,
-    watchers: &crate::storage::watchers::WatcherStore,
-) -> Result<(), String> {
-    let managed = roots.get(&root_id)?;
-    if !managed.enabled {
-        return Err(format!("managed root is disabled: {root_id}"));
-    }
-    let watcher = crate::watcher::watch_root(managed.root, || {})?;
-    watchers.start(root_id, watcher)
 }

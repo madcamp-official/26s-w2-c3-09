@@ -68,6 +68,63 @@ impl OutboxStore {
         Ok(())
     }
 
+    /// Queues the newest value for a replaceable aggregate and supersedes older pending rows of
+    /// the same kind in one transaction. Keys for a kind must sort in mutation order (snapshot
+    /// keys use their fixed-width RFC3339 timestamp). Snapshot kinds include their room id, so one
+    /// room never suppresses another room's update.
+    pub fn enqueue_replacing_pending(
+        &self,
+        kind: &str,
+        idempotency_key: &str,
+        payload_json: &str,
+    ) -> Result<bool, String> {
+        let pool = self
+            .pool()?
+            .ok_or_else(|| "outbox database is not initialized".to_string())?;
+        let now = unix_ms();
+        block_on(async move {
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|error| format!("cannot begin outbox replacement: {error}"))?;
+            sqlx::query(
+                "UPDATE desktop_outbox
+                 SET state = 'superseded', updated_unix_ms = ?
+                 WHERE kind = ? AND state = 'pending' AND idempotency_key < ?",
+            )
+            .bind(now)
+            .bind(kind)
+            .bind(idempotency_key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| format!("cannot supersede older outbox item: {error}"))?;
+            let inserted = sqlx::query(
+                "INSERT INTO desktop_outbox
+                    (kind, idempotency_key, payload_json, state, attempt_count, created_unix_ms, updated_unix_ms)
+                 SELECT ?, ?, ?, 'pending', 0, ?, ?
+                 WHERE NOT EXISTS (
+                    SELECT 1 FROM desktop_outbox
+                    WHERE kind = ? AND idempotency_key >= ?
+                 )
+                 ON CONFLICT(kind, idempotency_key) DO NOTHING",
+            )
+            .bind(kind)
+            .bind(idempotency_key)
+            .bind(payload_json)
+            .bind(now)
+            .bind(now)
+            .bind(kind)
+            .bind(idempotency_key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| format!("cannot enqueue replacement outbox item: {error}"))?;
+            tx.commit()
+                .await
+                .map_err(|error| format!("cannot commit outbox replacement: {error}"))?;
+            Ok(inserted.rows_affected() > 0)
+        })
+    }
+
     /// Reads the oldest pending mutations, in enqueue order, for delivery.
     pub fn pending_batch(&self, limit: i64) -> Result<Vec<OutboxItem>, String> {
         let pool = self.pool()?;
@@ -137,7 +194,7 @@ impl OutboxStore {
                      attempt_count = attempt_count + ?3,
                      last_error = COALESCE(?4, last_error),
                      updated_unix_ms = ?5
-                 WHERE id = ?1",
+                 WHERE id = ?1 AND state = 'pending'",
             )
             .bind(id)
             .bind(state)

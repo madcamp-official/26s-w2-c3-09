@@ -1,11 +1,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::browse::{browse_root, BrowseEntry, BrowseError};
+use file_engine_cli::file_index::{
+    index_is_initialized, reindex_root, search_index_page, FileIndexError, IndexedSearchEntry,
+    IndexedSearchScope,
+};
 use serde::Serialize;
 
 use crate::agent::{
     AgentFileBrowseEntry, AgentFileBrowseEntryType, AgentFileBrowseFailureCode,
-    AgentFileBrowseRequest, AgentFileBrowseResult, AgentRuntime,
+    AgentFileBrowseRequest, AgentFileBrowseResult, AgentFileSearchScope, AgentRuntime,
 };
 use crate::storage::managed_roots::ManagedRootStore;
 
@@ -121,10 +125,12 @@ async fn build_result_for_request(
             code: AgentFileBrowseFailureCode::OutsideManagedRoot,
             message: error.to_string(),
         })?;
-    let managed_root = roots.get(&room.root_id).map_err(|error| FailureResult {
-        code: AgentFileBrowseFailureCode::OutsideManagedRoot,
-        message: error,
-    })?;
+    let managed_root = roots
+        .ensure_active_room_binding(&room.root_id, &request.room_id)
+        .map_err(|error| FailureResult {
+            code: AgentFileBrowseFailureCode::OutsideManagedRoot,
+            message: error,
+        })?;
     if !managed_root.enabled {
         return Err(FailureResult {
             code: AgentFileBrowseFailureCode::OutsideManagedRoot,
@@ -132,11 +138,20 @@ async fn build_result_for_request(
         });
     }
 
-    build_result_page(
-        &managed_root.root,
-        &request.relative_directory,
-        request.cursor.as_deref(),
-    )
+    match request.query.as_deref() {
+        Some(query) => build_search_result_page(
+            &managed_root.root,
+            &request.relative_directory,
+            query,
+            request.search_scope,
+            request.cursor.as_deref(),
+        ),
+        None => build_result_page(
+            &managed_root.root,
+            &request.relative_directory,
+            request.cursor.as_deref(),
+        ),
+    }
     .map_err(|error| FailureResult {
         code: error.failure_code,
         message: error.message,
@@ -159,7 +174,7 @@ pub fn build_result_page(
     let entries = report
         .entries
         .into_iter()
-        .filter(|entry| is_remotely_browsable(entry))
+        .filter(is_remotely_browsable)
         .collect::<Vec<_>>();
 
     if offset > entries.len() {
@@ -189,6 +204,51 @@ pub fn build_result_page(
     })
 }
 
+pub fn build_search_result_page(
+    root: &str,
+    relative_directory: &str,
+    query: &str,
+    scope: AgentFileSearchScope,
+    cursor: Option<&str>,
+) -> Result<AgentFileBrowseResult, BuildFileBrowseError> {
+    let fingerprint = search_fingerprint(relative_directory, query, scope);
+    let (expected_generation, offset) = parse_search_cursor(cursor, fingerprint)?;
+    if !index_is_initialized(root).map_err(map_file_index_error)? {
+        reindex_root(root).map_err(map_file_index_error)?;
+    }
+    let page = search_index_page(
+        root,
+        query,
+        match scope {
+            AgentFileSearchScope::CurrentDirectory => IndexedSearchScope::CurrentDirectory,
+            AgentFileSearchScope::ManagedRoot => IndexedSearchScope::ManagedRoot,
+        },
+        relative_directory,
+        expected_generation,
+        offset,
+        PAGE_SIZE,
+    )
+    .map_err(map_file_index_error)?;
+    let next_cursor = page.next_offset.map(|next_offset| {
+        format!(
+            "search:{fingerprint:016x}:{}:{next_offset}",
+            page.generation
+        )
+    });
+    let entries = page
+        .entries
+        .iter()
+        .filter(|entry| is_remotely_browsable_name(&entry.name))
+        .map(remote_search_entry)
+        .collect();
+
+    Ok(AgentFileBrowseResult {
+        entries,
+        next_cursor,
+        desktop_generation: page.generation.to_string(),
+    })
+}
+
 fn parse_cursor(cursor: Option<&str>) -> Result<usize, BuildFileBrowseError> {
     match cursor {
         None | Some("") => Ok(0),
@@ -204,6 +264,34 @@ fn parse_cursor(cursor: Option<&str>) -> Result<usize, BuildFileBrowseError> {
     }
 }
 
+fn parse_search_cursor(
+    cursor: Option<&str>,
+    fingerprint: u64,
+) -> Result<(Option<u64>, usize), BuildFileBrowseError> {
+    let Some(cursor) = cursor.filter(|cursor| !cursor.is_empty()) else {
+        return Ok((None, 0));
+    };
+    let mut parts = cursor.split(':');
+    let valid_prefix = parts.next() == Some("search");
+    let cursor_fingerprint = parts
+        .next()
+        .and_then(|part| u64::from_str_radix(part, 16).ok());
+    let generation = parts.next().and_then(|part| part.parse::<u64>().ok());
+    let offset = parts.next().and_then(|part| part.parse::<usize>().ok());
+    if !valid_prefix
+        || cursor_fingerprint != Some(fingerprint)
+        || generation.is_none()
+        || offset.is_none()
+        || parts.next().is_some()
+    {
+        return Err(BuildFileBrowseError {
+            failure_code: AgentFileBrowseFailureCode::CursorInvalidated,
+            message: "file search cursor does not match this query and scope".to_string(),
+        });
+    }
+    Ok((generation, offset.unwrap_or_default()))
+}
+
 fn map_browse_error(error: BrowseError) -> BuildFileBrowseError {
     BuildFileBrowseError {
         failure_code: AgentFileBrowseFailureCode::OutsideManagedRoot,
@@ -211,8 +299,25 @@ fn map_browse_error(error: BrowseError) -> BuildFileBrowseError {
     }
 }
 
+fn map_file_index_error(error: FileIndexError) -> BuildFileBrowseError {
+    let failure_code = match &error {
+        FileIndexError::GenerationChanged { .. } | FileIndexError::InvalidSearch(_) => {
+            AgentFileBrowseFailureCode::CursorInvalidated
+        }
+        _ => AgentFileBrowseFailureCode::OutsideManagedRoot,
+    };
+    BuildFileBrowseError {
+        failure_code,
+        message: error.to_string(),
+    }
+}
+
 fn is_remotely_browsable(entry: &BrowseEntry) -> bool {
-    let name = entry.name.to_ascii_lowercase();
+    is_remotely_browsable_name(&entry.name)
+}
+
+fn is_remotely_browsable_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
     if name == ".mousekeeper" || name == ".mousekeeper_trash" {
         return false;
     }
@@ -238,6 +343,26 @@ fn is_remotely_browsable(entry: &BrowseEntry) -> bool {
     true
 }
 
+fn remote_search_entry(entry: &IndexedSearchEntry) -> AgentFileBrowseEntry {
+    AgentFileBrowseEntry {
+        name: entry.name.clone(),
+        relative_path: entry.relative_path.clone(),
+        entry_type: if entry.is_dir {
+            AgentFileBrowseEntryType::Directory
+        } else {
+            AgentFileBrowseEntryType::File
+        },
+        size_bytes: entry.size_bytes,
+        modified_at: unix_ms_to_rfc3339(entry.modified_unix_ms),
+        file_id: stable_file_id_parts(
+            &entry.relative_path,
+            entry.is_dir,
+            entry.size_bytes,
+            entry.modified_unix_ms,
+        ),
+    }
+}
+
 fn remote_entry(entry: &BrowseEntry) -> AgentFileBrowseEntry {
     AgentFileBrowseEntry {
         name: entry.name.clone(),
@@ -254,17 +379,41 @@ fn remote_entry(entry: &BrowseEntry) -> AgentFileBrowseEntry {
 }
 
 fn stable_file_id(entry: &BrowseEntry) -> String {
-    let modified = entry
-        .modified_unix_ms
+    stable_file_id_parts(
+        &entry.path,
+        entry.is_dir,
+        entry.size_bytes,
+        entry.modified_unix_ms,
+    )
+}
+
+fn stable_file_id_parts(
+    relative_path: &str,
+    is_dir: bool,
+    size_bytes: Option<u64>,
+    modified_unix_ms: Option<u128>,
+) -> String {
+    let modified = modified_unix_ms
         .map(|value| value.to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    let size = entry
-        .size_bytes
+    let size = size_bytes
         .map(|value| value.to_string())
         .unwrap_or_else(|| "dir".to_string());
     format!(
         "hm:{:016x}",
-        fnv1a_64(format!("{}|{}|{}|{}", entry.path, entry.is_dir, size, modified).as_bytes())
+        fnv1a_64(format!("{relative_path}|{is_dir}|{size}|{modified}").as_bytes())
+    )
+}
+
+fn search_fingerprint(relative_directory: &str, query: &str, scope: AgentFileSearchScope) -> u64 {
+    fnv1a_64(
+        format!(
+            "{}|{}|{:?}",
+            relative_directory.replace('\\', "/"),
+            query.to_lowercase(),
+            scope
+        )
+        .as_bytes(),
     )
 }
 
@@ -326,8 +475,8 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{build_result_page, unix_ms_to_rfc3339};
-    use crate::agent::AgentFileBrowseFailureCode;
+    use super::{build_result_page, build_search_result_page, unix_ms_to_rfc3339};
+    use crate::agent::{AgentFileBrowseFailureCode, AgentFileSearchScope};
 
     #[test]
     fn builds_relative_only_browse_page_and_filters_remote_unsafe_names() {
@@ -411,5 +560,95 @@ mod tests {
             unix_ms_to_rfc3339(Some(1_704_067_200_123)),
             "2024-01-01T00:00:00.123Z"
         );
+    }
+
+    #[test]
+    fn indexed_search_cursor_paginates_and_binds_query_scope_and_generation() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        for index in 0..205 {
+            fs::write(root.join(format!("report-{index:03}.txt")), "x").expect("file");
+        }
+
+        let first = build_search_result_page(
+            root.to_str().expect("root path"),
+            "",
+            "REPORT",
+            AgentFileSearchScope::ManagedRoot,
+            None,
+        )
+        .expect("first page");
+        assert_eq!(first.entries.len(), 200);
+        let cursor = first.next_cursor.as_deref().expect("next cursor");
+
+        let second = build_search_result_page(
+            root.to_str().expect("root path"),
+            "",
+            "report",
+            AgentFileSearchScope::ManagedRoot,
+            Some(cursor),
+        )
+        .expect("second page");
+        assert_eq!(second.entries.len(), 5);
+        assert!(second.next_cursor.is_none());
+
+        let mismatched = build_search_result_page(
+            root.to_str().expect("root path"),
+            "",
+            "invoice",
+            AgentFileSearchScope::ManagedRoot,
+            Some(cursor),
+        )
+        .expect_err("query fingerprint mismatch");
+        assert_eq!(
+            mismatched.failure_code,
+            AgentFileBrowseFailureCode::CursorInvalidated
+        );
+
+        fs::write(root.join("report-new.txt"), "new").expect("new file");
+        file_engine_cli::file_index::upsert_existing_file(&root, "report-new.txt")
+            .expect("update index generation");
+        let stale = build_search_result_page(
+            root.to_str().expect("root path"),
+            "",
+            "report",
+            AgentFileSearchScope::ManagedRoot,
+            Some(cursor),
+        )
+        .expect_err("stale generation");
+        assert_eq!(
+            stale.failure_code,
+            AgentFileBrowseFailureCode::CursorInvalidated
+        );
+    }
+
+    #[test]
+    fn search_rebuilds_an_intentionally_cleared_nonzero_generation() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("report.txt"), "report").expect("file");
+        let indexed = file_engine_cli::file_index::reindex_root(&root).expect("index");
+        file_engine_cli::file_index::clear_index(&root).expect("clear on disconnect");
+        assert!(
+            file_engine_cli::file_index::index_generation(&root).expect("generation")
+                > indexed.generation
+        );
+        assert!(
+            !file_engine_cli::file_index::index_is_initialized(&root).expect("initialized flag")
+        );
+
+        let result = build_search_result_page(
+            root.to_str().expect("root path"),
+            "",
+            "report",
+            AgentFileSearchScope::ManagedRoot,
+            None,
+        )
+        .expect("search rebuilds cleared index");
+
+        assert_eq!(result.entries.len(), 1);
+        assert!(file_engine_cli::file_index::index_is_initialized(&root).expect("rebuilt flag"));
     }
 }

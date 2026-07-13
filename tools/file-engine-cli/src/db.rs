@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use std::thread;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::Row;
 
 use crate::journal::STATE_DIR;
 
@@ -118,6 +119,73 @@ async fn migrate(pool: &SqlitePool) -> Result<(), DbError> {
             modified_unix_ms  INTEGER,
             extension         TEXT
         )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| DbError::Migrate {
+        message: error.to_string(),
+    })?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS file_search_entries (
+            relative_path         TEXT PRIMARY KEY,
+            parent_relative_path  TEXT NOT NULL,
+            name                  TEXT NOT NULL,
+            normalized_name       TEXT NOT NULL,
+            entry_type            TEXT NOT NULL CHECK(entry_type IN ('file', 'directory')),
+            size_bytes            INTEGER,
+            modified_unix_ms      INTEGER
+        )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| DbError::Migrate {
+        message: error.to_string(),
+    })?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS file_search_entries_parent_name_idx
+         ON file_search_entries(parent_relative_path, normalized_name, relative_path)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| DbError::Migrate {
+        message: error.to_string(),
+    })?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS file_index_meta (
+            singleton   INTEGER PRIMARY KEY CHECK(singleton = 1),
+            generation  INTEGER NOT NULL CHECK(generation >= 0),
+            initialized INTEGER NOT NULL DEFAULT 0 CHECK(initialized IN (0, 1))
+        )",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| DbError::Migrate {
+        message: error.to_string(),
+    })?;
+    let meta_columns = sqlx::query("PRAGMA table_info(file_index_meta)")
+        .fetch_all(pool)
+        .await
+        .map_err(|error| DbError::Migrate {
+            message: error.to_string(),
+        })?;
+    if !meta_columns.iter().any(|row| {
+        row.try_get::<String, _>("name")
+            .is_ok_and(|name| name == "initialized")
+    }) {
+        sqlx::query(
+            "ALTER TABLE file_index_meta
+             ADD COLUMN initialized INTEGER NOT NULL DEFAULT 0 CHECK(initialized IN (0, 1))",
+        )
+        .execute(pool)
+        .await
+        .map_err(|error| DbError::Migrate {
+            message: error.to_string(),
+        })?;
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO file_index_meta(singleton, generation, initialized)
+         VALUES (1, 0, 0)",
     )
     .execute(pool)
     .await

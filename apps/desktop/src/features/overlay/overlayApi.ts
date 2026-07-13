@@ -13,12 +13,15 @@ export type OverlayState = "not_ready" | "hidden" | "visible" | "error";
 export type OverlayErrorCode = "NOT_READY" | "WINDOW_MISSING" | "EMIT_FAILED";
 
 export type CharacterEventKind =
-  | "idle"
-  | "analyzing"
-  | "waiting_for_approval"
-  | "working"
-  | "success"
-  | "error";
+  | "IDLE"
+  | "CONNECTING"
+  | "ANALYZING"
+  | "WAITING_APPROVAL"
+  | "WORKING"
+  | "SUCCESS"
+  | "ERROR"
+  | "USER_WORKING"
+  | "OFFLINE";
 
 export type CharacterEvent = {
   kind: CharacterEventKind;

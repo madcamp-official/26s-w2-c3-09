@@ -18,6 +18,17 @@ pub struct ManagedRoot {
     pub last_error: Option<String>,
     pub registered_unix_ms: i64,
     pub updated_unix_ms: i64,
+    pub room_id: Option<String>,
+    pub detached_room_id: Option<String>,
+    pub room_binding_status: RoomBindingStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomBindingStatus {
+    Unbound,
+    Active,
+    Detached,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -174,6 +185,123 @@ impl ManagedRootStore {
         Ok(roots.values().any(|managed| managed.root == root))
     }
 
+    pub fn find_by_room(&self, room_id: &str) -> Result<Option<ManagedRoot>, String> {
+        let roots = self
+            .roots
+            .lock()
+            .map_err(|_| "managed root store lock poisoned".to_string())?;
+        Ok(roots
+            .values()
+            .find(|root| {
+                root.room_id.as_deref() == Some(room_id)
+                    || (root.room_binding_status == RoomBindingStatus::Detached
+                        && root.detached_room_id.as_deref() == Some(room_id))
+            })
+            .cloned())
+    }
+
+    pub fn bind_room(&self, root_id: &str, room_id: String) -> Result<ManagedRoot, String> {
+        if room_id.trim().is_empty() {
+            return Err("room binding id cannot be empty".to_string());
+        }
+        let updated = {
+            let mut roots = self
+                .roots
+                .lock()
+                .map_err(|_| "managed root store lock poisoned".to_string())?;
+            if roots
+                .values()
+                .any(|root| root.root_id != root_id && root.room_id.as_deref() == Some(&room_id))
+            {
+                return Err(format!(
+                    "room is already bound to another managed root: {room_id}"
+                ));
+            }
+            let root = roots
+                .get_mut(root_id)
+                .ok_or_else(|| format!("managed root is not registered: {root_id}"))?;
+            root.room_id = Some(room_id);
+            root.detached_room_id = None;
+            root.room_binding_status = RoomBindingStatus::Active;
+            root.updated_unix_ms = unix_ms();
+            root.clone()
+        };
+        self.persist(&updated)?;
+        Ok(updated)
+    }
+
+    /// Verifies that a remote room still owns this root. Legacy unbound rows are adopted once,
+    /// while an explicitly detached row can only be rebound through a new pairing/sync action.
+    pub fn ensure_active_room_binding(
+        &self,
+        root_id: &str,
+        room_id: &str,
+    ) -> Result<ManagedRoot, String> {
+        let root = self.get(root_id)?;
+        match (&root.room_binding_status, root.room_id.as_deref()) {
+            (RoomBindingStatus::Active, Some(bound_room)) if bound_room == room_id => Ok(root),
+            (RoomBindingStatus::Unbound, None) => self.bind_room(root_id, room_id.to_string()),
+            (RoomBindingStatus::Detached, _) => Err(format!(
+                "managed root is detached from mobile access: {root_id}"
+            )),
+            (_, Some(bound_room)) => Err(format!(
+                "managed root belongs to a different room: root={root_id}, expected={bound_room}, actual={room_id}"
+            )),
+            _ => Err(format!(
+                "managed root has an invalid room binding state: {root_id}"
+            )),
+        }
+    }
+
+    pub fn detach_room(&self, room_id: &str) -> Result<Option<ManagedRoot>, String> {
+        let updated = {
+            let mut roots = self
+                .roots
+                .lock()
+                .map_err(|_| "managed root store lock poisoned".to_string())?;
+            let Some(root) = roots.values_mut().find(|root| {
+                root.room_id.as_deref() == Some(room_id)
+                    || (root.room_binding_status == RoomBindingStatus::Detached
+                        && root.detached_room_id.as_deref() == Some(room_id))
+            }) else {
+                return Ok(None);
+            };
+            if let Some(active_room_id) = root.room_id.take() {
+                root.detached_room_id = Some(active_room_id);
+            }
+            root.room_binding_status = RoomBindingStatus::Detached;
+            root.updated_unix_ms = unix_ms();
+            root.clone()
+        };
+        self.persist(&updated)?;
+        Ok(Some(updated))
+    }
+
+    pub fn detach_all_rooms(&self) -> Result<Vec<ManagedRoot>, String> {
+        let updated = {
+            let mut roots = self
+                .roots
+                .lock()
+                .map_err(|_| "managed root store lock poisoned".to_string())?;
+            roots
+                .values_mut()
+                .filter(|root| {
+                    root.room_id.is_some() && root.room_binding_status == RoomBindingStatus::Active
+                })
+                .map(|root| {
+                    root.detached_room_id = root.room_id.take();
+                    root.room_binding_status = RoomBindingStatus::Detached;
+                    root.updated_unix_ms = unix_ms();
+                    root.clone()
+                })
+                .collect::<Vec<_>>()
+        };
+        for root in &updated {
+            self.persist(root)?;
+        }
+        Ok(updated)
+    }
+
     fn persist(&self, root: &ManagedRoot) -> Result<(), String> {
         let pool = self
             .pool
@@ -270,6 +398,24 @@ async fn migrate(pool: &SqlitePool) -> Result<(), String> {
     .await?;
     add_column_if_missing(
         pool,
+        "room_id",
+        "ALTER TABLE managed_roots ADD COLUMN room_id TEXT",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "detached_room_id",
+        "ALTER TABLE managed_roots ADD COLUMN detached_room_id TEXT",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
+        "room_binding_status",
+        "ALTER TABLE managed_roots ADD COLUMN room_binding_status TEXT NOT NULL DEFAULT 'unbound'",
+    )
+    .await?;
+    add_column_if_missing(
+        pool,
         "watch_on_startup",
         "ALTER TABLE managed_roots ADD COLUMN watch_on_startup INTEGER NOT NULL DEFAULT 1",
     )
@@ -298,6 +444,14 @@ async fn migrate(pool: &SqlitePool) -> Result<(), String> {
         "ALTER TABLE managed_roots ADD COLUMN updated_unix_ms INTEGER NOT NULL DEFAULT 0",
     )
     .await?;
+    sqlx::query(
+        "UPDATE managed_roots
+         SET detached_room_id = COALESCE(detached_room_id, room_id), room_id = NULL
+         WHERE room_binding_status = 'detached' AND room_id IS NOT NULL",
+    )
+    .execute(pool)
+    .await
+    .map_err(|error| format!("cannot normalize detached room tombstones: {error}"))?;
 
     Ok(())
 }
@@ -305,7 +459,8 @@ async fn migrate(pool: &SqlitePool) -> Result<(), String> {
 async fn read_roots(pool: &SqlitePool) -> Result<Vec<ManagedRoot>, String> {
     let rows = sqlx::query(
         "SELECT root_id, canonical_path, display_name, enabled, watch_on_startup,
-                last_seen_status, last_error, registered_unix_ms, updated_unix_ms
+                last_seen_status, last_error, registered_unix_ms, updated_unix_ms,
+                room_id, detached_room_id, room_binding_status
          FROM managed_roots",
     )
     .fetch_all(pool)
@@ -334,6 +489,13 @@ async fn read_roots(pool: &SqlitePool) -> Result<Vec<ManagedRoot>, String> {
             last_error: row.try_get("last_error").unwrap_or(None),
             registered_unix_ms: row.try_get("registered_unix_ms").unwrap_or(0),
             updated_unix_ms: row.try_get("updated_unix_ms").unwrap_or(0),
+            room_id: row.try_get("room_id").unwrap_or(None),
+            detached_room_id: row.try_get("detached_room_id").unwrap_or(None),
+            room_binding_status: RoomBindingStatus::from_db_str(
+                row.try_get::<String, _>("room_binding_status")
+                    .unwrap_or_else(|_| "unbound".to_string())
+                    .as_str(),
+            ),
         });
     }
 
@@ -344,9 +506,10 @@ async fn upsert_root(pool: &SqlitePool, root: &ManagedRoot) -> Result<(), String
     sqlx::query(
         "INSERT INTO managed_roots (
              root_id, canonical_path, display_name, enabled, watch_on_startup,
-             last_seen_status, last_error, registered_unix_ms, updated_unix_ms
+             last_seen_status, last_error, registered_unix_ms, updated_unix_ms,
+             room_id, detached_room_id, room_binding_status
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(root_id) DO UPDATE SET
              canonical_path = excluded.canonical_path,
              display_name = excluded.display_name,
@@ -355,7 +518,10 @@ async fn upsert_root(pool: &SqlitePool, root: &ManagedRoot) -> Result<(), String
              last_seen_status = excluded.last_seen_status,
              last_error = excluded.last_error,
              registered_unix_ms = excluded.registered_unix_ms,
-             updated_unix_ms = excluded.updated_unix_ms",
+             updated_unix_ms = excluded.updated_unix_ms,
+             room_id = excluded.room_id,
+             detached_room_id = excluded.detached_room_id,
+             room_binding_status = excluded.room_binding_status",
     )
     .bind(&root.root_id)
     .bind(&root.root)
@@ -366,6 +532,9 @@ async fn upsert_root(pool: &SqlitePool, root: &ManagedRoot) -> Result<(), String
     .bind(&root.last_error)
     .bind(root.registered_unix_ms)
     .bind(root.updated_unix_ms)
+    .bind(&root.room_id)
+    .bind(&root.detached_room_id)
+    .bind(root.room_binding_status.as_db_str())
     .execute(pool)
     .await
     .map(|_| ())
@@ -409,6 +578,9 @@ impl ManagedRoot {
             last_error: None,
             registered_unix_ms: now,
             updated_unix_ms: now,
+            room_id: None,
+            detached_room_id: None,
+            room_binding_status: RoomBindingStatus::Unbound,
         }
     }
 }
@@ -427,6 +599,24 @@ impl ManagedRootStatus {
             "missing" => ManagedRootStatus::Missing,
             "error" => ManagedRootStatus::Error,
             _ => ManagedRootStatus::Ready,
+        }
+    }
+}
+
+impl RoomBindingStatus {
+    fn as_db_str(&self) -> &'static str {
+        match self {
+            RoomBindingStatus::Unbound => "unbound",
+            RoomBindingStatus::Active => "active",
+            RoomBindingStatus::Detached => "detached",
+        }
+    }
+
+    fn from_db_str(value: &str) -> Self {
+        match value {
+            "active" => RoomBindingStatus::Active,
+            "detached" => RoomBindingStatus::Detached,
+            _ => RoomBindingStatus::Unbound,
         }
     }
 }
@@ -573,6 +763,44 @@ mod tests {
         let root = reloaded.get("root:cafe").expect("get root");
         assert_eq!(root.last_seen_status, super::ManagedRootStatus::Error);
         assert_eq!(root.last_error, Some("watcher failed".to_string()));
+    }
+
+    #[test]
+    fn room_binding_and_detached_tombstone_survive_restart() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("managed-roots.db");
+        let store = ManagedRootStore::default();
+        store.load_from_db(&path).expect("configure database");
+        store
+            .upsert(root("root:cafe", "C:/work", "work"))
+            .expect("insert root");
+
+        let bound = store
+            .bind_room("root:cafe", "room-1".to_string())
+            .expect("bind room");
+        assert_eq!(bound.room_id.as_deref(), Some("room-1"));
+        assert_eq!(bound.room_binding_status, super::RoomBindingStatus::Active);
+        let detached = store
+            .detach_room("room-1")
+            .expect("detach")
+            .expect("bound root");
+        assert_eq!(detached.room_id, None);
+        assert_eq!(detached.detached_room_id.as_deref(), Some("room-1"));
+        assert_eq!(
+            detached.room_binding_status,
+            super::RoomBindingStatus::Detached
+        );
+
+        let reloaded = ManagedRootStore::default();
+        reloaded.load_from_db(&path).expect("reload");
+        let root = reloaded.get("root:cafe").expect("root");
+        assert_eq!(root.room_id, None);
+        assert_eq!(root.detached_room_id.as_deref(), Some("room-1"));
+        assert_eq!(root.room_binding_status, super::RoomBindingStatus::Detached);
+        assert!(reloaded
+            .ensure_active_room_binding("root:cafe", "room-1")
+            .expect_err("detached root stays blocked")
+            .contains("detached"));
     }
 
     #[test]

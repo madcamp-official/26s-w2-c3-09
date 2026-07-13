@@ -216,7 +216,8 @@ pre {
   color: #166534;
 }
 
-.status-connecting {
+.status-connecting,
+.status-disconnecting {
   background: #fef3c7;
   color: #92400e;
 }

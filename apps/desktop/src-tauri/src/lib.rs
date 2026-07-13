@@ -28,6 +28,7 @@ pub fn run() {
         .manage(background::BackgroundRuntime::default())
         .manage(overlay::OverlayRuntime::default())
         .manage(storage::auto_approval::AutoApprovalStore::default())
+        .manage(storage::cleanliness_snapshots::CleanlinessSnapshotStore::default())
         .manage(storage::managed_roots::ManagedRootStore::default())
         .manage(storage::outbox::OutboxStore::default())
         .manage(storage::smart_cache::SmartCacheStore::default())
@@ -73,6 +74,16 @@ pub fn run() {
             outbox
                 .load_from_db(outbox_path)
                 .map_err(|error| format!("cannot load desktop outbox: {error}"))?;
+            let cleanliness_snapshots =
+                app.state::<storage::cleanliness_snapshots::CleanlinessSnapshotStore>();
+            let cleanliness_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("cannot resolve app data directory: {error}"))?
+                .join("cleanliness-snapshots.db");
+            cleanliness_snapshots
+                .load_from_db(cleanliness_path)
+                .map_err(|error| format!("cannot load cleanliness snapshots: {error}"))?;
             let smart_cache = app.state::<storage::smart_cache::SmartCacheStore>();
             let smart_cache_path = app
                 .path()
@@ -116,6 +127,7 @@ pub fn run() {
             commands::file_engine::search_managed_root,
             commands::file_engine::propose_file_changes,
             commands::file_engine::calculate_cleanliness_snapshot,
+            commands::file_engine::get_latest_cleanliness_snapshot,
             commands::file_engine::validate_rule_draft,
             commands::file_engine::get_auto_approval_policy,
             commands::file_engine::update_auto_approval_policy,
@@ -143,6 +155,9 @@ pub fn run() {
             commands::agent::submit_cleanliness_snapshot,
             commands::agent::replay_agent_events,
             commands::agent::update_agent_command_status,
+            commands::agent::preflight_agent_room_disconnect,
+            commands::agent::disconnect_agent_room,
+            commands::agent::revoke_agent_device,
             commands::agent::forget_agent_device,
             commands::overlay::get_overlay_status,
             commands::overlay::emit_character_event,

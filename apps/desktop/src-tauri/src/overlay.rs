@@ -33,14 +33,18 @@ pub struct CharacterEvent {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CharacterEventKind {
     Idle,
+    Connecting,
     Analyzing,
+    #[serde(rename = "WAITING_APPROVAL")]
     WaitingForApproval,
     Working,
     Success,
     Error,
+    UserWorking,
+    Offline,
 }
 
 /// A summary of what one background pass did, used to derive the character state to show. Kept as
@@ -242,6 +246,33 @@ mod tests {
 
         assert_eq!(status.last_event_kind, Some(CharacterEventKind::Working));
         assert_eq!(status.last_error_code, None);
+    }
+
+    #[test]
+    fn character_states_match_the_shared_wire_contract() {
+        for (kind, wire_value) in [
+            (CharacterEventKind::Idle, "IDLE"),
+            (CharacterEventKind::Connecting, "CONNECTING"),
+            (CharacterEventKind::Analyzing, "ANALYZING"),
+            (CharacterEventKind::WaitingForApproval, "WAITING_APPROVAL"),
+            (CharacterEventKind::Working, "WORKING"),
+            (CharacterEventKind::Success, "SUCCESS"),
+            (CharacterEventKind::Error, "ERROR"),
+            (CharacterEventKind::UserWorking, "USER_WORKING"),
+            (CharacterEventKind::Offline, "OFFLINE"),
+        ] {
+            let event = CharacterEvent {
+                kind,
+                message: None,
+                correlation_id: None,
+            };
+            let json = serde_json::to_string(&event).expect("serialize character state");
+            assert!(json.contains(&format!(r#""kind":"{wire_value}""#)));
+            assert_eq!(
+                serde_json::from_str::<CharacterEvent>(&json).expect("deserialize character state"),
+                event
+            );
+        }
     }
 
     #[test]

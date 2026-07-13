@@ -10,7 +10,7 @@ use tokio::sync::{watch, Notify};
 use tokio::time::{interval, Duration};
 
 #[cfg(feature = "tauri-commands")]
-const BACKGROUND_TICK_SECONDS: u64 = 15;
+const BACKGROUND_TICK_SECONDS: u64 = 5;
 /// Delay before retrying the realtime Socket.IO connection after a failed initial connect. The
 /// REST background loop keeps working the whole time, so this only affects push responsiveness.
 #[cfg(feature = "tauri-commands")]
@@ -21,7 +21,7 @@ const DEVICE_REVOKED_REASON: &str = "desktop device pairing was revoked; pair th
 /// Each one only wakes the REST loop; the events themselves are never treated as the source of
 /// truth (that stays `/v1/sync/events` replay and command/decision polling).
 #[cfg(feature = "tauri-commands")]
-const REALTIME_WAKE_EVENTS: [&str; 7] = [
+const REALTIME_WAKE_EVENTS: [&str; 9] = [
     "command.available",
     "command.updated",
     "proposal.created",
@@ -29,6 +29,8 @@ const REALTIME_WAKE_EVENTS: [&str; 7] = [
     "file.browse.requested",
     "file.transfer.requested",
     "smart-cache.updated",
+    "device.revoked",
+    "room.removed",
 ];
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -381,17 +383,19 @@ async fn run_background_tick(
     app: &tauri::AppHandle,
     status: &Arc<Mutex<BackgroundRuntimeStatus>>,
 ) -> BackgroundTickOutcome {
-    use tauri::Manager;
+    use tauri::{Emitter, Manager};
 
     let agent = app.state::<crate::agent::AgentRuntime>();
     let sync_store = app.state::<crate::storage::agent_sync::AgentSyncStore>();
     let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
     let outbox = app.state::<crate::storage::outbox::OutboxStore>();
     let smart_cache = app.state::<crate::storage::smart_cache::SmartCacheStore>();
+    let watchers = app.state::<crate::storage::watchers::WatcherStore>();
 
     // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
     let mut activity = crate::overlay::OverlayActivity::default();
 
+    let device_id_before_heartbeat = agent.connection_status().device_id;
     match agent.heartbeat("ONLINE_IDLE".to_string()).await {
         Ok(_) => update_status(status, |status| {
             status.state = BackgroundRuntimeState::Running;
@@ -399,9 +403,23 @@ async fn run_background_tick(
             status.last_error_message = None;
         }),
         Err(error) => {
-            let is_terminal_pairing_failure = error.is_terminal_pairing_failure();
+            let is_confirmed_device_revoked = error.is_confirmed_device_revoked();
             let error_message = error.to_string();
-            if is_terminal_pairing_failure {
+            if is_confirmed_device_revoked {
+                let _ = crate::commands::agent::apply_local_device_revoked(
+                    &agent,
+                    &sync_store,
+                    &roots,
+                    &watchers,
+                )
+                .await;
+                if let Some(device_id) = device_id_before_heartbeat {
+                    let _ = sync_store.clear_device(&device_id).await;
+                    // The structured DEVICE_REVOKED verdict is authoritative even when the
+                    // revoked token can no longer fetch replay. Wake the UI so it starts a fresh
+                    // pairing session instead of waiting for its periodic status refresh.
+                    let _ = app.emit("desktop-device-revoked", device_id);
+                }
                 mark_suspended(status, DEVICE_REVOKED_REASON);
             } else {
                 update_status(status, |status| {
@@ -417,7 +435,7 @@ async fn run_background_tick(
                     ..crate::overlay::OverlayActivity::default()
                 },
             );
-            return if is_terminal_pairing_failure {
+            return if is_confirmed_device_revoked {
                 BackgroundTickOutcome::Stop
             } else {
                 BackgroundTickOutcome::Continue
@@ -426,10 +444,14 @@ async fn run_background_tick(
     }
 
     if let Some(device_id) = agent.connection_status().device_id {
-        match replay_events(&agent, &sync_store, &device_id).await {
-            Ok(()) => update_status(status, |status| {
+        match replay_events(app, &agent, &sync_store, &roots, &watchers, &device_id).await {
+            Ok(ReplayOutcome::Continue) => update_status(status, |status| {
                 status.last_replay_unix_ms = Some(unix_ms());
             }),
+            Ok(ReplayOutcome::DeviceRevoked) => {
+                mark_suspended(status, DEVICE_REVOKED_REASON);
+                return BackgroundTickOutcome::Stop;
+            }
             Err(error) => update_status(status, |status| {
                 status.last_error_message = Some(error);
             }),
@@ -659,19 +681,54 @@ fn stop_if_agent_revoked(
 
 #[cfg(feature = "tauri-commands")]
 async fn replay_events(
+    app: &tauri::AppHandle,
     agent: &crate::agent::AgentRuntime,
     sync_store: &crate::storage::agent_sync::AgentSyncStore,
+    roots: &crate::storage::managed_roots::ManagedRootStore,
+    watchers: &crate::storage::watchers::WatcherStore,
     device_id: &str,
-) -> Result<(), String> {
+) -> Result<ReplayOutcome, String> {
+    use tauri::Emitter;
+
     let previous_cursor = sync_store.cursor(device_id)?;
     let events = agent
         .replay_events(previous_cursor, 100)
         .await
         .map_err(|error| error.to_string())?;
+    for event in &events {
+        if event.event_type == "room.removed" {
+            let room_id = event.room_id.as_deref().or_else(|| {
+                (event.aggregate_type == "room").then_some(event.aggregate_id.as_str())
+            });
+            if let Some(room_id) = room_id {
+                if let Some(report) =
+                    crate::commands::agent::apply_local_room_detached(room_id, roots, watchers)?
+                {
+                    let _ = app.emit("managed-root-binding-changed", report.root_id);
+                }
+            }
+        }
+        if event.event_type == "device.revoked"
+            && (event.device_id.as_deref() == Some(device_id)
+                || (event.aggregate_type == "device" && event.aggregate_id == device_id))
+        {
+            crate::commands::agent::apply_local_device_revoked(agent, sync_store, roots, watchers)
+                .await?;
+            let _ = app.emit("desktop-device-revoked", device_id);
+            return Ok(ReplayOutcome::DeviceRevoked);
+        }
+    }
     if let Some(next_cursor) = events.last().map(|event| event.sequence) {
         sync_store.advance(device_id, next_cursor).await?;
     }
-    Ok(())
+    Ok(ReplayOutcome::Continue)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplayOutcome {
+    Continue,
+    DeviceRevoked,
 }
 
 #[cfg(feature = "tauri-commands")]

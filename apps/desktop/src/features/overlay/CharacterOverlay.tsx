@@ -9,12 +9,15 @@ import {
 } from "./overlayApi";
 
 const KIND_LABELS: Record<CharacterEventKind, string> = {
-  idle: "Idle",
-  analyzing: "Analyzing",
-  waiting_for_approval: "Waiting for approval",
-  working: "Working",
-  success: "Success",
-  error: "Attention needed"
+  IDLE: "Idle",
+  CONNECTING: "Connecting",
+  ANALYZING: "Analyzing",
+  WAITING_APPROVAL: "Waiting for approval",
+  WORKING: "Working",
+  SUCCESS: "Success",
+  ERROR: "Attention needed",
+  USER_WORKING: "User working",
+  OFFLINE: "Offline"
 };
 
 /**
@@ -26,7 +29,7 @@ const KIND_LABELS: Record<CharacterEventKind, string> = {
  * operation or bypass approval / precheck / journal / execution.
  */
 export function CharacterOverlay() {
-  const [event, setEvent] = useState<CharacterEvent>({ kind: "idle" });
+  const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -55,7 +58,7 @@ export function CharacterOverlay() {
   }
 
   return (
-    <div className={`character-overlay character-${event.kind}`}>
+    <div className={`character-overlay character-${event.kind.toLowerCase()}`}>
       <header className="character-overlay-header">
         <span className="character-state-badge">{KIND_LABELS[event.kind]}</span>
         <button className="character-overlay-hide" onClick={() => void hideOverlay()}>

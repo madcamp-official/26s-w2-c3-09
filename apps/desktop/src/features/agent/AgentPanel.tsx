@@ -10,9 +10,9 @@ import {
   AgentCommand,
   AgentConnectionStatus,
   BackgroundRuntimeStatus,
-  forgetAgentDevice,
   getAgentConnectionStatus,
   getBackgroundRuntimeStatus,
+  listenForDesktopDeviceRevoked,
   PairingSession,
   pauseBackgroundRuntime,
   processAgentCommands,
@@ -24,6 +24,7 @@ import {
   pollAgentCommands,
   pollAgentPairing,
   replayAgentEvents,
+  revokeAgentDevice,
   startBackgroundRuntime,
   startAgentPairing,
   updateAgentCommandStatus
@@ -36,9 +37,7 @@ import {
 } from "../character/characterMotion";
 
 const backgroundRefreshIntervalMs = 15_000;
-// The server allows ten pairing requests per minute. One create, one mobile claim,
-// and polling must all fit in that shared budget.
-const pairingPollIntervalMs = 10_000;
+const pairingPollIntervalMs = 1_000;
 export function AgentPanel() {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
   const [background, setBackground] = useState<BackgroundRuntimeStatus | null>(null);
@@ -52,8 +51,13 @@ export function AgentPanel() {
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectFailed, setDisconnectFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pairingRequestInFlight = useRef(false);
+  const pairingStartInFlight = useRef(false);
+  const disconnectIdempotencyKey = useRef<string | null>(null);
+  const deviceNameRef = useRef(deviceName);
   const pairingPayload = useMemo(
     () => (pairing && connection?.server_base_url ? pairingQrPayload(pairing, connection.server_base_url) : null),
     [connection?.server_base_url, pairing]
@@ -63,6 +67,26 @@ export function AgentPanel() {
     void refreshConnection();
     void refreshAutostart();
     void refreshBackground();
+  }, []);
+
+  useEffect(() => {
+    deviceNameRef.current = deviceName;
+  }, [deviceName]);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listenForDesktopDeviceRevoked(() => {
+      void resetForNewPairing("This desktop was disconnected. Pair it again to continue.");
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -344,27 +368,58 @@ export function AgentPanel() {
     }
   }
 
-  async function forgetDevice() {
+  async function resetForNewPairing(message?: string) {
+    if (pairingStartInFlight.current) return;
+    pairingStartInFlight.current = true;
+    setCommands([]);
+    setSyncCursor(null);
+    setLastReplayCount(0);
+    setReplayMotion(null);
+    setPairing(null);
+    try {
+      setConnection(await getAgentConnectionStatus());
+      const session = await startAgentPairing(deviceNameRef.current.trim());
+      setPairing(session);
+      setConnection(await getAgentConnectionStatus());
+      if (message) setLastProcessedSummary(message);
+    } catch (cause) {
+      setError(`Disconnected, but a new pairing code could not be created: ${errorMessage(cause)}`);
+    } finally {
+      pairingStartInFlight.current = false;
+    }
+  }
+
+  async function disconnectDevice() {
+    if (
+      !disconnectIdempotencyKey.current &&
+      !window.confirm(
+        "Disconnect this desktop from MouseKeeper? Local folders and undo history are preserved, but mobile access stops until you pair again."
+      )
+    ) {
+      return;
+    }
+    disconnectIdempotencyKey.current ??= newIdempotencyKey("device-revoke");
     setBusy(true);
+    setDisconnecting(true);
+    setDisconnectFailed(false);
     setError(null);
     try {
-      setBackground(await pauseBackgroundRuntime());
-      setConnection(await forgetAgentDevice());
-      setPairing(null);
-      setCommands([]);
-      setSyncCursor(null);
-      setLastReplayCount(0);
-      setReplayMotion(null);
+      setConnection(await revokeAgentDevice(disconnectIdempotencyKey.current));
+      disconnectIdempotencyKey.current = null;
+      setBackground(await getBackgroundRuntimeStatus());
+      await resetForNewPairing();
     } catch (cause) {
-      setError(errorMessage(cause));
+      setDisconnectFailed(true);
+      setError(`DISCONNECT_FAILED: ${errorMessage(cause)}`);
     } finally {
+      setDisconnecting(false);
       setBusy(false);
     }
   }
 
   const mascotMotion = motionForAgent({
     connection,
-    pairing: pairing !== null,
+    pairing: pairing !== null || disconnecting,
     commandStatuses: commands.map((command) => command.status),
     replayMotion,
     localError: error !== null
@@ -386,8 +441,10 @@ export function AgentPanel() {
             </p>
           </div>
         </div>
-        <span className={`status-badge status-${connection?.state ?? "unconfigured"}`}>
-          {connection?.state ?? "loading"}
+        <span
+          className={`status-badge status-${disconnecting ? "disconnecting" : connection?.state ?? "unconfigured"}`}
+        >
+          {disconnecting ? "DISCONNECTING" : connection?.state ?? "loading"}
         </span>
       </div>
 
@@ -426,8 +483,8 @@ export function AgentPanel() {
           <button disabled={busy} onClick={() => void flushOutboxNow()}>
             Flush outbox
           </button>
-          <button className="danger-button" disabled={busy} onClick={() => void forgetDevice()}>
-            Forget local pairing
+          <button className="danger-button" disabled={busy} onClick={() => void disconnectDevice()}>
+            {disconnectFailed ? "Retry disconnect" : "Disconnect this desktop"}
           </button>
         </div>
       ) : connection?.server_base_url ? (
@@ -609,4 +666,9 @@ function pairingQrPayload(pairing: PairingSession, serverBaseUrl: string) {
 
 function formatRuntimeTime(value: number | null) {
   return value ? new Date(value).toLocaleTimeString() : "never";
+}
+
+function newIdempotencyKey(prefix: string) {
+  const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${nonce}`;
 }

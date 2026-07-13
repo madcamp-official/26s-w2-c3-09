@@ -117,6 +117,16 @@ pub struct AgentFileBrowseRequest {
     pub room_id: String,
     pub relative_directory: String,
     pub cursor: Option<String>,
+    pub query: Option<String>,
+    pub search_scope: AgentFileSearchScope,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AgentFileSearchScope {
+    #[default]
+    CurrentDirectory,
+    ManagedRoot,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -249,6 +259,7 @@ pub struct AgentCachedFile {
 pub struct AgentRoomSnapshot {
     pub snapshot_id: String,
     pub room_id: String,
+    pub formula_version: String,
     pub score: u8,
     pub metrics: Value,
     pub calculated_at: String,
@@ -277,6 +288,7 @@ pub enum AgentErrorCode {
 pub struct AgentError {
     pub code: AgentErrorCode,
     pub message: String,
+    server_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -560,6 +572,32 @@ impl AgentRuntime {
         result
     }
 
+    /// Revokes only this authenticated desktop device. Any non-success response deliberately keeps
+    /// the credential so the caller can retry with the same idempotency key; 401/403 alone cannot
+    /// prove that the server committed the revoke transaction.
+    pub async fn revoke_self(&self, idempotency_key: String) -> Result<(), AgentError> {
+        validate_opaque_value("device revoke idempotency key", &idempotency_key, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_empty(
+                self.http
+                    .delete(format!("{base_url}/v1/agent/devices/self"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key),
+            )
+            .await;
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // A 401/403 only proves that this request was not authorized. It does not prove
+                // that the server committed the revoke transaction, so keep the credential and
+                // the caller's idempotency key available for an explicit retry.
+                self.record_non_authoritative_error(error.clone(), AgentConnectionState::Offline);
+                Err(error)
+            }
+        }
+    }
+
     pub async fn poll_commands(&self) -> Result<Vec<AgentCommand>, AgentError> {
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
@@ -713,6 +751,29 @@ impl AgentRuntime {
                     })
                     .collect()
             });
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn disconnect_room(
+        &self,
+        room_id: String,
+        idempotency_key: String,
+    ) -> Result<(), AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        validate_opaque_value("room disconnect idempotency key", &idempotency_key, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_empty(
+                self.http
+                    .delete(format!("{base_url}/v1/agent/rooms/{room_id}"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key),
+            )
+            .await;
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1113,6 +1174,7 @@ impl AgentRuntime {
     ) -> Result<AgentRoomSnapshot, AgentError> {
         validate_opaque_value("room id", &room_id, 200)?;
         validate_cleanliness_snapshot(&snapshot)?;
+        let formula_version = snapshot.formula_version.clone();
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
             .send_json::<RoomSnapshotResponse>(
@@ -1122,7 +1184,9 @@ impl AgentRuntime {
                     .json(&snapshot),
             )
             .await
-            .and_then(|response| validate_room_snapshot_response(&room_id, response));
+            .and_then(|response| {
+                validate_room_snapshot_response(&room_id, &formula_version, response)
+            });
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1324,7 +1388,7 @@ impl AgentRuntime {
     }
 
     fn record_error(&self, error: AgentError, connection_state: AgentConnectionState) {
-        if error.is_terminal_pairing_failure() {
+        if error.is_confirmed_device_revoked() {
             let _ = self.credentials.delete();
             let mut state = self.state.lock().expect("agent state mutex poisoned");
             state.credential = None;
@@ -1338,6 +1402,16 @@ impl AgentRuntime {
         state.last_error = Some(error);
     }
 
+    fn record_non_authoritative_error(
+        &self,
+        error: AgentError,
+        connection_state: AgentConnectionState,
+    ) {
+        let mut state = self.state.lock().expect("agent state mutex poisoned");
+        state.state = connection_state;
+        state.last_error = Some(error);
+    }
+
     async fn send_json<T>(&self, request: reqwest::RequestBuilder) -> Result<T, AgentError>
     where
         T: for<'de> Deserialize<'de>,
@@ -1345,6 +1419,7 @@ impl AgentRuntime {
         let response = request.send().await.map_err(|_| AgentError {
             code: AgentErrorCode::TransportUnavailable,
             message: "cannot reach the MouseKeeper server".to_string(),
+            server_code: None,
         })?;
         let status = response.status();
         if !status.is_success() {
@@ -1361,6 +1436,7 @@ impl AgentRuntime {
         let response = request.send().await.map_err(|_| AgentError {
             code: AgentErrorCode::TransportUnavailable,
             message: "cannot reach the MouseKeeper server".to_string(),
+            server_code: None,
         })?;
         let status = response.status();
         if !status.is_success() {
@@ -1532,6 +1608,10 @@ struct FileBrowseRequestResponse {
     room_id: String,
     relative_directory: String,
     cursor: Option<String>,
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    search_scope: AgentFileSearchScope,
     status: String,
 }
 
@@ -1602,6 +1682,8 @@ struct CachedFileResponse {
 struct RoomSnapshotResponse {
     id: String,
     room_id: String,
+    #[serde(default)]
+    formula_version: Option<String>,
     score: u8,
     metrics: Value,
     calculated_at: String,
@@ -1848,6 +1930,9 @@ fn validate_file_browse_request(
             .cursor
             .as_ref()
             .is_some_and(|cursor| cursor.len() > 512)
+        || response.query.as_ref().is_some_and(|query| {
+            !(2..=100).contains(&query.trim().chars().count()) || query != query.trim()
+        })
         || response.status != "REQUESTED"
     {
         return Err(invalid_response_error(
@@ -1859,6 +1944,8 @@ fn validate_file_browse_request(
         room_id: response.room_id,
         relative_directory: response.relative_directory,
         cursor: response.cursor,
+        query: response.query,
+        search_scope: response.search_scope,
     })
 }
 
@@ -2051,7 +2138,8 @@ fn validate_cached_file_response(
 
 fn validate_cleanliness_snapshot(snapshot: &CleanlinessSnapshot) -> Result<(), AgentError> {
     let metrics = &snapshot.metrics;
-    if snapshot.score > 100
+    if snapshot.formula_version != crate::cleanliness::CLEANLINESS_FORMULA_VERSION
+        || snapshot.score > 100
         || snapshot.calculated_at.trim().is_empty()
         || metrics.managed_file_count > metrics.total_file_count
         || metrics.unorganized_file_count > metrics.total_file_count
@@ -2073,10 +2161,15 @@ fn validate_cleanliness_snapshot(snapshot: &CleanlinessSnapshot) -> Result<(), A
 
 fn validate_room_snapshot_response(
     expected_room_id: &str,
+    expected_formula_version: &str,
     response: RoomSnapshotResponse,
 ) -> Result<AgentRoomSnapshot, AgentError> {
+    let formula_version = response
+        .formula_version
+        .unwrap_or_else(|| expected_formula_version.to_string());
     if response.id.is_empty()
         || response.room_id != expected_room_id
+        || formula_version != expected_formula_version
         || response.score > 100
         || !response.metrics.is_object()
         || response.calculated_at.trim().is_empty()
@@ -2088,6 +2181,7 @@ fn validate_room_snapshot_response(
     Ok(AgentRoomSnapshot {
         snapshot_id: response.id,
         room_id: response.room_id,
+        formula_version,
         score: response.score,
         metrics: response.metrics,
         calculated_at: response.calculated_at,
@@ -2195,16 +2289,22 @@ fn http_error(status: StatusCode, server_error: Option<ServerErrorResponse>) -> 
         StatusCode::FORBIDDEN => AgentErrorCode::Forbidden,
         _ => AgentErrorCode::TransportUnavailable,
     };
+    let server_code = server_error.as_ref().and_then(|body| body.code.clone());
     let message = server_error
         .and_then(|body| body.message.or(body.code))
         .unwrap_or_else(|| format!("MouseKeeper server request failed with HTTP {status}"));
-    AgentError { code, message }
+    AgentError {
+        code,
+        message,
+        server_code,
+    }
 }
 
 fn unconfigured_error(message: &str) -> AgentError {
     AgentError {
         code: AgentErrorCode::Unconfigured,
         message: message.to_string(),
+        server_code: None,
     }
 }
 
@@ -2212,6 +2312,7 @@ fn validation_error(message: &str) -> AgentError {
     AgentError {
         code: AgentErrorCode::ValidationFailed,
         message: message.to_string(),
+        server_code: None,
     }
 }
 
@@ -2219,6 +2320,7 @@ fn invalid_response_error(message: &str) -> AgentError {
     AgentError {
         code: AgentErrorCode::InvalidResponse,
         message: message.to_string(),
+        server_code: None,
     }
 }
 
@@ -2226,6 +2328,7 @@ fn credential_error(message: &str) -> AgentError {
     AgentError {
         code: AgentErrorCode::CredentialStoreUnavailable,
         message: message.to_string(),
+        server_code: None,
     }
 }
 
@@ -2234,6 +2337,7 @@ impl Clone for AgentError {
         Self {
             code: self.code.clone(),
             message: self.message.clone(),
+            server_code: self.server_code.clone(),
         }
     }
 }
@@ -2267,11 +2371,8 @@ impl AgentError {
         matches!(self.code, AgentErrorCode::TransportUnavailable)
     }
 
-    pub fn is_terminal_pairing_failure(&self) -> bool {
-        matches!(
-            self.code,
-            AgentErrorCode::Unauthenticated | AgentErrorCode::Forbidden
-        )
+    pub fn is_confirmed_device_revoked(&self) -> bool {
+        self.server_code.as_deref() == Some("DEVICE_REVOKED")
     }
 }
 
@@ -2285,8 +2386,8 @@ mod tests {
     use std::thread;
 
     use super::{
-        normalize_server_base_url, AgentConnectionState, AgentError, AgentErrorCode, AgentRuntime,
-        CredentialStore, DeviceCredential, ServerCommand,
+        normalize_server_base_url, AgentConnectionState, AgentError, AgentErrorCode,
+        AgentFileSearchScope, AgentRuntime, CredentialStore, DeviceCredential, ServerCommand,
     };
 
     #[derive(Default)]
@@ -2518,6 +2619,130 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn self_revoke_uses_delete_and_keeps_credential_until_common_cleanup() {
+        let (server_url, server) = one_shot_json_server("/v1/agent/devices/self", "", |request| {
+            assert!(request.starts_with("DELETE /v1/agent/devices/self HTTP/1.1"));
+            let lower = request.to_ascii_lowercase();
+            assert!(lower.contains("authorization: bearer secret-token"));
+            assert!(lower.contains("idempotency-key: revoke-request-1"));
+        });
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        runtime
+            .revoke_self("revoke-request-1".to_string())
+            .await
+            .expect("revoke accepted");
+        server.join().expect("server thread");
+
+        assert!(store.load().expect("credential store").is_some());
+        assert_eq!(
+            runtime.connection_status().device_id.as_deref(),
+            Some("device-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn self_revoke_transport_failure_preserves_retry_credential() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind unused port");
+        let server_url = format!("http://{}", listener.local_addr().expect("address"));
+        drop(listener);
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .revoke_self("same-retry-key".to_string())
+            .await
+            .expect_err("transport failure");
+
+        assert_eq!(error.code, AgentErrorCode::TransportUnavailable);
+        assert!(store.load().expect("credential store").is_some());
+        assert_eq!(
+            runtime.connection_status().device_id.as_deref(),
+            Some("device-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn self_revoke_auth_rejection_is_not_reported_as_success() {
+        let (server_url, server) = one_shot_error_server(
+            "/v1/agent/devices/self",
+            "HTTP/1.1 403 Forbidden",
+            r#"{"code":"FORBIDDEN","message":"request was not authorized"}"#,
+            |request| {
+                assert!(request.starts_with("DELETE /v1/agent/devices/self HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("idempotency-key: same-retry-key"));
+            },
+        );
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .revoke_self("same-retry-key".to_string())
+            .await
+            .expect_err("an auth rejection cannot prove the revoke transaction committed");
+        server.join().expect("server thread");
+
+        assert_eq!(error.code, AgentErrorCode::Forbidden);
+        assert!(store.load().expect("credential store").is_some());
+        let status = runtime.connection_status();
+        assert_eq!(status.state, AgentConnectionState::Offline);
+        assert_eq!(status.device_id.as_deref(), Some("device-1"));
+    }
+
+    #[tokio::test]
+    async fn generic_unauthenticated_heartbeat_does_not_claim_device_revocation() {
+        let (server_url, server) = one_shot_error_server(
+            "/v1/devices/device-1/heartbeat",
+            "HTTP/1.1 401 Unauthorized",
+            r#"{"code":"UNAUTHENTICATED","message":"token was not accepted"}"#,
+            |_| {},
+        );
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .heartbeat("ONLINE_IDLE".to_string())
+            .await
+            .expect_err("unauthenticated response");
+        server.join().expect("server thread");
+
+        assert_eq!(error.code, AgentErrorCode::Unauthenticated);
+        assert!(!error.is_confirmed_device_revoked());
+        assert!(store.load().expect("credential store").is_some());
+        assert_eq!(
+            runtime.connection_status().device_id.as_deref(),
+            Some("device-1")
+        );
+    }
+
+    #[tokio::test]
     async fn auth_failure_revokes_local_pairing_and_realtime_credentials() {
         let (server_url, server) = one_shot_error_server(
             "/v1/devices/device-1/heartbeat",
@@ -2659,6 +2884,62 @@ mod tests {
             decision.items[0].source_relative_path.as_deref(),
             Some("a.pdf")
         );
+    }
+
+    #[tokio::test]
+    async fn pending_file_browse_maps_search_query_and_scope() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/devices/device-1/file-browse-requests/pending",
+            r#"[{
+                "id":"browse-1",
+                "roomId":"room-1",
+                "relativeDirectory":"docs",
+                "cursor":null,
+                "query":"report",
+                "searchScope":"MANAGED_ROOT",
+                "status":"REQUESTED"
+            }]"#,
+            |request| {
+                assert!(request
+                    .starts_with("GET /v1/devices/device-1/file-browse-requests/pending HTTP/1.1"));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let requests = runtime
+            .pending_file_browse_requests()
+            .await
+            .expect("pending browse");
+        server.join().expect("server thread");
+
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].query.as_deref(), Some("report"));
+        assert_eq!(requests[0].search_scope, AgentFileSearchScope::ManagedRoot);
+    }
+
+    #[test]
+    fn file_browse_query_limit_counts_unicode_characters_not_utf8_bytes() {
+        let query = "가".repeat(34);
+        assert!(query.len() > 100);
+        let request = super::validate_file_browse_request(super::FileBrowseRequestResponse {
+            id: "browse-1".to_string(),
+            room_id: "room-1".to_string(),
+            relative_directory: String::new(),
+            cursor: None,
+            query: Some(query.clone()),
+            search_scope: AgentFileSearchScope::ManagedRoot,
+            status: "REQUESTED".to_string(),
+        })
+        .expect("34 Korean characters are within the 100-character contract limit");
+
+        assert_eq!(request.query.as_deref(), Some(query.as_str()));
     }
 
     #[tokio::test]
@@ -2824,6 +3105,7 @@ mod tests {
                 assert!(request
                     .to_ascii_lowercase()
                     .contains("authorization: bearer secret-token"));
+                assert!(request.contains(r#""formulaVersion":"mousekeeper-cleanliness-v1""#));
                 assert!(request.contains(r#""score":88"#));
                 assert!(request.contains(r#""totalFileCount":10"#));
                 assert!(request.contains(r#""calculatedAt":"2026-07-13T00:00:00.000Z""#));
@@ -2838,6 +3120,7 @@ mod tests {
         };
         let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
         let snapshot = crate::cleanliness::CleanlinessSnapshot {
+            formula_version: crate::cleanliness::CLEANLINESS_FORMULA_VERSION.to_string(),
             score: 88,
             metrics: crate::cleanliness::CleanlinessMetrics {
                 total_file_count: 10,
@@ -2856,6 +3139,10 @@ mod tests {
 
         assert_eq!(saved.snapshot_id, "snapshot-1");
         assert_eq!(saved.room_id, "room-1");
+        assert_eq!(
+            saved.formula_version,
+            crate::cleanliness::CLEANLINESS_FORMULA_VERSION
+        );
         assert_eq!(saved.score, 88);
     }
 

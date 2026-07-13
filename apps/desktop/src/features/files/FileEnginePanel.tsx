@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ensureAgentRoom, submitCleanlinessSnapshot } from "../agent/agentApi";
+import {
+  disconnectAgentRoom,
+  ensureAgentRoom,
+  preflightAgentRoomDisconnect,
+  submitCleanlinessSnapshot
+} from "../agent/agentApi";
 import {
   analyzeRoot,
   AutoApprovalPolicy,
@@ -13,8 +18,11 @@ import {
   executeFileChanges,
   ExecuteReport,
   getAutoApprovalPolicy,
+  getLatestCleanlinessSnapshot,
   IndexedFile,
   JournalCorruption,
+  listenForCleanlinessSnapshotUpdates,
+  listenForManagedRootBindingChanges,
   listenForRootChanges,
   listOperationHistory,
   listManagedRoots,
@@ -43,7 +51,7 @@ import {
 
 type DecisionState = Record<string, "approved" | "rejected" | "pending">;
 type RejectionReasons = Record<string, string>;
-type RoomSyncState = "syncing" | "synced" | "failed";
+type RoomSyncState = "syncing" | "synced" | "failed" | "detached" | "unbound";
 type PrecheckSnapshot = {
   key: string;
   report: PrecheckReport;
@@ -82,6 +90,8 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   const browsePathRef = useRef(browsePath);
   const searchQueryRef = useRef(searchQuery);
   const searchResultsRef = useRef(searchResults);
+  const roomDisconnectKeys = useRef<Record<string, string>>({});
+  const roomDisconnectAcknowledgements = useRef<Set<string>>(new Set());
 
   const selectedRoot = roots.find((root) => root.root_id === selectedRootId);
   const isWatchingSelectedRoot = selectedRootId ? watchingRootIds.has(selectedRootId) : false;
@@ -107,9 +117,27 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   }, []);
 
   useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listenForManagedRootBindingChanges(() => {
+      void reloadDurableRootBindings();
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
     if (selectedRootId) {
       void refreshHistory(selectedRootId);
       void refreshAutoApprovalPolicy(selectedRootId);
+      void refreshLatestCleanliness(selectedRootId);
     } else {
       setHistory([]);
       setAutoApprovalPolicy(null);
@@ -170,21 +198,64 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     };
   }, []);
 
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    listenForCleanlinessSnapshotUpdates((update) => {
+      if (update.rootId !== selectedRootIdRef.current) return;
+      setCleanlinessSnapshot(update.snapshot);
+      setResultLines(formatCleanlinessLines(update.snapshot));
+      setStatus(
+        `Cleanliness ${update.snapshot.score}/100${update.syncQueued ? " (server sync queued)" : ""}`
+      );
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   async function refreshRoots() {
     setError(null);
     try {
       const storedRoots = await listManagedRoots();
       setRoots(storedRoots);
+      setRoomSyncStates(bindingStates(storedRoots));
       setSelectedRootId((current) => current || storedRoots[0]?.root_id || "");
       const results = await Promise.allSettled(
-        storedRoots.map((root) => syncRootToMobile(root, false))
+        storedRoots
+          .filter((root) => root.room_binding_status === "unbound")
+          .map((root) => syncRootToMobile(root, false))
       );
       const failedCount = results.filter((result) => result.status === "rejected").length;
       if (failedCount > 0) {
         setStatus(`${storedRoots.length} root(s) loaded; ${failedCount} mobile sync pending`);
       } else if (storedRoots.length > 0) {
-        setStatus(`${storedRoots.length} root(s) synced to mobile`);
+        setStatus(`${storedRoots.length} root(s) loaded`);
       }
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function reloadDurableRootBindings() {
+    try {
+      const storedRoots = await listManagedRoots();
+      setRoots(storedRoots);
+      setRoomSyncStates(bindingStates(storedRoots));
+      const detachedIds = new Set(
+        storedRoots
+          .filter((root) => root.room_binding_status === "detached")
+          .map((root) => root.root_id)
+      );
+      setWatchingRootIds(
+        (current) => new Set([...current].filter((rootId) => !detachedIds.has(rootId)))
+      );
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -296,6 +367,8 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     try {
       const room = await ensureAgentRoom(root.root_id, root.display_name);
       setRoomSyncStates((current) => ({ ...current, [root.root_id]: "synced" }));
+      const storedRoots = await listManagedRoots();
+      setRoots(storedRoots);
       if (announce) {
         setError(null);
         setStatus(room.created ? "Root registered and room created" : "Root synced to mobile");
@@ -308,6 +381,69 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         setStatus("Mobile room sync pending");
       }
       throw caught;
+    }
+  }
+
+  async function refreshLatestCleanliness(rootId = selectedRootId) {
+    if (!rootId) {
+      setCleanlinessSnapshot(null);
+      return;
+    }
+    try {
+      setCleanlinessSnapshot(await getLatestCleanlinessSnapshot(rootId));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function disconnectRootFromMobile(root: ManagedRoot) {
+    setRoomSyncStates((current) => ({ ...current, [root.root_id]: "syncing" }));
+    setError(null);
+    setStatus("Checking mobile disconnect safety");
+    try {
+      const preflight = await preflightAgentRoomDisconnect(root.root_id);
+      if (preflight.blocking_reasons.length > 0) {
+        throw new Error(`ROOM_DISCONNECT_BLOCKED: ${preflight.blocking_reasons.join("; ")}`);
+      }
+      if (
+        preflight.requires_confirmation &&
+        !roomDisconnectAcknowledgements.current.has(root.root_id)
+      ) {
+        const confirmed = window.confirm(
+          `This folder has ${preflight.undoable_operation_count} undoable local operation(s). ` +
+            "Disconnecting stops mobile access and clears only the disposable file index; local files and undo history remain. Continue?"
+        );
+        if (!confirmed) {
+          setRoomSyncStates((current) => ({ ...current, [root.root_id]: "synced" }));
+          setStatus("Mobile disconnect cancelled");
+          return;
+        }
+        roomDisconnectAcknowledgements.current.add(root.root_id);
+      }
+      roomDisconnectKeys.current[root.root_id] ??= newIdempotencyKey("room-disconnect");
+      const report = await disconnectAgentRoom(
+        root.root_id,
+        roomDisconnectKeys.current[root.root_id],
+        roomDisconnectAcknowledgements.current.has(root.root_id)
+      );
+      delete roomDisconnectKeys.current[root.root_id];
+      roomDisconnectAcknowledgements.current.delete(root.root_id);
+      setWatchingRootIds((current) => {
+        const next = new Set(current);
+        next.delete(root.root_id);
+        return next;
+      });
+      await reloadDurableRootBindings();
+      setResultLines([
+        `Disconnected room ${report.room_id}`,
+        "Local files and operation journal preserved",
+        report.index_cleared ? "Disposable mobile browse index cleared" : "Browse index unchanged"
+      ]);
+      setStatus("Mobile folder disconnected");
+    } catch (caught) {
+      setRoomSyncStates((current) => ({ ...current, [root.root_id]: "failed" }));
+      setError(errorMessage(caught));
+      setStatus("Mobile disconnect failed; retry uses the same request key");
     }
   }
 
@@ -831,15 +967,34 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           {selectedRoot ? (
             <div className="agent-actions">
               <span className="path-text">
-                Mobile room: {roomSyncStates[selectedRoot.root_id] ?? "pending"}
+                Mobile room: {selectedRoot.room_binding_status}
+                {selectedRoot.room_id
+                  ? ` (${selectedRoot.room_id})`
+                  : selectedRoot.detached_room_id
+                    ? ` (last ${selectedRoot.detached_room_id})`
+                    : ""}
               </span>
               <button
                 type="button"
                 disabled={roomSyncStates[selectedRoot.root_id] === "syncing"}
                 onClick={() => void syncRootToMobile(selectedRoot, true)}
               >
-                Sync to mobile
+                {selectedRoot.room_binding_status === "detached"
+                  ? "Reconnect to mobile"
+                  : "Sync to mobile"}
               </button>
+              {selectedRoot.room_binding_status === "active" ? (
+                <button
+                  className="danger-button"
+                  type="button"
+                  disabled={roomSyncStates[selectedRoot.root_id] === "syncing"}
+                  onClick={() => void disconnectRootFromMobile(selectedRoot)}
+                >
+                  {roomDisconnectKeys.current[selectedRoot.root_id]
+                    ? "Retry mobile disconnect"
+                    : "Disconnect mobile folder"}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {selectedRoot && autoApprovalPolicy ? (
@@ -965,7 +1120,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
             <p className="path-text">
               Cleanliness {cleanlinessSnapshot.score}/100 |{" "}
               {cleanlinessSnapshot.metrics.unorganizedFileCount} unorganized of{" "}
-              {cleanlinessSnapshot.metrics.totalFileCount}
+              {cleanlinessSnapshot.metrics.totalFileCount} | {cleanlinessSnapshot.formulaVersion}
             </p>
           ) : null}
           <p className="mode-note">
@@ -1206,6 +1361,7 @@ function formatProposal(item: Proposal) {
 
 function formatCleanlinessLines(snapshot: CleanlinessSnapshot) {
   return [
+    `formula | ${snapshot.formulaVersion}`,
     `score | ${snapshot.score}/100`,
     `files | total ${snapshot.metrics.totalFileCount}, managed ${snapshot.metrics.managedFileCount}, unorganized ${snapshot.metrics.unorganizedFileCount}`,
     `calculated | ${snapshot.calculatedAt}`,
@@ -1264,4 +1420,22 @@ function formatCountWithSkipped(label: string, count: number, skipped: number, n
 
 function errorMessage(caught: unknown) {
   return caught instanceof Error ? caught.message : String(caught);
+}
+
+function bindingStates(roots: ManagedRoot[]): Record<string, RoomSyncState> {
+  return Object.fromEntries(
+    roots.map((root) => [
+      root.root_id,
+      root.room_binding_status === "active"
+        ? "synced"
+        : root.room_binding_status === "detached"
+          ? "detached"
+          : "unbound"
+    ])
+  );
+}
+
+function newIdempotencyKey(prefix: string) {
+  const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${nonce}`;
 }

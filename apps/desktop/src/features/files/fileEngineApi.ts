@@ -18,6 +18,9 @@ export type ManagedRoot = {
   last_error: string | null;
   registered_unix_ms: number;
   updated_unix_ms: number;
+  room_id: string | null;
+  detached_room_id: string | null;
+  room_binding_status: "unbound" | "active" | "detached";
 };
 
 export type ManagedRootStatePatch = {
@@ -66,6 +69,7 @@ export type IndexedFile = {
 
 export type FileIndexReport = {
   root: string;
+  generation: number;
   files: IndexedFile[];
   skipped_entries: SkippedEntry[];
 };
@@ -96,6 +100,7 @@ export type CleanlinessDeduction = {
 };
 
 export type CleanlinessSnapshot = {
+  formulaVersion: string;
   score: number;
   metrics: {
     totalFileCount: number;
@@ -104,6 +109,13 @@ export type CleanlinessSnapshot = {
     deductions: CleanlinessDeduction[];
   };
   calculatedAt: string;
+};
+
+export type CleanlinessSnapshotUpdate = {
+  rootId: string;
+  roomId: string | null;
+  snapshot: CleanlinessSnapshot;
+  syncQueued: boolean;
 };
 
 export type AutoApprovalPolicy = {
@@ -362,6 +374,28 @@ export function listenForRootChanges(handler: (rootId: string) => void) {
   ensureTauriRuntime();
 
   return listen<string>(ROOT_CHANGED_EVENT, (event) => handler(event.payload));
+}
+
+export function getLatestCleanlinessSnapshot(rootId: string) {
+  return invokeCommand<CleanlinessSnapshot | null>("get_latest_cleanliness_snapshot", { rootId });
+}
+
+export function listenForManagedRootBindingChanges(
+  handler: (roomId: string | null) => void
+) {
+  ensureTauriRuntime();
+
+  return listen<string | null>("managed-root-binding-changed", (event) => handler(event.payload));
+}
+
+export function listenForCleanlinessSnapshotUpdates(
+  handler: (update: CleanlinessSnapshotUpdate) => void
+) {
+  ensureTauriRuntime();
+
+  return listen<CleanlinessSnapshotUpdate>("cleanliness-snapshot-updated", (event) =>
+    handler(event.payload)
+  );
 }
 
 export async function selectManagedRootDirectory() {
