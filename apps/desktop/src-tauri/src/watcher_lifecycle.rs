@@ -5,6 +5,13 @@ use crate::watcher::WatchChange;
 /// Payload is the `root_id` so the UI only refreshes the root it is currently showing.
 pub const ROOT_CHANGED_EVENT: &str = "managed-root-changed";
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RootIndexReconcileReport {
+    pub inspected_root_count: usize,
+    pub reindexed_root_count: usize,
+    pub failed_root_count: usize,
+}
+
 #[cfg(feature = "tauri-commands")]
 pub fn start_root_watcher(
     root_id: String,
@@ -87,6 +94,58 @@ pub fn restore_startup_watchers(
     Ok(results)
 }
 
+/// Periodically rebuilds the authoritative browse/search index for roots that are currently
+/// watched. OS watcher events stay the fast path; this scheduled pass repairs missed events
+/// without polling the server or exposing absolute user paths in status/log output.
+#[cfg(any(feature = "tauri-commands", test))]
+pub fn reconcile_watched_root_indexes(
+    roots: &crate::storage::managed_roots::ManagedRootStore,
+    watchers: &crate::storage::watchers::WatcherStore,
+    mut after_reindex: impl FnMut(&str) -> Result<(), String>,
+) -> Result<RootIndexReconcileReport, String> {
+    use crate::storage::managed_roots::{ManagedRootStatus, RoomBindingStatus};
+
+    let mut report = RootIndexReconcileReport::default();
+
+    for managed in roots.list()? {
+        if !managed.enabled
+            || managed.room_binding_status == RoomBindingStatus::Detached
+            || !watchers.is_watching(&managed.root_id)?
+        {
+            continue;
+        }
+
+        report.inspected_root_count += 1;
+        let reconcile_result = file_engine_cli::file_index::reindex_root(&managed.root)
+            .map(|_| ())
+            .map_err(|_| ())
+            .and_then(|_| after_reindex(&managed.root_id).map_err(|_| ()));
+
+        match reconcile_result {
+            Ok(()) => {
+                if roots
+                    .update_health(&managed.root_id, ManagedRootStatus::Ready, None)
+                    .is_ok()
+                {
+                    report.reindexed_root_count += 1;
+                } else {
+                    report.failed_root_count += 1;
+                }
+            }
+            Err(()) => {
+                report.failed_root_count += 1;
+                let _ = roots.update_health(
+                    &managed.root_id,
+                    ManagedRootStatus::Error,
+                    Some("scheduled index reconcile failed".to_string()),
+                );
+            }
+        }
+    }
+
+    Ok(report)
+}
+
 #[cfg(any(feature = "tauri-commands", test))]
 fn apply_index_change(root: &str, change: WatchChange) -> Result<(), String> {
     match change {
@@ -131,9 +190,11 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::storage::managed_roots::{ManagedRoot, ManagedRootStatePatch, ManagedRootStore};
+    use crate::storage::managed_roots::{
+        ManagedRoot, ManagedRootStatePatch, ManagedRootStore, RoomBindingStatus,
+    };
     use crate::storage::watchers::WatcherStore;
-    use crate::watcher::watch_root_changes;
+    use crate::watcher::{watch_root, watch_root_changes};
 
     fn wait_until(condition: impl Fn() -> bool, timeout: Duration) -> bool {
         let start = Instant::now();
@@ -207,5 +268,111 @@ mod tests {
             Duration::from_secs(3),
         );
         assert!(indexed, "watcher should index new file");
+    }
+
+    #[test]
+    fn scheduled_reconcile_repairs_changes_that_a_watcher_missed() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("create root");
+        file_engine_cli::file_index::reindex_root(&root).expect("initial index");
+        fs::write(root.join("missed.txt"), "missed").expect("write missed file before watcher");
+
+        let roots = ManagedRootStore::default();
+        let watchers = WatcherStore::default();
+        roots
+            .upsert(ManagedRoot::new(
+                "root-1".to_string(),
+                root.display().to_string(),
+                "root".to_string(),
+            ))
+            .expect("insert root");
+        super::start_root_watcher_for_test("root-1".to_string(), &roots, &watchers)
+            .expect("start watcher");
+
+        let report = super::reconcile_watched_root_indexes(&roots, &watchers, |_| Ok(()))
+            .expect("reconcile");
+
+        assert_eq!(report.inspected_root_count, 1);
+        assert_eq!(report.reindexed_root_count, 1);
+        assert_eq!(report.failed_root_count, 0);
+        let indexed = file_engine_cli::file_index::search_index(&root, "missed")
+            .expect("search after reconcile");
+        assert_eq!(indexed.files.len(), 1);
+        assert_eq!(indexed.files[0].relative_path, "missed.txt");
+    }
+
+    #[test]
+    fn scheduled_reconcile_skips_disabled_detached_and_unwatched_roots() {
+        let temp = tempdir().expect("tempdir");
+        let disabled_root = temp.path().join("disabled");
+        let detached_root = temp.path().join("detached");
+        let unwatched_root = temp.path().join("unwatched");
+        for root in [&disabled_root, &detached_root, &unwatched_root] {
+            fs::create_dir_all(root).expect("create root");
+            file_engine_cli::file_index::reindex_root(root).expect("initial index");
+        }
+
+        let roots = ManagedRootStore::default();
+        let watchers = WatcherStore::default();
+        roots
+            .upsert(ManagedRoot::new(
+                "disabled".to_string(),
+                disabled_root.display().to_string(),
+                "disabled".to_string(),
+            ))
+            .expect("insert disabled root");
+        roots
+            .update_state(
+                "disabled",
+                ManagedRootStatePatch {
+                    enabled: Some(false),
+                    watch_on_startup: None,
+                },
+            )
+            .expect("disable root");
+
+        let mut detached = ManagedRoot::new(
+            "detached".to_string(),
+            detached_root.display().to_string(),
+            "detached".to_string(),
+        );
+        detached.detached_room_id = Some("room-detached".to_string());
+        detached.room_binding_status = RoomBindingStatus::Detached;
+        roots.upsert(detached).expect("insert detached root");
+
+        roots
+            .upsert(ManagedRoot::new(
+                "unwatched".to_string(),
+                unwatched_root.display().to_string(),
+                "unwatched".to_string(),
+            ))
+            .expect("insert unwatched root");
+
+        watchers
+            .start(
+                "disabled".to_string(),
+                watch_root(&disabled_root, || {}).expect("watch disabled root"),
+            )
+            .expect("store disabled watcher");
+        watchers
+            .start(
+                "detached".to_string(),
+                watch_root(&detached_root, || {}).expect("watch detached root"),
+            )
+            .expect("store detached watcher");
+
+        let callback_calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls_in_closure = Arc::clone(&callback_calls);
+        let report = super::reconcile_watched_root_indexes(&roots, &watchers, move |_| {
+            callback_calls_in_closure.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })
+        .expect("reconcile");
+
+        assert_eq!(report.inspected_root_count, 0);
+        assert_eq!(report.reindexed_root_count, 0);
+        assert_eq!(report.failed_root_count, 0);
+        assert_eq!(callback_calls.load(Ordering::SeqCst), 0);
     }
 }

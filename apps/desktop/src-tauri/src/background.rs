@@ -59,6 +59,9 @@ pub struct BackgroundRuntimeStatus {
     pub last_file_browse_count: usize,
     pub last_file_browse_completed_count: usize,
     pub last_file_browse_failed_count: usize,
+    pub last_file_index_reconcile_unix_ms: Option<i64>,
+    pub last_file_index_reconcile_root_count: usize,
+    pub last_file_index_reconcile_failed_count: usize,
     pub last_file_transfer_poll_unix_ms: Option<i64>,
     pub last_file_transfer_count: usize,
     pub last_file_transfer_uploaded_count: usize,
@@ -124,6 +127,9 @@ impl Default for BackgroundRuntime {
                 last_file_browse_count: 0,
                 last_file_browse_completed_count: 0,
                 last_file_browse_failed_count: 0,
+                last_file_index_reconcile_unix_ms: None,
+                last_file_index_reconcile_root_count: 0,
+                last_file_index_reconcile_failed_count: 0,
                 last_file_transfer_poll_unix_ms: None,
                 last_file_transfer_count: 0,
                 last_file_transfer_uploaded_count: 0,
@@ -661,6 +667,37 @@ async fn run_background_tick(
         return BackgroundTickOutcome::Stop;
     }
 
+    if mode.runs_heavy_rest() {
+        match crate::watcher_lifecycle::reconcile_watched_root_indexes(
+            &roots,
+            &watchers,
+            |root_id| crate::cleanliness::reconcile_cleanliness_snapshot(app, root_id).map(|_| ()),
+        ) {
+            Ok(report) => {
+                if report.failed_root_count > 0 {
+                    activity.had_error = true;
+                }
+                update_status(status, |status| {
+                    status.last_file_index_reconcile_unix_ms = Some(unix_ms());
+                    status.last_file_index_reconcile_root_count = report.inspected_root_count;
+                    status.last_file_index_reconcile_failed_count = report.failed_root_count;
+                    if report.failed_root_count > 0 {
+                        status.last_error_message = Some(format!(
+                            "{} managed root index reconcile(s) failed",
+                            report.failed_root_count
+                        ));
+                    }
+                });
+            }
+            Err(error) => {
+                activity.had_error = true;
+                update_status(status, |status| {
+                    status.last_error_message = Some(error);
+                });
+            }
+        }
+    }
+
     match crate::file_browse_processor::process_pending_file_browse_requests(&agent, &roots).await {
         Ok(report) => {
             if report.failed_count > 0 {
@@ -1005,6 +1042,9 @@ mod tests {
         assert_eq!(status.last_file_browse_count, 0);
         assert_eq!(status.last_file_browse_completed_count, 0);
         assert_eq!(status.last_file_browse_failed_count, 0);
+        assert!(status.last_file_index_reconcile_unix_ms.is_none());
+        assert_eq!(status.last_file_index_reconcile_root_count, 0);
+        assert_eq!(status.last_file_index_reconcile_failed_count, 0);
         assert!(status.last_file_transfer_poll_unix_ms.is_none());
         assert_eq!(status.last_file_transfer_count, 0);
         assert_eq!(status.last_file_transfer_uploaded_count, 0);
