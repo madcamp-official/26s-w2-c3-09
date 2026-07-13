@@ -986,8 +986,8 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   }
 
   return (
-    <div className={embedded ? undefined : "app-shell"}>
-      <section className="toolbar">
+    <div className={embedded ? "file-engine-panel embedded-file-engine" : "app-shell file-engine-panel"}>
+      <section className="toolbar file-engine-topbar">
         <div>
           <h1>파일 정리</h1>
           <p>{status}</p>
@@ -997,7 +997,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         </button>
       </section>
 
-      <section className="panel">
+      <section className="panel root-register-panel">
         <label htmlFor="root-path">관리 폴더 경로</label>
         <div className="input-row">
           <input
@@ -1021,7 +1021,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         </p>
       </section>
 
-      <section className="workspace-grid">
+      <section className="workspace-grid file-engine-workspace">
         <div className="panel">
           <label htmlFor="root-select">등록된 폴더</label>
           <select
@@ -1277,7 +1277,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel search-panel">
         <div className="section-header">
           <h2>검색</h2>
           <button type="button" onClick={reindexSelectedRoot} disabled={!selectedRootId}>
@@ -1317,7 +1317,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel browse-panel">
         <div className="section-header">
           <div>
             <h2>파일 탐색</h2>
@@ -1378,13 +1378,13 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         </div>
       </section>
 
-      <section className="panel">
+      <section className="panel output-panel">
         <h2>결과</h2>
         {error ? <p className="error-text">{error}</p> : null}
         <pre>{resultLines.join("\n") || "아직 출력이 없습니다."}</pre>
       </section>
 
-      <section className="panel">
+      <section className="panel history-panel">
         <div className="section-header">
           <h2>작업 기록</h2>
           <button type="button" onClick={() => void refreshHistory()} disabled={!selectedRootId}>
