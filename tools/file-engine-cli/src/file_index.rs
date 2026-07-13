@@ -773,48 +773,7 @@ fn file_id_for_relative_path(guard: &PathGuard, relative_path: &str) -> Option<S
     guard
         .resolve_existing(relative_path)
         .ok()
-        .and_then(|path| platform_file_id(&path))
-}
-
-#[cfg(windows)]
-fn platform_file_id(path: &Path) -> Option<String> {
-    use std::fs::File;
-    use std::mem::MaybeUninit;
-    use std::os::windows::io::AsRawHandle;
-
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-    };
-
-    let file = File::open(path).ok()?;
-    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
-    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, info.as_mut_ptr()) };
-    if ok == 0 {
-        return None;
-    }
-    let info = unsafe { info.assume_init() };
-    let file_index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
-    Some(format!(
-        "win:v{:08x}:i{file_index:016x}",
-        info.dwVolumeSerialNumber
-    ))
-}
-
-#[cfg(unix)]
-fn platform_file_id(path: &Path) -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
-
-    let metadata = fs::metadata(path).ok()?;
-    Some(format!(
-        "unix:d{:016x}:i{:016x}",
-        metadata.dev(),
-        metadata.ino()
-    ))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn platform_file_id(_path: &Path) -> Option<String> {
-    None
+        .and_then(|path| crate::file_identity::file_id_for_path(&path))
 }
 
 fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {

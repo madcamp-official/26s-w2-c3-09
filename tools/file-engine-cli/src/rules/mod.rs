@@ -82,6 +82,7 @@ fn move_proposal_from_rule(
         content: None,
         source_size_bytes: file.size_bytes,
         source_modified_unix_ms: file.modified_unix_ms,
+        source_file_id: file.file_id.clone(),
         reason: reason_for(rule, file),
         status,
     })
@@ -99,6 +100,7 @@ fn trash_proposal_from_rule(rule: &Rule, file: &FileEntry) -> Option<Proposal> {
         content: None,
         source_size_bytes: file.size_bytes,
         source_modified_unix_ms: file.modified_unix_ms,
+        source_file_id: file.file_id.clone(),
         reason: reason_for(rule, file),
         status: ProposalStatus::Ready,
     })
@@ -243,6 +245,7 @@ mod tests {
             path: path.to_string(),
             size_bytes: 10,
             modified_unix_ms,
+            file_id: None,
         }
     }
 

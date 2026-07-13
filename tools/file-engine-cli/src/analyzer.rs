@@ -21,6 +21,8 @@ pub struct FileEntry {
     pub path: String,
     pub size_bytes: u64,
     pub modified_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -116,6 +118,7 @@ fn collect_files(
                     path: relative_path,
                     size_bytes: metadata.len(),
                     modified_unix_ms: modified_unix_ms(&metadata),
+                    file_id: crate::file_identity::file_id_for_path(&path),
                 }),
                 Err(error) => skipped_entries.push(skipped_entry(root, &path, error.to_string())),
             }

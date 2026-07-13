@@ -253,7 +253,8 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
         }
     };
 
-    let (source_size_bytes, source_modified_unix_ms) = precondition_snapshot(&item.precondition);
+    let (source_size_bytes, source_modified_unix_ms, source_file_id) =
+        precondition_snapshot(&item.precondition);
     let content = if action == ProposalAction::ReadmeWrite {
         Some(readme_write_content(&item.precondition)?)
     } else {
@@ -268,6 +269,7 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
         content,
         source_size_bytes,
         source_modified_unix_ms,
+        source_file_id,
         reason: item.reason_code.clone(),
         status,
     })
@@ -285,7 +287,7 @@ fn readme_write_content(value: &Value) -> Result<String, String> {
     Ok(content.to_string())
 }
 
-fn precondition_snapshot(value: &Value) -> (u64, Option<u128>) {
+fn precondition_snapshot(value: &Value) -> (u64, Option<u128>, Option<String>) {
     let size = value
         .get("sourceSizeBytes")
         .and_then(Value::as_u64)
@@ -294,7 +296,12 @@ fn precondition_snapshot(value: &Value) -> (u64, Option<u128>) {
         .get("sourceModifiedUnixMs")
         .and_then(Value::as_u64)
         .map(u128::from);
-    (size, modified)
+    let file_id = value
+        .get("sourceFileId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    (size, modified, file_id)
 }
 
 /// Maps a completed local execution to the control-plane execution status contract. MVP
@@ -356,6 +363,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("mtime after epoch")
             .as_millis() as u64;
+        let source_file_id =
+            file_engine_cli::file_identity::file_id_for_path(&root.join(from)).expect("file id");
         AgentProposalItemRecord {
             item_order: order,
             action_type: "MOVE".to_string(),
@@ -364,7 +373,8 @@ mod tests {
             reason_code: "RULE_MOVE_BY_EXTENSION".to_string(),
             precondition: json!({
                 "sourceSizeBytes": metadata.len(),
-                "sourceModifiedUnixMs": modified_unix_ms
+                "sourceModifiedUnixMs": modified_unix_ms,
+                "sourceFileId": source_file_id
             }),
             conflict_state: "NONE".to_string(),
         }
@@ -558,6 +568,7 @@ mod tests {
 
         let items = vec![move_item_matching_disk(root, 0, "a.pdf", "Documents/a.pdf")];
         let report = build_local_proposal_report(root, &items).expect("local proposal");
+        assert!(report.proposals[0].source_file_id.is_some());
 
         let application = DecisionApplication {
             approved: report,

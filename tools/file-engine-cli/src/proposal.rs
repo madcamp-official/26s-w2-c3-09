@@ -27,6 +27,8 @@ pub struct Proposal {
     pub content: Option<String>,
     pub source_size_bytes: u64,
     pub source_modified_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_file_id: Option<String>,
     pub reason: String,
     pub status: ProposalStatus,
 }
@@ -301,6 +303,7 @@ mod tests {
         assert!(root.join("inbox").join("photo.png").exists());
         assert!(report.proposals[0].proposal_id.starts_with("move:"));
         assert_eq!(report.proposals[0].proposal_id.len(), 21);
+        assert!(report.proposals[0].source_file_id.is_some());
     }
 
     #[test]

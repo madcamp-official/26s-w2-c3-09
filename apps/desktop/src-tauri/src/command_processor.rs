@@ -523,6 +523,7 @@ fn build_create_proposal_report(
             content: None,
             source_size_bytes: 0,
             source_modified_unix_ms: None,
+            source_file_id: None,
             reason: if is_directory {
                 USER_REQUESTED_CREATE_DIR_REASON.to_string()
             } else {
@@ -550,11 +551,12 @@ fn build_trash_proposal_report(
         proposals.push(Proposal {
             proposal_id: proposal_id(&action, &source_relative_path, ".mousekeeper_trash"),
             action,
-            from: source_relative_path,
+            from: source_relative_path.clone(),
             to: ".mousekeeper_trash".to_string(),
             content: None,
             source_size_bytes: metadata.len(),
             source_modified_unix_ms: modified_unix_ms(&metadata),
+            source_file_id: source_file_id_for_path(&guard, &source_relative_path),
             reason: USER_REQUESTED_TRASH_REASON.to_string(),
             status: ProposalStatus::Ready,
         });
@@ -657,6 +659,7 @@ fn build_single_move_proposal(
         content: None,
         source_size_bytes: metadata.len(),
         source_modified_unix_ms: modified_unix_ms(&metadata),
+        source_file_id: source_file_id_for_path(guard, source_relative_path),
         reason: reason.to_string(),
         status,
     })
@@ -689,6 +692,13 @@ fn inspect_regular_source_file(
         return Err(format!("{intent} source escaped managed root"));
     }
     Ok(metadata)
+}
+
+fn source_file_id_for_path(guard: &PathGuard, source_relative_path: &str) -> Option<String> {
+    guard
+        .resolve_existing(source_relative_path)
+        .ok()
+        .and_then(|path| file_engine_cli::file_identity::file_id_for_path(&path))
 }
 
 /// Computes the local proposal for a command. If the command carries an AI/server rule draft, the
@@ -752,6 +762,15 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
         ProposalStatus::Ready => AgentProposalConflictState::None,
         ProposalStatus::DestinationExists => AgentProposalConflictState::NameConflict,
     };
+    let mut precondition = serde_json::json!({
+        "proposalId": proposal.proposal_id,
+        "sourceSizeBytes": proposal.source_size_bytes,
+        "sourceModifiedUnixMs": proposal.source_modified_unix_ms,
+        "checkedAtUnixMs": unix_ms()
+    });
+    if let Some(source_file_id) = &proposal.source_file_id {
+        precondition["sourceFileId"] = serde_json::json!(source_file_id);
+    }
 
     AgentProposalItem {
         item_order,
@@ -769,12 +788,7 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
             ProposalAction::ReadmeWrite => Some("README.md".to_string()),
         },
         reason_code: reason_code(proposal),
-        precondition: serde_json::json!({
-            "proposalId": proposal.proposal_id,
-            "sourceSizeBytes": proposal.source_size_bytes,
-            "sourceModifiedUnixMs": proposal.source_modified_unix_ms,
-            "checkedAtUnixMs": unix_ms()
-        }),
+        precondition,
         conflict_state,
     }
 }
@@ -1681,6 +1695,7 @@ mod tests {
                     content: None,
                     source_size_bytes: 12,
                     source_modified_unix_ms: Some(10),
+                    source_file_id: Some("win:v00000001:i0000000000000001".to_string()),
                     reason: "move note".to_string(),
                     status: ProposalStatus::Ready,
                 },
@@ -1692,6 +1707,7 @@ mod tests {
                     content: None,
                     source_size_bytes: 3,
                     source_modified_unix_ms: None,
+                    source_file_id: None,
                     reason: "trash temp".to_string(),
                     status: ProposalStatus::DestinationExists,
                 },
@@ -1710,6 +1726,13 @@ mod tests {
         assert_eq!(
             submission.items[0].destination_relative_path.as_deref(),
             Some("documents/note.md")
+        );
+        assert_eq!(
+            submission.items[0]
+                .precondition
+                .get("sourceFileId")
+                .and_then(serde_json::Value::as_str),
+            Some("win:v00000001:i0000000000000001")
         );
         assert_eq!(
             submission.items[1].action_type,
