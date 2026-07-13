@@ -321,10 +321,58 @@ paths:
             { schema: { $ref: "#/components/schemas/CreateRuleDraftRequest" } }
       responses:
         "201":
-          description: AI rule draft result or explicit provider unavailable/invalid state
+          description: AI rule draft result persisted for explicit confirmation, or explicit provider unavailable/invalid state
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RuleDraftResult" }
+  /v1/rule-drafts/{draftId}/confirm:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          description: Rule draft materialized into a durable rule exactly once
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfirmRuleDraftResponse" }
+        "409": { description: DRAFT_EXPIRED or IDEMPOTENCY_CONFLICT }
+  /v1/rule-drafts/{draftId}/reject:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          description: Rule draft rejected without creating a rule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RejectRuleDraftResponse" }
   /v1/rules/{ruleId}:
     parameters:
       - {
@@ -2114,18 +2162,73 @@ components:
           properties:
             status: { type: string, enum: [READY] }
             kind: { type: string, enum: [RULE_DRAFT] }
-            draft:
-              type: object
-              additionalProperties: false
-              required: [name, definition, explanation, ambiguities]
-              properties:
-                name: { type: string, minLength: 1, maxLength: 120 }
-                definition: { $ref: "#/components/schemas/RuleDefinition" }
-                explanation: { type: string, minLength: 1, maxLength: 4000 }
-                ambiguities:
-                  type: array
-                  maxItems: 20
-                  items: { type: string, minLength: 1, maxLength: 500 }
+            draft: { $ref: "#/components/schemas/RuleDraftSummary" }
+    RuleSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          name,
+          definition,
+          priority,
+          enabled,
+          version,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        definition: { $ref: "#/components/schemas/RuleDefinition" }
+        priority: { type: integer, minimum: 0, maximum: 10000 }
+        enabled: { type: boolean }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RuleDraftSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          name,
+          definition,
+          explanation,
+          ambiguities,
+          status,
+          expiresAt,
+          ruleId,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        definition: { $ref: "#/components/schemas/RuleDefinition" }
+        explanation: { type: string, minLength: 1, maxLength: 4000 }
+        ambiguities:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 500 }
+        status: { type: string, enum: [DRAFT, REJECTED, EXPIRED, MATERIALIZED] }
+        expiresAt: { type: string, format: date-time }
+        ruleId: { type: [string, "null"], format: uuid }
+    ConfirmRuleDraftResponse:
+      type: object
+      additionalProperties: false
+      required: [draft, rule]
+      properties:
+        draft: { $ref: "#/components/schemas/RuleDraftSummary" }
+        rule: { $ref: "#/components/schemas/RuleSummary" }
+    RejectRuleDraftResponse:
+      type: object
+      additionalProperties: false
+      required: [draft]
+      properties:
+        draft: { $ref: "#/components/schemas/RuleDraftSummary" }
     CreateRoomSnapshot:
       type: object
       additionalProperties: false

@@ -673,6 +673,38 @@ export const commandDrafts = pgTable(
   ],
 );
 
+export const ruleDrafts = pgTable(
+  "rule_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    name: varchar("name", { length: 120 }).notNull(),
+    definition: jsonb("definition").notNull(),
+    explanation: text("explanation").notNull(),
+    ambiguities: jsonb("ambiguities").notNull().default([]),
+    status: varchar("status", { length: 30 }).notNull().default("DRAFT"),
+    ruleId: uuid("rule_id").references(() => rules.id),
+    confirmIdempotencyKey: varchar("confirm_idempotency_key", { length: 128 }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("rule_drafts_room_status_idx").on(t.roomId, t.status),
+    index("rule_drafts_user_status_idx").on(t.createdByUserId, t.status),
+    uniqueIndex("rule_drafts_confirm_key_idx").on(
+      t.createdByUserId,
+      t.confirmIdempotencyKey,
+    ),
+  ],
+);
+
 export const smartCachePolicies = pgTable("smart_cache_policies", {
   roomId: uuid("room_id")
     .primaryKey()

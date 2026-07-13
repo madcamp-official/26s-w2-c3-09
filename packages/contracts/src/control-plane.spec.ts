@@ -22,6 +22,9 @@ import {
   createCommandDraftSchema,
   updateChatSessionSchema,
   createRuleDraftRequestSchema,
+  confirmRuleDraftResponseSchema,
+  rejectRuleDraftResponseSchema,
+  ruleDraftSummarySchema,
   ruleDraftResultSchema,
 } from "./control-plane";
 
@@ -172,6 +175,8 @@ describe("rule draft contracts", () => {
         status: "READY",
         kind: "RULE_DRAFT",
         draft: {
+          id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+          roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a6",
           name: "Old PDFs",
           definition: {
             match: "ALL",
@@ -183,9 +188,54 @@ describe("rule draft contracts", () => {
           },
           explanation: "30일 이상 수정되지 않은 PDF를 보관 폴더로 이동합니다.",
           ambiguities: [],
+          status: "DRAFT",
+          expiresAt: "2026-07-13T10:00:00.000Z",
+          ruleId: null,
         },
       }).status,
     ).toBe("READY");
+  });
+});
+
+describe("rule draft lifecycle response contracts", () => {
+  it("validates rule draft confirm and reject responses", () => {
+    const draft = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a6",
+      name: "Old PDFs",
+      definition: {
+        match: "ALL",
+        conditions: [{ field: "extension", operator: "IN", value: [".pdf"] }],
+        action: { type: "MOVE", destinationTemplate: "Archive/PDF" },
+      },
+      explanation: "Move old PDFs after explicit approval.",
+      ambiguities: [],
+      status: "MATERIALIZED",
+      expiresAt: "2026-07-13T10:00:00.000Z",
+      ruleId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a7",
+    };
+    const rule = {
+      id: draft.ruleId,
+      roomId: draft.roomId,
+      name: draft.name,
+      definition: draft.definition,
+      priority: 100,
+      enabled: true,
+      version: 1,
+      createdAt: "2026-07-13T10:00:00.000Z",
+      updatedAt: "2026-07-13T10:00:00.000Z",
+    };
+
+    expect(ruleDraftSummarySchema.parse(draft)).toEqual(draft);
+    expect(confirmRuleDraftResponseSchema.parse({ draft, rule })).toEqual({
+      draft,
+      rule,
+    });
+    expect(
+      rejectRuleDraftResponseSchema.parse({
+        draft: { ...draft, status: "REJECTED", ruleId: null },
+      }).draft.status,
+    ).toBe("REJECTED");
   });
 });
 

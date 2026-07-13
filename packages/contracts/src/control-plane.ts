@@ -748,6 +748,38 @@ export const chatAiResultSchema = z.union([
   aiProviderNoActionSchema,
   aiProviderCommandDraftSchema,
 ]);
+export const ruleDraftStatusSchema = z.enum([
+  "DRAFT",
+  "REJECTED",
+  "EXPIRED",
+  "MATERIALIZED",
+]);
+export const ruleSummarySchema = z
+  .object({
+    id: uuidSchema,
+    roomId: uuidSchema,
+    name: z.string().trim().min(1).max(120),
+    definition: ruleDefinitionSchema,
+    priority: z.number().int().min(0).max(10000),
+    enabled: z.boolean(),
+    version: z.number().int().positive(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+  })
+  .strict();
+export const ruleDraftSummarySchema = z
+  .object({
+    id: uuidSchema,
+    roomId: uuidSchema,
+    name: z.string().trim().min(1).max(120),
+    definition: ruleDefinitionSchema,
+    explanation: z.string().trim().min(1).max(4000),
+    ambiguities: z.array(z.string().trim().min(1).max(500)).max(20),
+    status: ruleDraftStatusSchema,
+    expiresAt: z.iso.datetime(),
+    ruleId: uuidSchema.nullable(),
+  })
+  .strict();
 export const ruleDraftResultSchema = z.union([
   aiProviderUnavailableSchema,
   aiProviderInvalidSchema,
@@ -755,14 +787,7 @@ export const ruleDraftResultSchema = z.union([
     .object({
       status: z.literal("READY"),
       kind: z.literal("RULE_DRAFT"),
-      draft: z
-        .object({
-          name: z.string().trim().min(1).max(120),
-          definition: ruleDefinitionSchema,
-          explanation: z.string().trim().min(1).max(4000),
-          ambiguities: z.array(z.string().trim().min(1).max(500)).max(20),
-        })
-        .strict(),
+      draft: ruleDraftSummarySchema,
     })
     .strict(),
 ]);
@@ -840,6 +865,19 @@ export const commandDraftSummarySchema = z
   .strict();
 export const confirmCommandDraftSchema = z.object({}).strict();
 export const rejectCommandDraftSchema = z.object({}).strict();
+export const confirmRuleDraftSchema = z.object({}).strict();
+export const rejectRuleDraftSchema = z.object({}).strict();
+export const confirmRuleDraftResponseSchema = z
+  .object({
+    draft: ruleDraftSummarySchema,
+    rule: ruleSummarySchema,
+  })
+  .strict();
+export const rejectRuleDraftResponseSchema = z
+  .object({
+    draft: ruleDraftSummarySchema,
+  })
+  .strict();
 export const updateSmartCachePolicySchema = z
   .object({
     enabled: z.boolean(),
