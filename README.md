@@ -5,6 +5,7 @@
 - Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but it no longer turns that loop into a full `/v1/home/summary` refresh.
 - Realtime Home updates remain item-scoped where payloads are complete: `presence.updated` patches only the affected device, lifecycle events remove only affected devices/rooms, and execution status patches only the affected room.
 - `execution.updated` events now carry `executionId`, `roomId`, and `status` in the payload itself, so mobile reducers can perform targeted result upserts without depending on envelope-only fields.
+- Mobile Room now patches/upserts only the affected execution row for `execution.updated` realtime events and skips the redundant full room reload that follows from the generic revision signal.
 - Desktop background runtime keeps heartbeat at 5 seconds, splits scheduled REST reconciliation into 15-second fast control-plane passes and 30-second heavy file-transfer/smart-cache passes, while Socket.IO wakeups still trigger an immediate full reconcile.
 - Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
 - Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -28,6 +30,59 @@ class _RoomContent {
   final List<Map<String, dynamic>> activity;
   final Map<String, dynamic>? snapshot;
   final bool isOffline;
+
+  _RoomContent copyWith({List<Map<String, dynamic>>? executions}) =>
+      _RoomContent(
+        commands: commands,
+        proposals: proposals,
+        executions: executions ?? this.executions,
+        activity: activity,
+        snapshot: snapshot,
+        isOffline: isOffline,
+      );
+}
+
+List<Map<String, dynamic>> patchExecutionItemsForRealtimeUpdate({
+  required List<Map<String, dynamic>> executions,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  if (update.kind != RealtimeHomeUpdateKind.executionStatus ||
+      update.roomId != roomId ||
+      update.executionId == null ||
+      update.executionStatus == null) {
+    return executions;
+  }
+  final executionId = update.executionId!;
+  final status = update.executionStatus!;
+  var changed = false;
+  var matched = false;
+  final next = executions
+      .map((item) {
+        final rawExecution = item['execution'];
+        if (rawExecution is! Map || rawExecution['id'] != executionId) {
+          return item;
+        }
+        matched = true;
+        if (rawExecution['status'] == status) return item;
+        changed = true;
+        return {
+          ...item,
+          'execution': {
+            ...Map<String, dynamic>.from(rawExecution),
+            'status': status,
+          },
+        };
+      })
+      .toList(growable: true);
+  if (matched) return changed ? List.unmodifiable(next) : executions;
+  return List.unmodifiable([
+    {
+      'execution': {'id': executionId, 'status': status},
+      'proposal': null,
+    },
+    ...executions,
+  ]);
 }
 
 class RoomPage extends ConsumerStatefulWidget {
@@ -39,6 +94,8 @@ class RoomPage extends ConsumerStatefulWidget {
 
 class _RoomPageState extends ConsumerState<RoomPage> {
   late Future<_RoomContent> _content;
+  _RoomContent? _latestContent;
+  bool _suppressNextRealtimeRevisionReload = false;
   bool _submitting = false;
   @override
   void initState() {
@@ -109,7 +166,30 @@ class _RoomPageState extends ConsumerState<RoomPage> {
   }
 
   void _reload() {
-    _content = _load();
+    _content = _load().then((content) {
+      if (mounted) _latestContent = content;
+      return content;
+    });
+  }
+
+  bool _applyRealtimeUpdate(RealtimeHomeUpdate update) {
+    final current = _latestContent;
+    if (current == null) return false;
+    final roomId = widget.room['id'] as String;
+    final executions = patchExecutionItemsForRealtimeUpdate(
+      executions: current.executions,
+      update: update,
+      roomId: roomId,
+    );
+    if (identical(executions, current.executions)) return false;
+    final patched = current.copyWith(executions: executions);
+    _latestContent = patched;
+    _content = Future.value(patched);
+    unawaited(
+      ref.read(displayCacheProvider).replaceExecutions(roomId, executions),
+    );
+    setState(() {});
+    return true;
   }
 
   Future<void> _createCommand() async {
@@ -179,8 +259,19 @@ class _RoomPageState extends ConsumerState<RoomPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(realtimeHomeUpdateProvider, (previous, next) {
+      if (next == null || identical(previous, next) || !mounted) return;
+      if (_applyRealtimeUpdate(next)) {
+        _suppressNextRealtimeRevisionReload = true;
+      }
+    });
     ref.listen(realtimeRevisionProvider, (previous, next) {
-      if (previous != null && mounted) setState(_reload);
+      if (previous == null || !mounted) return;
+      if (_suppressNextRealtimeRevisionReload) {
+        _suppressNextRealtimeRevisionReload = false;
+        return;
+      }
+      setState(_reload);
     });
     final roomId = widget.room['id'] as String;
     ref.listen(connectionGateControllerProvider, (previous, next) {
