@@ -7,7 +7,11 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { createRuleSchema, updateRuleSchema } from '@mousekeeper/contracts';
+import {
+  createRuleDraftRequestSchema,
+  createRuleSchema,
+  updateRuleSchema,
+} from '@mousekeeper/contracts';
 import { z } from 'zod';
 import { CurrentPrincipal } from '../auth/auth-principal';
 import type { AuthPrincipal } from '../auth/auth-principal';
@@ -36,6 +40,16 @@ export class RulesController {
     body: z.infer<typeof createRuleSchema>,
   ) {
     return this.rules.create(principal.userId, roomId, body);
+  }
+
+  @Post('rooms/:roomId/rule-drafts')
+  createDraft(
+    @CurrentPrincipal() principal: AuthPrincipal,
+    @Param('roomId') roomId: string,
+    @Body(new ZodValidationPipe(createRuleDraftRequestSchema))
+    body: z.infer<typeof createRuleDraftRequestSchema>,
+  ) {
+    return this.rules.createDraft(principal.userId, roomId, body);
   }
 
   @Patch('rules/:ruleId')

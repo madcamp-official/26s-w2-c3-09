@@ -21,6 +21,8 @@ import {
   createChatSessionSchema,
   createCommandDraftSchema,
   updateChatSessionSchema,
+  createRuleDraftRequestSchema,
+  ruleDraftResultSchema,
 } from "./control-plane";
 
 declare function require(path: string): unknown;
@@ -143,6 +145,47 @@ describe("rule contracts", () => {
         priority: 1,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("rule draft contracts", () => {
+  it("validates natural-language rule draft requests and explicit provider states", () => {
+    expect(
+      createRuleDraftRequestSchema.parse({
+        instruction: "오래된 PDF는 Archive로 보내줘",
+      }),
+    ).toEqual({ instruction: "오래된 PDF는 Archive로 보내줘" });
+    expect(
+      createRuleDraftRequestSchema.safeParse({ instruction: "" }).success,
+    ).toBe(false);
+    expect(
+      ruleDraftResultSchema.parse({
+        status: "UNCONFIGURED",
+        code: "AI_PROVIDER_UNCONFIGURED",
+      }),
+    ).toEqual({
+      status: "UNCONFIGURED",
+      code: "AI_PROVIDER_UNCONFIGURED",
+    });
+    expect(
+      ruleDraftResultSchema.parse({
+        status: "READY",
+        kind: "RULE_DRAFT",
+        draft: {
+          name: "Old PDFs",
+          definition: {
+            match: "ALL",
+            conditions: [
+              { field: "modifiedAgeDays", operator: "GTE", value: 30 },
+              { field: "extension", operator: "IN", value: [".pdf"] },
+            ],
+            action: { type: "MOVE", destinationTemplate: "Archive/PDF" },
+          },
+          explanation: "30일 이상 수정되지 않은 PDF를 보관 폴더로 이동합니다.",
+          ambiguities: [],
+        },
+      }).status,
+    ).toBe("READY");
   });
 });
 

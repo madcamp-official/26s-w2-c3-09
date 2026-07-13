@@ -15,6 +15,7 @@ import type {
   AiProvider,
   AiProviderResult,
   ChatContext,
+  RuleDraftResult,
   RuleTranslationContext,
 } from '../ai/ai.provider';
 import { UnconfiguredAiProvider } from '../ai/unconfigured-ai.provider';
@@ -379,7 +380,10 @@ class ScriptedAiProvider implements AiProvider {
 
   async translateRule(
     _input: RuleTranslationContext,
-  ): Promise<AiProviderResult> {
-    return this.result;
+  ): Promise<RuleDraftResult> {
+    return {
+      status: 'UNCONFIGURED',
+      code: 'AI_PROVIDER_UNCONFIGURED',
+    };
   }
 }

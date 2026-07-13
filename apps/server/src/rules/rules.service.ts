@@ -4,10 +4,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { createRuleSchema, updateRuleSchema } from '@mousekeeper/contracts';
+import {
+  createRuleDraftRequestSchema,
+  createRuleSchema,
+  updateRuleSchema,
+} from '@mousekeeper/contracts';
 import { rooms, rules, type Database } from '@mousekeeper/database';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { AI_PROVIDER, type AiProvider } from '../ai/ai.provider';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
 
@@ -16,6 +21,7 @@ export class RulesService {
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly sync: SyncService,
+    @Inject(AI_PROVIDER) private readonly ai: AiProvider,
   ) {}
 
   private async ownedRoom(userId: string, roomId: string) {
@@ -73,6 +79,19 @@ export class RulesService {
         payload: { ruleId: created.id, version: created.version },
       });
       return created;
+    });
+  }
+
+  async createDraft(
+    userId: string,
+    roomId: string,
+    body: z.infer<typeof createRuleDraftRequestSchema>,
+  ) {
+    await this.ownedRoom(userId, roomId);
+    return this.ai.translateRule({
+      userId,
+      roomId,
+      instruction: body.instruction,
     });
   }
 

@@ -213,6 +213,12 @@ export const updateRuleSchema = z
     "At least one rule field must be updated",
   );
 
+export const createRuleDraftRequestSchema = z
+  .object({
+    instruction: z.string().trim().min(1).max(2000),
+  })
+  .strict();
+
 export const roomSnapshotMetricsSchema = z
   .object({
     totalFileCount: z.number().int().nonnegative(),
@@ -741,6 +747,24 @@ export const chatAiResultSchema = z.union([
   aiProviderInvalidSchema,
   aiProviderNoActionSchema,
   aiProviderCommandDraftSchema,
+]);
+export const ruleDraftResultSchema = z.union([
+  aiProviderUnavailableSchema,
+  aiProviderInvalidSchema,
+  z
+    .object({
+      status: z.literal("READY"),
+      kind: z.literal("RULE_DRAFT"),
+      draft: z
+        .object({
+          name: z.string().trim().min(1).max(120),
+          definition: ruleDefinitionSchema,
+          explanation: z.string().trim().min(1).max(4000),
+          ambiguities: z.array(z.string().trim().min(1).max(500)).max(20),
+        })
+        .strict(),
+    })
+    .strict(),
 ]);
 export const createChatMessageResponseSchema = z
   .object({

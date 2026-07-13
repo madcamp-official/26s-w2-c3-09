@@ -305,6 +305,26 @@ paths:
             { schema: { $ref: "#/components/schemas/CreateRule" } }
       responses:
         "201": { description: Versioned deterministic rule }
+  /v1/rooms/{roomId}/rule-drafts:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateRuleDraftRequest" } }
+      responses:
+        "201":
+          description: AI rule draft result or explicit provider unavailable/invalid state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuleDraftResult" }
   /v1/rules/{ruleId}:
     parameters:
       - {
@@ -2078,6 +2098,34 @@ components:
         definition: { $ref: "#/components/schemas/RuleDefinition" }
         priority: { type: integer, minimum: 0, maximum: 10000 }
         enabled: { type: boolean }
+    CreateRuleDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [instruction]
+      properties:
+        instruction: { type: string, minLength: 1, maxLength: 2000 }
+    RuleDraftResult:
+      oneOf:
+        - { $ref: "#/components/schemas/AiProviderUnavailable" }
+        - { $ref: "#/components/schemas/AiProviderInvalid" }
+        - type: object
+          additionalProperties: false
+          required: [status, kind, draft]
+          properties:
+            status: { type: string, enum: [READY] }
+            kind: { type: string, enum: [RULE_DRAFT] }
+            draft:
+              type: object
+              additionalProperties: false
+              required: [name, definition, explanation, ambiguities]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                definition: { $ref: "#/components/schemas/RuleDefinition" }
+                explanation: { type: string, minLength: 1, maxLength: 4000 }
+                ambiguities:
+                  type: array
+                  maxItems: 20
+                  items: { type: string, minLength: 1, maxLength: 500 }
     CreateRoomSnapshot:
       type: object
       additionalProperties: false

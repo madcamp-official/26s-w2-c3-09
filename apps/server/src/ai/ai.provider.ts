@@ -1,4 +1,7 @@
-import type { createCommandSchema } from '@mousekeeper/contracts';
+import type {
+  createCommandSchema,
+  ruleDefinitionSchema,
+} from '@mousekeeper/contracts';
 import type { z } from 'zod';
 
 export const AI_PROVIDER = Symbol('AI_PROVIDER');
@@ -48,7 +51,21 @@ export type AiProviderResult =
   | AiNoActionResult
   | AiCommandDraftResult;
 
+export type AiRuleDraftResult = {
+  status: 'READY';
+  kind: 'RULE_DRAFT';
+  draft: {
+    name: string;
+    definition: z.infer<typeof ruleDefinitionSchema>;
+    explanation: string;
+    ambiguities: string[];
+  };
+};
+
+export type RuleDraftResult =
+  AiUnavailableResult | AiInvalidResult | AiRuleDraftResult;
+
 export interface AiProvider {
   classifyAndRespond(input: ChatContext): Promise<AiProviderResult>;
-  translateRule(input: RuleTranslationContext): Promise<AiProviderResult>;
+  translateRule(input: RuleTranslationContext): Promise<RuleDraftResult>;
 }
