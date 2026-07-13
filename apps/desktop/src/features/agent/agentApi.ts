@@ -173,6 +173,16 @@ export type FileTransferProcessingReport = {
   results: FileTransferProcessingResult[];
 };
 
+export type SmartCacheProcessingReport = {
+  inspected_count: number;
+  submitted_count: number;
+  approved_count: number;
+  uploaded_count: number;
+  failed_count: number;
+  skipped_count: number;
+  message: string | null;
+};
+
 export type SyncEvent = {
   event_id: string;
   event_type: string;
@@ -239,6 +249,13 @@ export function processAgentFileBrowseRequests() {
 
 export function processAgentFileTransfers() {
   return invokeAgentCommand<FileTransferProcessingReport>("process_agent_file_transfers");
+}
+
+export function processSmartCacheForRoom(roomId: string, limit = 25) {
+  return invokeAgentCommand<SmartCacheProcessingReport>("process_smart_cache_for_room", {
+    roomId,
+    limit
+  });
 }
 
 export function flushAgentOutbox() {

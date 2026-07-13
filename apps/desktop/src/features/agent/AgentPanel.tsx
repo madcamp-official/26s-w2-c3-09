@@ -19,6 +19,7 @@ import {
   processAgentDecisions,
   processAgentFileBrowseRequests,
   processAgentFileTransfers,
+  processSmartCacheForRoom,
   flushAgentOutbox,
   pollAgentCommands,
   pollAgentPairing,
@@ -43,6 +44,7 @@ export function AgentPanel() {
   const [deviceName, setDeviceName] = useState("HouseMouse Desktop");
   const [pairing, setPairing] = useState<PairingSession | null>(null);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
+  const [smartCacheRoomId, setSmartCacheRoomId] = useState("");
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
@@ -278,6 +280,24 @@ export function AgentPanel() {
     }
   }
 
+  async function processSmartCacheNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await processSmartCacheForRoom(smartCacheRoomId.trim());
+      setLastProcessedSummary(
+        `smart cache: ${report.uploaded_count} uploaded, ${report.approved_count} approved, ${report.failed_count} failed, ${report.skipped_count} skipped of ${report.inspected_count}${report.message ? ` (${report.message})` : ""}`
+      );
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function flushOutboxNow() {
     setBusy(true);
     setError(null);
@@ -376,6 +396,15 @@ export function AgentPanel() {
           </button>
           <button disabled={busy} onClick={() => void processFileTransfersNow()}>
             Process file transfers
+          </button>
+          <input
+            aria-label="Smart cache room id"
+            placeholder="Room id for smart cache"
+            value={smartCacheRoomId}
+            onChange={(event) => setSmartCacheRoomId(event.target.value)}
+          />
+          <button disabled={busy || !smartCacheRoomId.trim()} onClick={() => void processSmartCacheNow()}>
+            Process smart cache
           </button>
           <button disabled={busy} onClick={() => void flushOutboxNow()}>
             Flush outbox

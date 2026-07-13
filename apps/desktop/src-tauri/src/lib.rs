@@ -7,6 +7,7 @@ pub mod file_browse_processor;
 pub mod file_transfer_processor;
 pub mod outbox_processor;
 pub mod overlay;
+pub mod smart_cache_processor;
 pub mod storage;
 #[cfg(feature = "tauri-commands")]
 pub mod tray;
@@ -149,6 +150,7 @@ pub fn run() {
             commands::smart_cache::record_smart_cache_usage_event,
             commands::smart_cache::update_smart_cache_file_preference,
             commands::smart_cache::list_smart_cache_candidates,
+            commands::smart_cache::process_smart_cache_for_room,
             commands::watcher::start_watching_root,
             commands::watcher::stop_watching_root,
             commands::watcher::is_watching_root,

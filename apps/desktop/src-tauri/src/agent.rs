@@ -190,6 +190,58 @@ pub enum AgentFileTransferFailureCode {
     ChecksumMismatch,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCachePolicy {
+    pub room_id: String,
+    pub enabled: bool,
+    pub quota_bytes: u64,
+    pub max_file_bytes: u64,
+    pub excluded_patterns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheCandidate {
+    pub source_relative_path: String,
+    pub source_version: Value,
+    pub source_version_hash: String,
+    pub size_bytes: u64,
+    pub usage_score: i64,
+    pub manual_pin: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheReservation {
+    pub reservation_id: String,
+    pub status: String,
+    pub source_relative_path: String,
+    pub source_version_hash: String,
+    pub size_bytes: u64,
+    pub upload_url: Option<String>,
+    pub expires_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheCandidateBatchResult {
+    pub batch_id: String,
+    pub approved: Vec<AgentSmartCacheReservation>,
+    pub rejected_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCachedFile {
+    pub cached_file_id: String,
+    pub source_relative_path: String,
+    pub source_version_hash: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub freshness_status: String,
+}
+
 /// Connection parameters for the realtime Socket.IO client. Intentionally not `Serialize`: the
 /// device token must never leave the process through a Tauri command or a serialized log line.
 pub struct RealtimeCredentials {
@@ -949,6 +1001,117 @@ impl AgentRuntime {
         result
     }
 
+    pub async fn smart_cache_policy(
+        &self,
+        room_id: String,
+    ) -> Result<AgentSmartCachePolicy, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<SmartCachePolicyResponse>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/smart-cache-policy"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|response| validate_smart_cache_policy(&room_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn submit_smart_cache_candidates(
+        &self,
+        idempotency_key: String,
+        room_id: String,
+        candidates: Vec<AgentSmartCacheCandidate>,
+    ) -> Result<AgentSmartCacheCandidateBatchResult, AgentError> {
+        validate_opaque_value(
+            "smart cache candidate idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        validate_opaque_value("room id", &room_id, 200)?;
+        if candidates.is_empty() || candidates.len() > 200 {
+            return Err(validation_error(
+                "smart cache candidate batch must contain between 1 and 200 candidates",
+            ));
+        }
+        for candidate in &candidates {
+            validate_relative_path("smart cache source path", &candidate.source_relative_path)?;
+            validate_sha256(&candidate.source_version_hash)?;
+            if candidate.size_bytes == 0 {
+                return Err(validation_error(
+                    "smart cache candidate sizeBytes must be positive",
+                ));
+            }
+        }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<SmartCacheCandidateBatchResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/agent/cache-candidates"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({ "roomId": room_id, "candidates": candidates })),
+            )
+            .await
+            .and_then(validate_smart_cache_candidate_batch);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn complete_smart_cache_upload(
+        &self,
+        reservation_id: String,
+        idempotency_key: String,
+        size_bytes: u64,
+        sha256: String,
+        usage_score: i64,
+        manual_pin: bool,
+    ) -> Result<AgentCachedFile, AgentError> {
+        validate_opaque_value("smart cache reservation id", &reservation_id, 200)?;
+        validate_opaque_value(
+            "smart cache completion idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        if size_bytes == 0 {
+            return Err(validation_error(
+                "completed smart cache upload sizeBytes must be positive",
+            ));
+        }
+        validate_sha256(&sha256)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<CachedFileResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/cache-uploads/{reservation_id}/complete"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({
+                        "sizeBytes": size_bytes,
+                        "sha256": sha256,
+                        "usageScore": usage_score,
+                        "manualPin": manual_pin,
+                    })),
+            )
+            .await
+            .and_then(validate_cached_file_response);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     /// Claims an approved decision for local execution. Uses the decision id as the
     /// idempotency key so a retry after a crash or network failure cannot create a second
     /// execution for the same approval.
@@ -1300,6 +1463,47 @@ struct FileTransferUploadTargetResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SmartCachePolicyResponse {
+    room_id: String,
+    enabled: bool,
+    quota_bytes: u64,
+    max_file_bytes: u64,
+    excluded_patterns: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheReservationResponse {
+    reservation_id: String,
+    status: String,
+    source_relative_path: String,
+    source_version_hash: String,
+    size_bytes: u64,
+    upload_url: Option<String>,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheCandidateBatchResponse {
+    batch_id: String,
+    approved: Vec<SmartCacheReservationResponse>,
+    rejected_count: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedFileResponse {
+    id: String,
+    source_relative_path: String,
+    source_version_hash: String,
+    size_bytes: u64,
+    sha256: String,
+    freshness_status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExecutionResponse {
     id: String,
     status: String,
@@ -1630,6 +1834,116 @@ fn validate_upload_target_response(
     })
 }
 
+fn validate_smart_cache_policy(
+    expected_room_id: &str,
+    response: SmartCachePolicyResponse,
+) -> Result<AgentSmartCachePolicy, AgentError> {
+    if response.room_id != expected_room_id
+        || response.quota_bytes == 0
+        || response.max_file_bytes == 0
+        || response.max_file_bytes > response.quota_bytes
+    {
+        return Err(invalid_response_error(
+            "smart cache policy failed response validation",
+        ));
+    }
+    Ok(AgentSmartCachePolicy {
+        room_id: response.room_id,
+        enabled: response.enabled,
+        quota_bytes: response.quota_bytes,
+        max_file_bytes: response.max_file_bytes,
+        excluded_patterns: response.excluded_patterns,
+    })
+}
+
+fn validate_smart_cache_candidate_batch(
+    response: SmartCacheCandidateBatchResponse,
+) -> Result<AgentSmartCacheCandidateBatchResult, AgentError> {
+    if response.batch_id.is_empty() {
+        return Err(invalid_response_error(
+            "smart cache candidate batch omitted batch id",
+        ));
+    }
+    let approved = response
+        .approved
+        .into_iter()
+        .map(validate_smart_cache_reservation)
+        .collect::<Result<Vec<_>, AgentError>>()?;
+    Ok(AgentSmartCacheCandidateBatchResult {
+        batch_id: response.batch_id,
+        approved,
+        rejected_count: response.rejected_count,
+    })
+}
+
+fn validate_smart_cache_reservation(
+    response: SmartCacheReservationResponse,
+) -> Result<AgentSmartCacheReservation, AgentError> {
+    validate_relative_path(
+        "smart cache reservation path",
+        &response.source_relative_path,
+    )?;
+    validate_sha256(&response.source_version_hash)?;
+    if response.reservation_id.is_empty()
+        || response.expires_at.is_empty()
+        || response.size_bytes == 0
+        || !matches!(response.status.as_str(), "RESERVED" | "COMPLETED")
+    {
+        return Err(invalid_response_error(
+            "smart cache reservation failed response validation",
+        ));
+    }
+    if response.status == "RESERVED" {
+        let upload_url = response
+            .upload_url
+            .as_ref()
+            .ok_or_else(|| invalid_response_error("smart cache reservation omitted upload URL"))?;
+        let url = Url::parse(upload_url)
+            .map_err(|_| invalid_response_error("smart cache upload URL is invalid"))?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(invalid_response_error(
+                "smart cache upload target must be an http(s) URL",
+            ));
+        }
+    }
+    Ok(AgentSmartCacheReservation {
+        reservation_id: response.reservation_id,
+        status: response.status,
+        source_relative_path: response.source_relative_path,
+        source_version_hash: response.source_version_hash,
+        size_bytes: response.size_bytes,
+        upload_url: response.upload_url,
+        expires_at: response.expires_at,
+    })
+}
+
+fn validate_cached_file_response(
+    response: CachedFileResponse,
+) -> Result<AgentCachedFile, AgentError> {
+    validate_relative_path("cached file path", &response.source_relative_path)?;
+    validate_sha256(&response.source_version_hash)?;
+    validate_sha256(&response.sha256)?;
+    if response.id.is_empty()
+        || response.size_bytes == 0
+        || !matches!(
+            response.freshness_status.as_str(),
+            "VERIFIED_CURRENT" | "UNVERIFIED_OFFLINE" | "STALE"
+        )
+    {
+        return Err(invalid_response_error(
+            "cached file failed response validation",
+        ));
+    }
+    Ok(AgentCachedFile {
+        cached_file_id: response.id,
+        source_relative_path: response.source_relative_path,
+        source_version_hash: response.source_version_hash,
+        size_bytes: response.size_bytes,
+        sha256: response.sha256,
+        freshness_status: response.freshness_status,
+    })
+}
+
 fn validate_source_version(version: &AgentFileTransferSourceVersion) -> Result<(), AgentError> {
     if version.file_id.is_empty()
         || version.file_id.len() > 512
@@ -1639,6 +1953,24 @@ fn validate_source_version(version: &AgentFileTransferSourceVersion) -> Result<(
         return Err(validation_error(
             "file transfer sourceVersion failed validation",
         ));
+    }
+    Ok(())
+}
+
+fn validate_relative_path(label: &str, path: &str) -> Result<(), AgentError> {
+    if path.is_empty()
+        || path.len() > 1024
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains('\0')
+        || path.contains(':')
+        || path
+            .split(['/', '\\'])
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(validation_error(&format!(
+            "{label} must be a managed-root-relative path"
+        )));
     }
     Ok(())
 }

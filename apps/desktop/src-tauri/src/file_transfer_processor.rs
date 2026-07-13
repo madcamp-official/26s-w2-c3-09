@@ -419,12 +419,12 @@ pub fn validate_local_transfer_source(
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct TransferUploadPayload {
-    size_bytes: u64,
-    sha256: String,
+pub(crate) struct TransferUploadPayload {
+    pub(crate) size_bytes: u64,
+    pub(crate) sha256: String,
 }
 
-fn hash_source_payload(
+pub(crate) fn hash_source_payload(
     source: &ValidatedTransferSource,
 ) -> Result<TransferUploadPayload, TransferUploadExecutionError> {
     let mut file =
@@ -469,7 +469,11 @@ fn hash_source_payload(
     })
 }
 
-async fn put_upload_file(upload_url: &str, path: &PathBuf, size_bytes: u64) -> Result<(), String> {
+pub(crate) async fn put_upload_file(
+    upload_url: &str,
+    path: &PathBuf,
+    size_bytes: u64,
+) -> Result<(), String> {
     let file = tokio::fs::File::open(path)
         .await
         .map_err(|error| format!("cannot open source file stream for upload: {error}"))?;
