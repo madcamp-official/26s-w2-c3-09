@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod auto_cleanup_processor;
+pub mod auto_proposal;
 pub mod background;
 pub mod cleanliness;
 pub mod command_processor;
@@ -120,6 +122,7 @@ pub fn run() {
             commands::file_engine::register_managed_root,
             commands::file_engine::list_managed_roots,
             commands::file_engine::update_managed_root_state,
+            commands::file_engine::unregister_managed_root,
             commands::file_engine::prepare_demo_root,
             commands::file_engine::analyze_root,
             commands::file_engine::browse_root_tree,
@@ -158,7 +161,6 @@ pub fn run() {
             commands::agent::preflight_agent_room_disconnect,
             commands::agent::disconnect_agent_room,
             commands::agent::revoke_agent_device,
-            commands::agent::forget_agent_device,
             commands::overlay::get_overlay_status,
             commands::overlay::emit_character_event,
             commands::overlay::show_overlay,

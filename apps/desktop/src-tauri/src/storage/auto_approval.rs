@@ -119,6 +119,42 @@ impl AutoApprovalStore {
         Ok(updated)
     }
 
+    /// Drops the auto-approval policy for a root from memory and disk. Called when a folder is
+    /// unregistered so a later folder with the same generated id cannot inherit a stale policy.
+    pub fn remove(&self, root_id: &str) -> Result<bool, String> {
+        let removed = {
+            let mut policies = self
+                .policies
+                .lock()
+                .map_err(|_| "auto approval store lock poisoned".to_string())?;
+            policies.remove(root_id).is_some()
+        };
+
+        self.delete_persisted(root_id)?;
+        Ok(removed)
+    }
+
+    fn delete_persisted(&self, root_id: &str) -> Result<(), String> {
+        let pool = self
+            .pool
+            .lock()
+            .map_err(|_| "auto approval pool lock poisoned".to_string())?
+            .clone();
+        let Some(pool) = pool else {
+            return Ok(());
+        };
+
+        let root_id = root_id.to_string();
+        block_on(async move {
+            sqlx::query("DELETE FROM auto_approval_policies WHERE root_id = ?1")
+                .bind(root_id)
+                .execute(&pool)
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("cannot delete auto approval policy: {error}"))
+        })
+    }
+
     fn persist(&self, policy: &AutoApprovalPolicyRecord) -> Result<(), String> {
         let pool = self
             .pool

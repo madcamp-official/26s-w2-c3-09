@@ -11,6 +11,8 @@ use tokio::time::{interval, Duration};
 
 #[cfg(feature = "tauri-commands")]
 const BACKGROUND_TICK_SECONDS: u64 = 5;
+#[cfg(feature = "tauri-commands")]
+const AUTO_CLEANUP_INTERVAL_MS: i64 = 15 * 1000;
 /// Delay before retrying the realtime Socket.IO connection after a failed initial connect. The
 /// REST background loop keeps working the whole time, so this only affects push responsiveness.
 #[cfg(feature = "tauri-commands")]
@@ -61,6 +63,12 @@ pub struct BackgroundRuntimeStatus {
     pub last_smart_cache_candidate_count: usize,
     pub last_smart_cache_uploaded_count: usize,
     pub last_smart_cache_failed_count: usize,
+    pub last_auto_cleanup_unix_ms: Option<i64>,
+    pub last_auto_cleanup_root_count: usize,
+    pub last_auto_cleanup_approved_count: usize,
+    pub last_auto_cleanup_executed_count: usize,
+    pub last_auto_cleanup_failed_count: usize,
+    pub last_auto_submitted_proposal_count: usize,
     pub last_outbox_flush_unix_ms: Option<i64>,
     pub last_outbox_sent_count: usize,
     pub last_outbox_failed_count: usize,
@@ -120,6 +128,12 @@ impl Default for BackgroundRuntime {
                 last_smart_cache_candidate_count: 0,
                 last_smart_cache_uploaded_count: 0,
                 last_smart_cache_failed_count: 0,
+                last_auto_cleanup_unix_ms: None,
+                last_auto_cleanup_root_count: 0,
+                last_auto_cleanup_approved_count: 0,
+                last_auto_cleanup_executed_count: 0,
+                last_auto_cleanup_failed_count: 0,
+                last_auto_submitted_proposal_count: 0,
                 last_outbox_flush_unix_ms: None,
                 last_outbox_sent_count: 0,
                 last_outbox_failed_count: 0,
@@ -146,16 +160,11 @@ impl BackgroundRuntime {
         let agent_status = app
             .state::<crate::agent::AgentRuntime>()
             .connection_status();
-        if agent_status.device_id.is_none() {
-            let reason = if matches!(
-                agent_status.state,
-                crate::agent::AgentConnectionState::Revoked
-            ) {
-                DEVICE_REVOKED_REASON
-            } else {
-                "desktop device pairing is required"
-            };
-            return self.start_suspended(reason);
+        if matches!(
+            agent_status.state,
+            crate::agent::AgentConnectionState::Revoked
+        ) {
+            return self.start_suspended(DEVICE_REVOKED_REASON);
         }
 
         {
@@ -388,6 +397,7 @@ async fn run_background_tick(
     let agent = app.state::<crate::agent::AgentRuntime>();
     let sync_store = app.state::<crate::storage::agent_sync::AgentSyncStore>();
     let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
+    let auto_approval = app.state::<crate::storage::auto_approval::AutoApprovalStore>();
     let outbox = app.state::<crate::storage::outbox::OutboxStore>();
     let smart_cache = app.state::<crate::storage::smart_cache::SmartCacheStore>();
     let watchers = app.state::<crate::storage::watchers::WatcherStore>();
@@ -452,10 +462,84 @@ async fn run_background_tick(
                 mark_suspended(status, DEVICE_REVOKED_REASON);
                 return BackgroundTickOutcome::Stop;
             }
-            Err(error) => update_status(status, |status| {
-                status.last_error_message = Some(error);
-            }),
+            Err(error) => {
+                update_status(status, |status| {
+                    status.last_error_message = Some(error);
+                });
+                // Replay establishes the durable room/device authority used by every autonomous
+                // action below. Fail closed for this tick so a missed room.removed event cannot be
+                // followed by a stale proposal or file operation.
+                emit_overlay_activity(
+                    app,
+                    crate::overlay::OverlayActivity {
+                        had_error: true,
+                        ..crate::overlay::OverlayActivity::default()
+                    },
+                );
+                return BackgroundTickOutcome::Continue;
+            }
         }
+        if stop_if_agent_revoked(app, status, &agent) {
+            return BackgroundTickOutcome::Stop;
+        }
+    }
+
+    // Background proposals are computed only after heartbeat and replay have confirmed that this
+    // desktop still owns an active server connection.
+    let mut pending_auto_cleanup = None;
+    if should_run_auto_cleanup(status) {
+        match crate::auto_cleanup_processor::process_auto_cleanup(&roots, &auto_approval) {
+            Ok(report) => {
+                for proposal in &report.proposals {
+                    let _ = app.emit(
+                        crate::auto_cleanup_processor::AUTO_CLEANUP_PROPOSAL_EVENT,
+                        proposal,
+                    );
+                }
+                activity.executed_item_count += report.executed_count;
+                if report.failed_count > 0 {
+                    activity.had_error = true;
+                }
+                update_status(status, |status| {
+                    status.state = BackgroundRuntimeState::Running;
+                    status.last_auto_cleanup_unix_ms = Some(unix_ms());
+                    status.last_auto_cleanup_root_count = report.proposed_root_count;
+                    status.last_auto_cleanup_approved_count = report.approved_count;
+                    status.last_auto_cleanup_executed_count = report.executed_count;
+                    status.last_auto_cleanup_failed_count = report.failed_count;
+                    if report.failed_count > 0 {
+                        status.last_error_message = Some(format!(
+                            "{} auto cleanup root(s) failed",
+                            report.failed_count
+                        ));
+                    }
+                });
+                pending_auto_cleanup = Some(report);
+            }
+            Err(error) => {
+                activity.had_error = true;
+                update_status(status, |status| {
+                    status.state = BackgroundRuntimeState::Running;
+                    status.last_auto_cleanup_unix_ms = Some(unix_ms());
+                    status.last_error_message = Some(error);
+                });
+            }
+        }
+    }
+
+    // Now that the heartbeat proved we are online, push this pass's autonomous cleanup proposals to
+    // the server so they surface on mobile as pending approvals. Deliberately best-effort: a
+    // failure here is counted but never stops the tick.
+    if let Some(cleanup) = pending_auto_cleanup {
+        let auto =
+            crate::auto_proposal::submit_autonomous_proposals(&agent, &roots, &cleanup).await;
+        activity.submitted_proposal_count += auto.submitted_count;
+        if auto.failed_count > 0 {
+            activity.had_error = true;
+        }
+        update_status(status, |status| {
+            status.last_auto_submitted_proposal_count = auto.submitted_count;
+        });
         if stop_if_agent_revoked(app, status, &agent) {
             return BackgroundTickOutcome::Stop;
         }
@@ -642,6 +726,20 @@ async fn run_background_tick(
     // overlay window is open it is silently skipped.
     emit_overlay_activity(app, activity);
     BackgroundTickOutcome::Continue
+}
+
+#[cfg(feature = "tauri-commands")]
+fn should_run_auto_cleanup(status: &Arc<Mutex<BackgroundRuntimeStatus>>) -> bool {
+    let now = unix_ms();
+    status
+        .lock()
+        .map(|status| {
+            status
+                .last_auto_cleanup_unix_ms
+                .map(|last| now.saturating_sub(last) >= AUTO_CLEANUP_INTERVAL_MS)
+                .unwrap_or(true)
+        })
+        .unwrap_or(false)
 }
 
 /// Emits the derived character state to the overlay window, if one is open. The overlay bridge is

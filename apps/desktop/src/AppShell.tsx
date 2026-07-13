@@ -52,8 +52,9 @@ export function AppShell() {
   return (
     <main className="app-shell">
       <div className="app-shell-toolbar">
+        <strong className="app-title">MOUSEKEEPER</strong>
         <button type="button" onClick={() => void openOverlay()}>
-          Open character overlay
+          캐릭터 오버레이 열기
         </button>
         {overlayError ? <span className="error-text">{overlayError}</span> : null}
       </div>

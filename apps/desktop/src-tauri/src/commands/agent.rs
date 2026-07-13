@@ -599,7 +599,7 @@ pub async fn disconnect_agent_room(
     .await
 }
 
-async fn disconnect_agent_room_impl(
+pub(crate) async fn disconnect_agent_room_impl(
     root_id: String,
     idempotency_key: String,
     acknowledge_undoable: bool,
@@ -765,35 +765,6 @@ pub async fn revoke_agent_device(
         .await
         .map_err(|error| error.to_string())?;
     apply_local_device_revoked(runtime, sync_store, roots, watchers).await
-}
-
-#[cfg(feature = "tauri-commands")]
-#[tauri::command]
-pub async fn forget_agent_device(
-    runtime: tauri::State<'_, AgentRuntime>,
-    sync_store: tauri::State<'_, AgentSyncStore>,
-) -> Result<AgentConnectionStatus, String> {
-    forget_agent_device_impl(&runtime, &sync_store).await
-}
-
-#[cfg(not(feature = "tauri-commands"))]
-pub async fn forget_agent_device(
-    runtime: &AgentRuntime,
-    sync_store: &AgentSyncStore,
-) -> Result<AgentConnectionStatus, String> {
-    forget_agent_device_impl(runtime, sync_store).await
-}
-
-async fn forget_agent_device_impl(
-    runtime: &AgentRuntime,
-    sync_store: &AgentSyncStore,
-) -> Result<AgentConnectionStatus, String> {
-    let device_id = runtime.connection_status().device_id;
-    let status = runtime.forget_device().map_err(|error| error.to_string())?;
-    if let Some(device_id) = device_id {
-        sync_store.clear_device(&device_id).await?;
-    }
-    Ok(status)
 }
 
 // These tests exercise the `not(feature = "tauri-commands")` variants above, which take a plain

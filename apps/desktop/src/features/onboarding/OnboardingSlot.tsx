@@ -41,24 +41,24 @@ export function OnboardingSlot({
 
   return (
     <section className="onboarding-slot" aria-labelledby="onboarding-heading">
-      <h1 id="onboarding-heading">Welcome to MouseKeeper</h1>
+      <h1 id="onboarding-heading">MOUSEKEEPER에 오신 걸 환영해요</h1>
 
       {/* B's onboarding design / character intro plugs in here. */}
       <div className="onboarding-design-slot" data-slot="onboarding-design">
-        <p>Pair your phone and pick a folder for MouseKeeper to help tidy.</p>
+        <p>휴대폰을 페어링하고, MOUSEKEEPER가 정리를 도울 폴더를 골라주세요.</p>
       </div>
 
       <ol className="onboarding-steps">
         <li>
-          <span>Pair a device so your phone can send cleanup requests.</span>
+          <span>휴대폰에서 정리를 요청할 수 있도록 기기를 페어링하세요.</span>
           <button type="button" onClick={onFocusPairing} disabled={busy}>
-            Go to pairing
+            페어링하러 가기
           </button>
         </li>
         <li>
-          <span>Register a folder as a managed root to get started.</span>
+          <span>정리할 폴더를 관리 폴더로 등록하면 시작할 수 있어요.</span>
           <button type="button" onClick={() => void registerFolder()} disabled={busy}>
-            {busy ? "Registering…" : "Register a folder"}
+            {busy ? "등록 중…" : "폴더 등록하기"}
           </button>
         </li>
       </ol>

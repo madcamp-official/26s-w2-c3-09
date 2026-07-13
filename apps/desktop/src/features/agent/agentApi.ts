@@ -138,6 +138,12 @@ export type BackgroundRuntimeStatus = {
   last_smart_cache_candidate_count: number;
   last_smart_cache_uploaded_count: number;
   last_smart_cache_failed_count: number;
+  last_auto_cleanup_unix_ms: number | null;
+  last_auto_cleanup_root_count: number;
+  last_auto_cleanup_approved_count: number;
+  last_auto_cleanup_executed_count: number;
+  last_auto_cleanup_failed_count: number;
+  last_auto_submitted_proposal_count: number;
   last_outbox_flush_unix_ms: number | null;
   last_outbox_sent_count: number;
   last_outbox_failed_count: number;
@@ -332,10 +338,6 @@ export function replayAgentEvents() {
 
 export function updateAgentCommandStatus(commandId: string, status: string) {
   return invokeAgentCommand<AgentCommand>("update_agent_command_status", { commandId, status });
-}
-
-export function forgetAgentDevice() {
-  return invokeAgentCommand<AgentConnectionStatus>("forget_agent_device");
 }
 
 export function revokeAgentDevice(idempotencyKey: string) {
