@@ -10,18 +10,41 @@ final apiClientProvider = Provider<ApiClient>(
 
 class ApiClient {
   ApiClient(this._auth)
-    : _dio = Dio(BaseOptions(baseUrl: AppConfig.apiBaseUrl));
+    : _dio = Dio(
+        BaseOptions(
+          baseUrl: AppConfig.apiBaseUrl,
+          connectTimeout: const Duration(seconds: 10),
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
   final FirebaseAuth _auth;
   final Dio _dio;
 
-  Future<Options> _options({String? idempotencyKey}) async {
-    final token = await _auth.currentUser?.getIdToken();
+  Future<Options> _options({
+    String? idempotencyKey,
+    Duration? requestTimeout,
+    String? expectedOwnerUid,
+  }) async {
+    final user = _auth.currentUser;
+    if (expectedOwnerUid != null && user?.uid != expectedOwnerUid) {
+      throw StateError('ACCOUNT_CHANGED');
+    }
+    final token = await user?.getIdToken();
     if (token == null) throw StateError('UNAUTHENTICATED');
+    if (expectedOwnerUid != null &&
+        _auth.currentUser?.uid != expectedOwnerUid) {
+      throw StateError('ACCOUNT_CHANGED');
+    }
     final headers = <String, String>{'Authorization': 'Bearer $token'};
     if (idempotencyKey != null) {
       headers['Idempotency-Key'] = idempotencyKey;
     }
-    return Options(headers: headers);
+    return Options(
+      headers: headers,
+      sendTimeout: requestTimeout,
+      receiveTimeout: requestTimeout,
+    );
   }
 
   Future<List<Map<String, dynamic>>> getList(String path) async {
@@ -50,11 +73,15 @@ class ApiClient {
     String path,
     Map<String, dynamic> body, {
     String? idempotencyKey,
+    String? expectedOwnerUid,
   }) async {
     final response = await _dio.post<Map<String, dynamic>>(
       path,
       data: body,
-      options: await _options(idempotencyKey: idempotencyKey),
+      options: await _options(
+        idempotencyKey: idempotencyKey,
+        expectedOwnerUid: expectedOwnerUid,
+      ),
     );
     return response.data ?? <String, dynamic>{};
   }
@@ -85,10 +112,17 @@ class ApiClient {
     return response.data ?? <String, dynamic>{};
   }
 
-  Future<Map<String, dynamic>> delete(String path) async {
+  Future<Map<String, dynamic>> delete(
+    String path, {
+    String? idempotencyKey,
+    Duration? requestTimeout,
+  }) async {
     final response = await _dio.delete<Map<String, dynamic>>(
       path,
-      options: await _options(),
+      options: await _options(
+        idempotencyKey: idempotencyKey,
+        requestTimeout: requestTimeout,
+      ),
     );
     return response.data ?? <String, dynamic>{};
   }

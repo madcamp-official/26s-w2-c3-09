@@ -2,9 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/network/api_client.dart';
+import 'auth_controller.dart';
+
+typedef PairingClaim = Future<void> Function(String code);
 
 class PairingPage extends ConsumerStatefulWidget {
-  const PairingPage({super.key});
+  const PairingPage({super.key, this.onClaim, this.gateMode = false});
+
+  final PairingClaim? onClaim;
+  final bool gateMode;
   @override
   ConsumerState<PairingPage> createState() => _PairingPageState();
 }
@@ -12,6 +18,7 @@ class PairingPage extends ConsumerStatefulWidget {
 class _PairingPageState extends ConsumerState<PairingPage> {
   final controller = TextEditingController();
   bool submitting = false;
+  String? failure;
   @override
   void dispose() {
     controller.dispose();
@@ -20,17 +27,23 @@ class _PairingPageState extends ConsumerState<PairingPage> {
 
   Future<void> claim() async {
     if (controller.text.length != 6) return;
-    setState(() => submitting = true);
+    setState(() {
+      submitting = true;
+      failure = null;
+    });
     try {
-      await ref.read(apiClientProvider).post('/v1/pairing-sessions/claim', {
-        'code': controller.text,
-      });
-      if (mounted) Navigator.of(context).pop(true);
+      final claim = widget.onClaim;
+      if (claim == null) {
+        await ref.read(apiClientProvider).post('/v1/pairing-sessions/claim', {
+          'code': controller.text,
+        });
+      } else {
+        await claim(controller.text);
+      }
+      if (mounted && !widget.gateMode) Navigator.of(context).pop(true);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('페어링 실패: $error')));
+        setState(() => failure = '연결 확인 실패: $error');
       }
     } finally {
       if (mounted) setState(() => submitting = false);
@@ -39,11 +52,27 @@ class _PairingPageState extends ConsumerState<PairingPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('PC 연결')),
+    appBar: AppBar(
+      automaticallyImplyLeading: !widget.gateMode,
+      title: const Text('PC 연결'),
+      actions: widget.gateMode
+          ? [
+              IconButton(
+                tooltip: '로그아웃',
+                onPressed: submitting
+                    ? null
+                    : () => ref.read(authControllerProvider.notifier).signOut(),
+                icon: const Icon(Icons.logout),
+              ),
+            ]
+          : null,
+    ),
     body: Padding(
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
+          const Icon(Icons.phonelink_outlined, size: 64),
+          const SizedBox(height: 16),
           const Text('데스크톱 앱에 표시된 6자리 코드를 입력하세요.'),
           const SizedBox(height: 20),
           TextField(
@@ -51,17 +80,44 @@ class _PairingPageState extends ConsumerState<PairingPage> {
             keyboardType: TextInputType.number,
             maxLength: 6,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            onChanged: (_) => setState(() => failure = null),
             decoration: const InputDecoration(
               labelText: '페어링 코드',
               border: OutlineInputBorder(),
             ),
           ),
+          if (failure != null) ...[
+            const SizedBox(height: 12),
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: ListTile(
+                leading: const Icon(Icons.error_outline),
+                title: const Text('PC 연결을 확인하지 못했습니다'),
+                subtitle: Text(failure!),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: submitting ? null : claim,
-              child: const Text('연결'),
+              onPressed: submitting || controller.text.length != 6
+                  ? null
+                  : claim,
+              child: submitting
+                  ? const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 10),
+                        Text('연결 확인 중'),
+                      ],
+                    )
+                  : const Text('연결'),
             ),
           ),
         ],

@@ -6,6 +6,7 @@ import '../../core/network/api_client.dart';
 import '../../core/sync/mutation_queue.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../../storage/display_cache.dart';
+import '../auth/connection_gate_controller.dart';
 import '../proposals/proposal_page.dart';
 import '../files/files_page.dart';
 import '../files/smart_cache_page.dart';
@@ -57,12 +58,14 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         api.getList('/v1/rooms/$id/activity?limit=20'),
       ]);
       final snapshot = await api.getNullable('/v1/rooms/$id/snapshots/latest');
+      if (!_roomIsActive(id)) throw StateError('ROOM_REMOVED');
       await Future.wait([
         cache.replaceCommands(id, lists[0]),
         cache.replaceProposals(id, lists[1]),
         cache.replaceExecutions(id, lists[2]),
         cache.saveSnapshot(id, snapshot),
       ]);
+      if (!_roomIsActive(id)) throw StateError('ROOM_REMOVED');
       return _RoomContent(
         commands: lists[0],
         proposals: lists[1],
@@ -90,6 +93,11 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     }
   }
 
+  bool _roomIsActive(String roomId) {
+    final gate = ref.read(connectionGateControllerProvider).asData?.value;
+    return gate != null && gate.rooms.any((room) => room['id'] == roomId);
+  }
+
   bool _isOffline(DioException error) {
     return switch (error.type) {
       DioExceptionType.connectionError ||
@@ -105,9 +113,16 @@ class _RoomPageState extends ConsumerState<RoomPage> {
   }
 
   Future<void> _createCommand() async {
+    final roomId = widget.room['id'] as String;
+    final gate = ref.read(connectionGateControllerProvider).asData?.value;
+    if (gate == null ||
+        gate.operation(DisconnectKind.room, roomId) != null ||
+        !gate.rooms.any((room) => room['id'] == roomId)) {
+      return;
+    }
     setState(() => _submitting = true);
     try {
-      final id = widget.room['id'] as String;
+      final id = roomId;
       final result = await ref
           .read(mutationQueueProvider)
           .postOrQueue(
@@ -115,6 +130,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
             path: '/v1/rooms/$id/commands',
             body: {'intent': 'ANALYZE', 'payload': <String, dynamic>{}},
             idempotencyKey: const Uuid().v4(),
+            roomId: id,
           );
       if (result.queued) {
         if (mounted) {
@@ -136,11 +152,51 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     }
   }
 
+  Future<void> _confirmDisconnect() async {
+    final roomName = widget.room['name'] as String? ?? '방';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('폴더 연결 해제'),
+        content: Text('$roomName 연결을 해제합니다. PC의 원본 폴더와 파일은 그대로 유지됩니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('연결 해제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref
+        .read(connectionGateControllerProvider.notifier)
+        .disconnectRoom(widget.room['id'] as String);
+  }
+
   @override
   Widget build(BuildContext context) {
     ref.listen(realtimeRevisionProvider, (previous, next) {
       if (previous != null && mounted) setState(_reload);
     });
+    final roomId = widget.room['id'] as String;
+    ref.listen(connectionGateControllerProvider, (previous, next) {
+      final gate = next.asData?.value;
+      if (gate == null || gate.rooms.any((room) => room['id'] == roomId)) {
+        return;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+      });
+    });
+    final disconnect = ref
+        .watch(connectionGateControllerProvider)
+        .asData
+        ?.value
+        .operation(DisconnectKind.room, roomId);
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.room['name'] as String? ?? '방'),
@@ -148,44 +204,67 @@ class _RoomPageState extends ConsumerState<RoomPage> {
           IconButton(
             tooltip: '정리 규칙',
             icon: const Icon(Icons.rule_folder_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => RulesPage(roomId: widget.room['id'] as String),
-              ),
-            ),
+            onPressed: disconnect == null
+                ? () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          RulesPage(roomId: widget.room['id'] as String),
+                    ),
+                  )
+                : null,
           ),
           IconButton(
             tooltip: '채팅',
             icon: const Icon(Icons.chat_bubble_outline),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => ChatPage(roomId: widget.room['id'] as String),
-              ),
-            ),
+            onPressed: disconnect == null
+                ? () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          ChatPage(roomId: widget.room['id'] as String),
+                    ),
+                  )
+                : null,
           ),
           IconButton(
             tooltip: '스마트 캐시',
             icon: const Icon(Icons.offline_bolt_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) =>
-                    SmartCachePage(roomId: widget.room['id'] as String),
-              ),
-            ),
+            onPressed: disconnect == null
+                ? () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          SmartCachePage(roomId: widget.room['id'] as String),
+                    ),
+                  )
+                : null,
           ),
           IconButton(
             tooltip: '온라인 파일',
             icon: const Icon(Icons.folder_open),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => FilesPage(roomId: widget.room['id'] as String),
-              ),
-            ),
+            onPressed: disconnect == null
+                ? () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => FilesPage(
+                        roomId: roomId,
+                        roomName: widget.room['name'] as String? ?? '방',
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+          IconButton(
+            tooltip: '폴더 연결 해제',
+            onPressed: disconnect == null ? _confirmDisconnect : null,
+            icon: disconnect?.phase == DisconnectPhase.disconnecting
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.link_off),
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _submitting ? null : _createCommand,
+        onPressed: _submitting || disconnect != null ? null : _createCommand,
         icon: const Icon(Icons.auto_fix_high),
         label: const Text('정리 제안 요청'),
       ),
@@ -219,6 +298,15 @@ class _RoomPageState extends ConsumerState<RoomPage> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
               children: [
+                if (disconnect != null) ...[
+                  _RoomDisconnectCard(
+                    operation: disconnect,
+                    onRetry: () => ref
+                        .read(connectionGateControllerProvider.notifier)
+                        .retryDisconnect(DisconnectKind.room, roomId),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (content.isOffline) ...[
                   const Card(
                     color: Color(0xFFFFF3E0),
@@ -244,7 +332,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                   ),
                   const SizedBox(height: 12),
                 ],
-                _CleanlinessCard(snapshot: content.snapshot),
+                CleanlinessCard(snapshot: content.snapshot),
                 const SizedBox(height: 20),
                 Text('승인 대기 제안', style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 8),
@@ -257,16 +345,19 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                         title: const Text('파일 정리 제안'),
                         subtitle: Text(proposal['status'] as String? ?? ''),
                         trailing: const Icon(Icons.chevron_right),
-                        onTap: () async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => ProposalPage(
-                                proposalId: proposal['id'] as String,
-                              ),
-                            ),
-                          );
-                          if (mounted) setState(_reload);
-                        },
+                        onTap: disconnect == null
+                            ? () async {
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) => ProposalPage(
+                                      proposalId: proposal['id'] as String,
+                                      roomId: roomId,
+                                    ),
+                                  ),
+                                );
+                                if (mounted) setState(_reload);
+                              }
+                            : null,
                       ),
                     ),
                   ),
@@ -373,15 +464,66 @@ class _RoomPageState extends ConsumerState<RoomPage> {
   }
 }
 
-class _CleanlinessCard extends StatelessWidget {
-  const _CleanlinessCard({required this.snapshot});
+class _RoomDisconnectCard extends StatelessWidget {
+  const _RoomDisconnectCard({required this.operation, required this.onRetry});
+
+  final DisconnectOperation operation;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: operation.phase == DisconnectPhase.failed
+        ? Theme.of(context).colorScheme.errorContainer
+        : null,
+    child: ListTile(
+      leading: operation.phase == DisconnectPhase.disconnecting
+          ? const CircularProgressIndicator()
+          : const Icon(Icons.error_outline),
+      title: Text(
+        operation.phase == DisconnectPhase.disconnecting
+            ? '폴더 연결을 해제하는 중'
+            : '폴더 연결 해제 실패',
+      ),
+      subtitle: operation.message == null ? null : Text(operation.message!),
+      trailing: operation.phase == DisconnectPhase.failed
+          ? TextButton(onPressed: onRetry, child: const Text('다시 시도'))
+          : null,
+    ),
+  );
+}
+
+const supportedCleanlinessFormulaVersion = 'mousekeeper-cleanliness-v1';
+
+bool cleanlinessFormulaMismatch(Map<String, dynamic>? snapshot) {
+  final formulaVersion = snapshot?['formulaVersion'];
+  return formulaVersion is String &&
+      formulaVersion != supportedCleanlinessFormulaVersion;
+}
+
+String cleanlinessCalculatedAtLabel(Object? value) {
+  if (value is! String) return '마지막 계산 시각 정보 없음';
+  final parsed = DateTime.tryParse(value)?.toLocal();
+  if (parsed == null) return '마지막 계산 시각 확인 불가';
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '마지막 계산 ${parsed.year}.${two(parsed.month)}.${two(parsed.day)} '
+      '${two(parsed.hour)}:${two(parsed.minute)}';
+}
+
+String cleanlinessReasonLabel(String code) => switch (code) {
+  'UNORGANIZED_FILES' => '정리되지 않은 파일',
+  'UNREADABLE_OR_UNSAFE_ENTRIES' => '읽을 수 없거나 안전하지 않은 항목',
+  'PROPOSAL_CONFLICTS' => '정리 제안 충돌',
+  _ => '기타 감점',
+};
+
+class CleanlinessCard extends StatelessWidget {
+  const CleanlinessCard({super.key, required this.snapshot});
   final Map<String, dynamic>? snapshot;
 
   @override
   Widget build(BuildContext context) {
     final score = snapshot?['score'] as int?;
     final metrics = snapshot?['metrics'];
-    final unorganized = metrics is Map ? metrics['unorganizedFileCount'] : null;
     if (score == null) {
       return const Card(
         child: ListTile(
@@ -391,6 +533,30 @@ class _CleanlinessCard extends StatelessWidget {
         ),
       );
     }
+    final formulaVersion = snapshot?['formulaVersion'] as String?;
+    final calculatedAt = cleanlinessCalculatedAtLabel(
+      snapshot?['calculatedAt'],
+    );
+    if (cleanlinessFormulaMismatch(snapshot)) {
+      return Card(
+        color: Theme.of(context).colorScheme.errorContainer,
+        child: ListTile(
+          leading: const Icon(Icons.system_update_alt),
+          title: const Text('청결도 공식 업데이트 필요'),
+          subtitle: Text(
+            '앱 지원 버전: $supportedCleanlinessFormulaVersion\n'
+            '스냅샷 버전: $formulaVersion\n$calculatedAt',
+          ),
+        ),
+      );
+    }
+    final metricMap = metrics is Map
+        ? Map<String, dynamic>.from(metrics)
+        : const <String, dynamic>{};
+    final deductions = (metricMap['deductions'] as List? ?? const <Object>[])
+        .whereType<Map>()
+        .map(Map<String, dynamic>.from)
+        .toList(growable: false);
     final color = score >= 80
         ? Colors.green
         : score >= 50
@@ -404,38 +570,79 @@ class _CleanlinessCard extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            SizedBox(
-              width: 68,
-              height: 68,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  CircularProgressIndicator(
-                    value: score / 100,
-                    strokeWidth: 7,
-                    color: color,
+            Row(
+              children: [
+                SizedBox(
+                  width: 68,
+                  height: 68,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      CircularProgressIndicator(
+                        value: score / 100,
+                        strokeWidth: 7,
+                        color: color,
+                      ),
+                      Text(
+                        '$score',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                    ],
                   ),
-                  Text('$score', style: Theme.of(context).textTheme.titleLarge),
-                ],
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(grade, style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 4),
-                  Text(
-                    unorganized is int
-                        ? '정리되지 않은 파일 $unorganized개'
-                        : '최근 PC 스캔 결과',
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        grade,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(calculatedAt),
+                      Text(
+                        formulaVersion == null
+                            ? '기존 스냅샷 · 공식 버전 정보 없음'
+                            : '공식 $formulaVersion',
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
+            if (deductions.isNotEmpty) ...[
+              const Divider(height: 24),
+              Text('감점 사유', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 4),
+              ...deductions.map((deduction) {
+                final code = deduction['reasonCode'] as String? ?? 'UNKNOWN';
+                final count = deduction['count'] as int? ?? 0;
+                final points = deduction['points'] as int? ?? 0;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.remove_circle_outline, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '${cleanlinessReasonLabel(code)} ($code) · '
+                          '$count개 · -$points점',
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ] else ...[
+              const Divider(height: 24),
+              const Text('감점 사유 없음'),
+            ],
           ],
         ),
       ),

@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/network/api_client.dart';
 import '../../core/sync/mutation_queue.dart';
 import '../../storage/display_cache.dart';
+import '../auth/connection_gate_controller.dart';
 
-final homeControllerProvider = AsyncNotifierProvider<HomeController, HomeData>(
-  HomeController.new,
-);
+final homeControllerProvider =
+    AsyncNotifierProvider.autoDispose<HomeController, HomeData>(
+      HomeController.new,
+    );
 
 class HomeData {
   const HomeData({
@@ -28,17 +30,48 @@ class HomeData {
 class HomeController extends AsyncNotifier<HomeData> {
   @override
   Future<HomeData> build() async {
-    await ref.read(mutationQueueProvider).flush();
-    final outbox = await ref.read(mutationQueueProvider).summary();
+    final mutationQueue = ref.read(mutationQueueProvider);
+    var outbox = await mutationQueue.summary();
     final api = ref.watch(apiClientProvider);
     final cache = ref.watch(displayCacheProvider);
+    final gate = ref.watch(connectionGateControllerProvider).requireValue;
+    final gateDeviceIds = _ids(gate.devices);
+    final gateRoomIds = _ids(gate.rooms);
     try {
       final results = await Future.wait([
         api.getList('/v1/devices'),
         api.getList('/v1/rooms'),
       ]);
+      final baseDevices = results[0]
+          .where(isActiveConnectionItem)
+          .where((item) => gateDeviceIds.contains(item['id']))
+          .toList(growable: false);
+      final baseRooms = results[1]
+          .where(isActiveConnectionItem)
+          .where((item) => gateRoomIds.contains(item['id']))
+          .toList(growable: false);
+      final currentGate = ref
+          .read(connectionGateControllerProvider)
+          .asData
+          ?.value;
+      final connectionUnchanged =
+          currentGate != null &&
+          gate.operations.isEmpty &&
+          currentGate.operations.isEmpty &&
+          _sameIds(gateDeviceIds, _ids(currentGate.devices)) &&
+          _sameIds(gateRoomIds, _ids(currentGate.rooms)) &&
+          _sameIds(gateDeviceIds, _ids(baseDevices)) &&
+          _sameIds(gateRoomIds, _ids(baseRooms));
+      if (connectionUnchanged) {
+        await mutationQueue.flush();
+      } else {
+        // Let the gate replace caches and reset navigation. Home never applies
+        // a connection list that is older than the gate snapshot it started on.
+        await ref.read(connectionGateControllerProvider.notifier).reconcile();
+      }
+      outbox = await mutationQueue.summary();
       final devices = await Future.wait(
-        results[0].map((device) async {
+        baseDevices.map((device) async {
           final presence = await api.get(
             '/v1/devices/${device['id']}/presence',
           );
@@ -46,7 +79,7 @@ class HomeController extends AsyncNotifier<HomeData> {
         }),
       );
       final rooms = await Future.wait(
-        results[1].map((room) async {
+        baseRooms.map((room) async {
           final roomId = room['id'] as String;
           final details = await Future.wait<dynamic>([
             api.getList('/v1/rooms/$roomId/proposals/open'),
@@ -64,14 +97,12 @@ class HomeController extends AsyncNotifier<HomeData> {
                 (details[0] as List<Map<String, dynamic>>).length,
             'latestExecutionStatus': latestExecution?['status'],
             'cleanlinessScore': snapshot?['score'],
+            'cleanlinessFormulaVersion': snapshot?['formulaVersion'],
+            'cleanlinessCalculatedAt': snapshot?['calculatedAt'],
           };
         }),
       );
       final character = await api.get('/v1/character');
-      await Future.wait([
-        cache.replaceDevices(devices),
-        cache.replaceRooms(rooms),
-      ]);
       return HomeData(
         devices: devices,
         rooms: rooms,
@@ -93,6 +124,12 @@ class HomeController extends AsyncNotifier<HomeData> {
       );
     }
   }
+
+  Set<String> _ids(Iterable<Map<String, dynamic>> values) =>
+      values.map((value) => value['id']).whereType<String>().toSet();
+
+  bool _sameIds(Set<String> left, Set<String> right) =>
+      left.length == right.length && left.containsAll(right);
 
   Future<void> reload() async {
     ref.invalidateSelf();

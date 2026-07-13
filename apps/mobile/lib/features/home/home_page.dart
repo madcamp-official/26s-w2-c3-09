@@ -2,13 +2,77 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/notifications/push_notifications.dart';
+import '../../core/models/character_state.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../auth/auth_controller.dart';
-import '../auth/pairing_page.dart';
+import '../auth/connection_gate_controller.dart';
 import '../character/character_settings_page.dart';
 import '../character/mousekeeper_motion.dart';
+import '../files/files_page.dart';
 import '../rooms/room_page.dart';
 import 'home_controller.dart';
+
+List<Map<String, dynamic>> mergeAuthoritativeConnectionItems({
+  required List<Map<String, dynamic>> authoritative,
+  required List<Map<String, dynamic>> enriched,
+}) {
+  final enrichedById = <String, Map<String, dynamic>>{
+    for (final item in enriched)
+      if (item['id'] is String) item['id'] as String: item,
+  };
+  return authoritative
+      .map((item) {
+        final id = item['id'];
+        return id is String ? {...item, ...?enrichedById[id]} : {...item};
+      })
+      .toList(growable: false);
+}
+
+/// A lost WebSocket disconnect event must be repaired quickly by an
+/// authoritative REST read. Two seconds keeps the fallback inside the v1.4
+/// ten-second revocation window while avoiding overlapping network requests.
+const homeAuthoritativeReconcileInterval = Duration(seconds: 2);
+
+class HomeAuthoritativeReconcileLoop {
+  HomeAuthoritativeReconcileLoop({
+    required this.reconcile,
+    required this.onReconciled,
+    this.interval = homeAuthoritativeReconcileInterval,
+  });
+
+  final Future<void> Function() reconcile;
+  final void Function() onReconciled;
+  final Duration interval;
+
+  Timer? _timer;
+  bool _inFlight = false;
+  bool _disposed = false;
+
+  void start() {
+    if (_disposed || _timer != null) return;
+    _timer = Timer.periodic(interval, (_) => unawaited(_tick()));
+  }
+
+  Future<void> _tick() async {
+    if (_disposed || _inFlight) return;
+    _inFlight = true;
+    try {
+      await reconcile();
+      if (!_disposed) onReconciled();
+    } catch (_) {
+      // This is a background fail-closed repair path. The next two-second
+      // tick retries without replacing the last verified connection state.
+    } finally {
+      _inFlight = false;
+    }
+  }
+
+  void dispose() {
+    _disposed = true;
+    _timer?.cancel();
+    _timer = null;
+  }
+}
 
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
@@ -18,20 +82,22 @@ class HomePage extends ConsumerStatefulWidget {
 }
 
 class _HomePageState extends ConsumerState<HomePage> {
-  Timer? _presenceTimer;
+  late final HomeAuthoritativeReconcileLoop _reconcileLoop;
 
   @override
   void initState() {
     super.initState();
     unawaited(ref.read(realtimeRevisionProvider.notifier).connect());
-    _presenceTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      ref.invalidate(homeControllerProvider);
-    });
+    _reconcileLoop = HomeAuthoritativeReconcileLoop(
+      reconcile: () =>
+          ref.read(connectionGateControllerProvider.notifier).reconcile(),
+      onReconciled: () => ref.invalidate(homeControllerProvider),
+    )..start();
   }
 
   @override
   void dispose() {
-    _presenceTimer?.cancel();
+    _reconcileLoop.dispose();
     ref.read(realtimeRevisionProvider.notifier).disconnect();
     super.dispose();
   }
@@ -44,6 +110,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final state = ref.watch(homeControllerProvider);
     final pushNotifications = ref.watch(pushNotificationsProvider);
     final realtimeCharacterKind = ref.watch(realtimeCharacterKindProvider);
+    final gateData = ref.watch(connectionGateControllerProvider).asData?.value;
     return Scaffold(
       appBar: AppBar(
         title: const Text('MOUSEKEEPER'),
@@ -57,174 +124,274 @@ class _HomePageState extends ConsumerState<HomePage> {
           error: error,
           onRetry: () => ref.invalidate(homeControllerProvider),
         ),
-        data: (data) => RefreshIndicator(
-          onRefresh: () => ref.read(homeControllerProvider.notifier).reload(),
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              PushNotificationStatusCard(state: pushNotifications),
-              if (data.isOffline) ...[
-                const OfflineCacheBanner(),
-                const SizedBox(height: 12),
-              ],
-              if (data.outboxPending > 0 || data.outboxFailed > 0) ...[
-                Card(
-                  color: data.outboxFailed > 0
-                      ? const Color(0xFFFFEBEE)
-                      : const Color(0xFFE3F2FD),
-                  child: ListTile(
-                    leading: Icon(
-                      data.outboxFailed > 0
-                          ? Icons.error_outline
-                          : Icons.outbox_outlined,
-                    ),
-                    title: Text(
-                      data.outboxFailed > 0
-                          ? '전송하지 못한 요청 ${data.outboxFailed}건'
-                          : '연결 후 전송할 요청 ${data.outboxPending}건',
-                    ),
-                    subtitle: Text(
-                      data.outboxFailed > 0
-                          ? '서버가 거절한 요청입니다. 상태를 확인한 뒤 목록에서 정리하세요.'
-                          : '같은 idempotency key로 안전하게 다시 전송합니다.',
-                    ),
-                    trailing: data.outboxFailed > 0
-                        ? TextButton(
-                            onPressed: () => ref
-                                .read(homeControllerProvider.notifier)
-                                .discardFailedMutations(),
-                            child: const Text('정리'),
-                          )
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 12),
-              ],
-              Card(
-                child: ListTile(
-                  leading: SizedBox(
-                    width: 52,
-                    height: 52,
-                    child: MouseKeeperMotionImage(
-                      motion: mousekeeperMotionForHome(
-                        isOffline: data.isOffline,
-                        presences: data.devices.map(
-                          (item) => item['presence'] as String? ?? 'OFFLINE',
-                        ),
-                        executionStatuses: data.rooms.map(
-                          (item) => item['latestExecutionStatus'] as String?,
-                        ),
-                        hasPendingProposal: data.rooms.any(
-                          (item) =>
-                              (item['pendingProposalCount'] as int? ?? 0) > 0,
-                        ),
-                        realtimeCharacterKind: realtimeCharacterKind,
-                      ),
-                    ),
-                  ),
-                  title: const Text('MOUSEKEEPER 캐릭터'),
-                  subtitle: data.character == null
-                      ? const Text('오프라인 · 캐릭터 설정을 확인할 수 없음')
-                      : Text(
-                          '호감도 ${data.character!['affinityTotal'] ?? 0} · '
-                          '${data.character!['riveAssetStatus'] == 'UNCONFIGURED' ? 'PNG 상태 모션 사용 중 · Rive 미설정' : '모션 연결됨'}',
-                        ),
-                  trailing: data.character == null
-                      ? null
-                      : const Icon(Icons.tune),
-                  onTap: data.character == null
-                      ? null
-                      : () async {
-                          final changed = await Navigator.of(context)
-                              .push<bool>(
-                                MaterialPageRoute(
-                                  builder: (_) => CharacterSettingsPage(
-                                    initialCharacter: data.character!,
-                                  ),
-                                ),
-                              );
-                          if (changed == true) {
-                            ref.invalidate(homeControllerProvider);
-                          }
-                        },
-                ),
-              ),
-              const SizedBox(height: 20),
-              Text('내 PC', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 8),
-              if (data.devices.isEmpty)
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.computer),
-                    title: const Text('등록된 PC가 없습니다'),
-                    subtitle: const Text('데스크톱 앱의 페어링 코드를 입력해 연결하세요.'),
-                    trailing: const Icon(Icons.add_link),
-                    onTap: () async {
-                      final connected = await Navigator.of(context).push<bool>(
-                        MaterialPageRoute(builder: (_) => const PairingPage()),
-                      );
-                      if (connected == true) {
-                        ref.invalidate(homeControllerProvider);
-                      }
-                    },
-                  ),
-                )
-              else
-                ...data.devices.map((item) {
-                  final presence = item['presence'] as String? ?? 'OFFLINE';
-                  final online = presence.startsWith('ONLINE');
-                  return Card(
+        data: (data) {
+          final devices = mergeAuthoritativeConnectionItems(
+            authoritative: gateData?.devices ?? const [],
+            enriched: data.devices,
+          );
+          final rooms = mergeAuthoritativeConnectionItems(
+            authoritative: gateData?.rooms ?? const [],
+            enriched: data.rooms,
+          );
+          final disconnecting =
+              gateData?.operations.values.any(
+                (operation) => operation.phase == DisconnectPhase.disconnecting,
+              ) ??
+              false;
+          return RefreshIndicator(
+            onRefresh: () => ref.read(homeControllerProvider.notifier).reload(),
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                PushNotificationStatusCard(state: pushNotifications),
+                if (data.isOffline) ...[
+                  const OfflineCacheBanner(),
+                  const SizedBox(height: 12),
+                ],
+                if (data.outboxPending > 0 || data.outboxFailed > 0) ...[
+                  Card(
+                    color: data.outboxFailed > 0
+                        ? const Color(0xFFFFEBEE)
+                        : const Color(0xFFE3F2FD),
                     child: ListTile(
                       leading: Icon(
-                        online ? Icons.lightbulb : Icons.lightbulb_outline,
-                        color: online ? Colors.amber.shade700 : Colors.grey,
+                        data.outboxFailed > 0
+                            ? Icons.error_outline
+                            : Icons.outbox_outlined,
                       ),
-                      title: Text(item['deviceName'] as String? ?? 'PC'),
+                      title: Text(
+                        data.outboxFailed > 0
+                            ? '전송하지 못한 요청 ${data.outboxFailed}건'
+                            : '연결 후 전송할 요청 ${data.outboxPending}건',
+                      ),
                       subtitle: Text(
-                        online ? _presenceLabel(presence) : 'PC 에이전트와 연결되지 않음',
+                        data.outboxFailed > 0
+                            ? '서버가 거절한 요청입니다. 상태를 확인한 뒤 목록에서 정리하세요.'
+                            : '같은 idempotency key로 안전하게 다시 전송합니다.',
                       ),
-                      trailing: IconButton(
-                        tooltip: '기기 연결 해제',
-                        icon: const Icon(Icons.link_off),
-                        onPressed: () => _confirmRevoke(
-                          item['id'] as String,
-                          item['deviceName'] as String? ?? 'PC',
+                      trailing: data.outboxFailed > 0
+                          ? TextButton(
+                              onPressed: () => ref
+                                  .read(homeControllerProvider.notifier)
+                                  .discardFailedMutations(),
+                              child: const Text('정리'),
+                            )
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                Card(
+                  child: ListTile(
+                    leading: SizedBox(
+                      width: 52,
+                      height: 52,
+                      child: MouseKeeperMotionImage(
+                        motion: mousekeeperMotionForHome(
+                          isOffline: data.isOffline,
+                          presences: devices.map(
+                            (item) => item['presence'] as String? ?? 'OFFLINE',
+                          ),
+                          executionStatuses: rooms.map(
+                            (item) => item['latestExecutionStatus'] as String?,
+                          ),
+                          hasPendingProposal: rooms.any(
+                            (item) =>
+                                (item['pendingProposalCount'] as int? ?? 0) > 0,
+                          ),
+                          realtimeCharacterKind: disconnecting
+                              ? CharacterState.connecting
+                              : realtimeCharacterKind,
                         ),
                       ),
+                    ),
+                    title: const Text('MOUSEKEEPER 캐릭터'),
+                    subtitle: disconnecting
+                        ? const Text('연결 해제 결과를 확인하는 중')
+                        : data.character == null
+                        ? const Text('오프라인 · 캐릭터 설정을 확인할 수 없음')
+                        : Text(
+                            '호감도 ${data.character!['affinityTotal'] ?? 0} · '
+                            '${data.character!['riveAssetStatus'] == 'UNCONFIGURED' ? 'PNG 상태 모션 사용 중 · Rive 미설정' : '모션 연결됨'}',
+                          ),
+                    trailing: data.character == null
+                        ? null
+                        : const Icon(Icons.info_outline),
+                    onTap: data.character == null
+                        ? null
+                        : () async {
+                            final changed = await Navigator.of(context)
+                                .push<bool>(
+                                  MaterialPageRoute(
+                                    builder: (_) => CharacterSettingsPage(
+                                      initialCharacter: data.character!,
+                                    ),
+                                  ),
+                                );
+                            if (changed == true) {
+                              ref.invalidate(homeControllerProvider);
+                            }
+                          },
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text('내 PC', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                ...devices.map((item) {
+                  final presence = item['presence'] as String? ?? 'OFFLINE';
+                  final online = presence.startsWith('ONLINE');
+                  final operation = gateData?.operation(
+                    DisconnectKind.device,
+                    item['id'] as String,
+                  );
+                  return Card(
+                    child: Column(
+                      children: [
+                        ListTile(
+                          leading: Icon(
+                            online ? Icons.lightbulb : Icons.lightbulb_outline,
+                            color: online ? Colors.amber.shade700 : Colors.grey,
+                          ),
+                          title: Text(item['deviceName'] as String? ?? 'PC'),
+                          subtitle: Text(
+                            operation?.phase == DisconnectPhase.disconnecting
+                                ? '기기 연결을 해제하는 중'
+                                : online
+                                ? _presenceLabel(presence)
+                                : 'PC 에이전트와 연결되지 않음',
+                          ),
+                          trailing: IconButton(
+                            tooltip: '기기 연결 해제',
+                            icon:
+                                operation?.phase ==
+                                    DisconnectPhase.disconnecting
+                                ? const SizedBox.square(
+                                    dimension: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.link_off),
+                            onPressed: operation == null
+                                ? () => _confirmRevoke(
+                                    item['id'] as String,
+                                    item['deviceName'] as String? ?? 'PC',
+                                  )
+                                : null,
+                          ),
+                        ),
+                        if (operation?.phase == DisconnectPhase.failed)
+                          DisconnectFailurePanel(
+                            message: operation!.message,
+                            onRetry: () => ref
+                                .read(connectionGateControllerProvider.notifier)
+                                .retryDisconnect(
+                                  DisconnectKind.device,
+                                  item['id'] as String,
+                                ),
+                          ),
+                      ],
                     ),
                   );
                 }),
-              const SizedBox(height: 20),
-              Text('내 방', style: Theme.of(context).textTheme.titleLarge),
-              const SizedBox(height: 8),
-              if (data.rooms.isEmpty)
-                const EmptyRoomsCard()
-              else
-                ...data.rooms.map(
-                  (item) => Card(
-                    child: ListTile(
-                      leading: Badge(
-                        isLabelVisible:
-                            (item['pendingProposalCount'] as int? ?? 0) > 0,
-                        label: Text('${item['pendingProposalCount'] ?? 0}'),
-                        child: const Icon(Icons.meeting_room_outlined),
+                const SizedBox(height: 20),
+                Text('내 방', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                if (rooms.isEmpty)
+                  const EmptyRoomsCard()
+                else
+                  ...rooms.map((item) {
+                    final roomId = item['id'] as String;
+                    final operation = gateData?.operation(
+                      DisconnectKind.room,
+                      roomId,
+                    );
+                    return Card(
+                      child: Column(
+                        children: [
+                          ListTile(
+                            leading: Badge(
+                              isLabelVisible:
+                                  (item['pendingProposalCount'] as int? ?? 0) >
+                                  0,
+                              label: Text(
+                                '${item['pendingProposalCount'] ?? 0}',
+                              ),
+                              child: const Icon(Icons.meeting_room_outlined),
+                            ),
+                            title: Text(item['name'] as String? ?? '방'),
+                            subtitle: Text(
+                              operation?.phase == DisconnectPhase.disconnecting
+                                  ? '폴더 연결을 해제하는 중'
+                                  : '${_rootAliasLabel(item['rootAlias'])}'
+                                        '${_homeCleanlinessLabel(item)}'
+                                        '${item['latestExecutionStatus'] == null ? '' : ' · 최근 ${item['latestExecutionStatus']}'}',
+                            ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: '파일 열기',
+                                  onPressed: operation == null
+                                      ? () => Navigator.of(context).push(
+                                          MaterialPageRoute(
+                                            builder: (_) => FilesPage(
+                                              roomId: roomId,
+                                              roomName:
+                                                  item['name'] as String? ??
+                                                  '방',
+                                            ),
+                                          ),
+                                        )
+                                      : null,
+                                  icon: const Icon(Icons.folder_open),
+                                ),
+                                IconButton(
+                                  tooltip: '폴더 연결 해제',
+                                  onPressed: operation == null
+                                      ? () => _confirmRemoveRoom(
+                                          roomId,
+                                          item['name'] as String? ?? '방',
+                                        )
+                                      : null,
+                                  icon:
+                                      operation?.phase ==
+                                          DisconnectPhase.disconnecting
+                                      ? const SizedBox.square(
+                                          dimension: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Icon(Icons.link_off),
+                                ),
+                              ],
+                            ),
+                            onTap: operation == null
+                                ? () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => RoomPage(room: item),
+                                    ),
+                                  )
+                                : null,
+                          ),
+                          if (operation?.phase == DisconnectPhase.failed)
+                            DisconnectFailurePanel(
+                              message: operation!.message,
+                              onRetry: () => ref
+                                  .read(
+                                    connectionGateControllerProvider.notifier,
+                                  )
+                                  .retryDisconnect(DisconnectKind.room, roomId),
+                            ),
+                        ],
                       ),
-                      title: Text(item['name'] as String? ?? '방'),
-                      subtitle: Text(
-                        '${_rootAliasLabel(item['rootAlias'])}'
-                        '${item['cleanlinessScore'] == null ? '' : ' · 청결도 ${item['cleanlinessScore']}'}'
-                        '${item['latestExecutionStatus'] == null ? '' : ' · 최근 ${item['latestExecutionStatus']}'}',
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => RoomPage(room: item)),
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
+                    );
+                  }),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -274,15 +441,44 @@ class _HomePageState extends ConsumerState<HomePage> {
       ),
     );
     if (confirmed != true) return;
-    try {
-      await ref.read(homeControllerProvider.notifier).revokeDevice(deviceId);
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('기기 연결 해제 실패: $error')));
-      }
+    await ref
+        .read(connectionGateControllerProvider.notifier)
+        .disconnectDevice(deviceId);
+  }
+
+  String _homeCleanlinessLabel(Map<String, dynamic> room) {
+    final score = room['cleanlinessScore'];
+    if (score == null) return '';
+    final formulaVersion = room['cleanlinessFormulaVersion'];
+    if (formulaVersion is String &&
+        formulaVersion != supportedCleanlinessFormulaVersion) {
+      return ' · 청결도 업데이트 필요';
     }
+    return ' · 청결도 $score';
+  }
+
+  Future<void> _confirmRemoveRoom(String roomId, String roomName) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('폴더 연결 해제'),
+        content: Text('$roomName 연결을 해제합니다. PC의 원본 폴더와 파일은 삭제되지 않습니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('연결 해제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref
+        .read(connectionGateControllerProvider.notifier)
+        .disconnectRoom(roomId);
   }
 }
 
@@ -370,6 +566,32 @@ class OfflineCacheBanner extends StatelessWidget {
   );
 }
 
+class DisconnectFailurePanel extends StatelessWidget {
+  const DisconnectFailurePanel({
+    super.key,
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String? message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: double.infinity,
+    color: Theme.of(context).colorScheme.errorContainer,
+    padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+    child: Row(
+      children: [
+        const Icon(Icons.error_outline),
+        const SizedBox(width: 8),
+        Expanded(child: Text(message ?? '연결 해제에 실패했습니다.')),
+        TextButton(onPressed: onRetry, child: const Text('다시 시도')),
+      ],
+    ),
+  );
+}
+
 class EmptyRoomsCard extends StatelessWidget {
   const EmptyRoomsCard({super.key});
 
@@ -377,7 +599,7 @@ class EmptyRoomsCard extends StatelessWidget {
   Widget build(BuildContext context) => const Card(
     child: ListTile(
       leading: Icon(Icons.meeting_room_outlined),
-      title: Text('등록된 방이 없습니다'),
+      title: Text('연결된 폴더 없음'),
       subtitle: Text('PC에서 관리 폴더를 등록하면 여기에 표시됩니다.'),
     ),
   );

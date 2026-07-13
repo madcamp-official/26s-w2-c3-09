@@ -5,8 +5,13 @@ import '../../core/network/api_client.dart';
 import '../../core/sync/mutation_queue.dart';
 
 class ProposalPage extends ConsumerStatefulWidget {
-  const ProposalPage({super.key, required this.proposalId});
+  const ProposalPage({
+    super.key,
+    required this.proposalId,
+    required this.roomId,
+  });
   final String proposalId;
+  final String roomId;
   @override
   ConsumerState<ProposalPage> createState() => _ProposalPageState();
 }
@@ -39,6 +44,7 @@ class _ProposalPageState extends ConsumerState<ProposalPage> {
                   : <String>[],
             },
             idempotencyKey: const Uuid().v4(),
+            roomId: widget.roomId,
           );
       if (mounted) {
         if (result.queued) {

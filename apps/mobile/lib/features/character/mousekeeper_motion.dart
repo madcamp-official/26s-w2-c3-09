@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:mousekeeper_character_assets/character_assets.dart';
 
+import '../../core/models/character_state.dart';
+
 class MouseKeeperMotionImage extends StatelessWidget {
   const MouseKeeperMotionImage({
     super.key,
@@ -36,16 +38,18 @@ class MouseKeeperMotionImage extends StatelessWidget {
   );
 }
 
-MouseKeeperMotion? mousekeeperMotionForCharacterKind(String? kind) =>
+MouseKeeperMotion? mousekeeperMotionForCharacterKind(CharacterState? kind) =>
     switch (kind) {
-      'ANALYZING' || 'WAITING_APPROVAL' => MouseKeeperMotion.considering,
-      'WORKING' => MouseKeeperMotion.working,
-      'SUCCESS' => MouseKeeperMotion.clean,
-      'ERROR' => MouseKeeperMotion.fighting,
-      'USER_WORKING' => MouseKeeperMotion.walk,
-      'OFFLINE' => MouseKeeperMotion.sleeping,
-      'IDLE' => MouseKeeperMotion.stand,
-      _ => null,
+      CharacterState.analyzing ||
+      CharacterState.waitingApproval => MouseKeeperMotion.considering,
+      CharacterState.working => MouseKeeperMotion.working,
+      CharacterState.success => MouseKeeperMotion.clean,
+      CharacterState.error => MouseKeeperMotion.fighting,
+      CharacterState.userWorking => MouseKeeperMotion.walk,
+      CharacterState.offline => MouseKeeperMotion.sleeping,
+      CharacterState.connecting => MouseKeeperMotion.walk,
+      CharacterState.idle => MouseKeeperMotion.stand,
+      null => null,
     };
 
 MouseKeeperMotion mousekeeperMotionForHome({
@@ -53,7 +57,7 @@ MouseKeeperMotion mousekeeperMotionForHome({
   required Iterable<String> presences,
   required Iterable<String?> executionStatuses,
   required bool hasPendingProposal,
-  String? realtimeCharacterKind,
+  CharacterState? realtimeCharacterKind,
 }) {
   final presenceSet = presences.toSet();
   if (isOffline ||

@@ -1,19 +1,20 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mousekeeper/core/models/character_state.dart';
 import 'package:mousekeeper/features/character/mousekeeper_motion.dart';
 import 'package:mousekeeper_character_assets/character_assets.dart';
 
 void main() {
   test('server character kinds map to the intended PNG motion', () {
     expect(
-      mousekeeperMotionForCharacterKind('WAITING_APPROVAL'),
+      mousekeeperMotionForCharacterKind(CharacterState.waitingApproval),
       MouseKeeperMotion.considering,
     );
     expect(
-      mousekeeperMotionForCharacterKind('SUCCESS'),
+      mousekeeperMotionForCharacterKind(CharacterState.success),
       MouseKeeperMotion.clean,
     );
     expect(
-      mousekeeperMotionForCharacterKind('ERROR'),
+      mousekeeperMotionForCharacterKind(CharacterState.error),
       MouseKeeperMotion.fighting,
     );
   });
@@ -24,7 +25,7 @@ void main() {
       presences: const ['OFFLINE'],
       executionStatuses: const ['SUCCEEDED'],
       hasPendingProposal: false,
-      realtimeCharacterKind: 'SUCCESS',
+      realtimeCharacterKind: CharacterState.success,
     );
     expect(motion, MouseKeeperMotion.sleeping);
   });

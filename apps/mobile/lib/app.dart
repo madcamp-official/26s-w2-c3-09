@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'features/auth/auth_controller.dart';
+import 'features/auth/connection_gate_page.dart';
 import 'features/auth/login_page.dart';
-import 'features/home/home_page.dart';
 import 'core/sync/realtime_controller.dart';
 
 final mousekeeperScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -12,15 +12,31 @@ class MouseKeeperApp extends ConsumerWidget {
   final String? configurationError;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen(realtimeNoticeProvider, (previous, next) {
-      if (next == null || previous?.eventId == next.eventId) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final messenger = mousekeeperScaffoldMessengerKey.currentState;
-        messenger
-          ?..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text(next.message)));
+    if (configurationError == null) {
+      ref.listen(realtimeNoticeProvider, (previous, next) {
+        if (next == null || previous?.eventId == next.eventId) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          final messenger = mousekeeperScaffoldMessengerKey.currentState;
+          messenger
+            ?..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text(next.message)));
+        });
       });
-    });
+    }
+    final auth = configurationError == null
+        ? ref.watch(authControllerProvider)
+        : null;
+    Widget guardedRoot() => configurationError != null
+        ? ConfigurationRequiredPage(error: configurationError!)
+        : auth!.when(
+            data: (user) =>
+                user == null ? const LoginPage() : const ConnectionGatePage(),
+            loading: () => const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            ),
+            error: (error, _) =>
+                Scaffold(body: Center(child: Text('인증 상태 오류: $error'))),
+          );
     return MaterialApp(
       title: 'MOUSEKEEPER',
       scaffoldMessengerKey: mousekeeperScaffoldMessengerKey,
@@ -29,19 +45,15 @@ class MouseKeeperApp extends ConsumerWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF76543A)),
         useMaterial3: true,
       ),
-      home: configurationError != null
-          ? ConfigurationRequiredPage(error: configurationError!)
-          : ref
-                .watch(authControllerProvider)
-                .when(
-                  data: (user) =>
-                      user == null ? const LoginPage() : const HomePage(),
-                  loading: () => const Scaffold(
-                    body: Center(child: CircularProgressIndicator()),
-                  ),
-                  error: (error, _) =>
-                      Scaffold(body: Center(child: Text('인증 상태 오류: $error'))),
-                ),
+      home: guardedRoot(),
+      // Every externally supplied named route crosses the same authoritative
+      // device gate before a nested main navigator can be created.
+      onGenerateRoute: (settings) => settings.name == Navigator.defaultRouteName
+          ? null
+          : MaterialPageRoute<void>(
+              settings: settings,
+              builder: (_) => guardedRoot(),
+            ),
     );
   }
 }

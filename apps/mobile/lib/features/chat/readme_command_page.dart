@@ -145,6 +145,7 @@ class _ReadmeCommandPageState extends ConsumerState<ReadmeCommandPage> {
                       path: '/v1/rooms/${widget.roomId}/commands',
                       body: command,
                       idempotencyKey: const Uuid().v4(),
+                      roomId: widget.roomId,
                     ))
                 .queued;
       if (!mounted) return;

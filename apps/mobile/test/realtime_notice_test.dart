@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mousekeeper/core/models/character_state.dart';
 import 'package:mousekeeper/core/sync/realtime_controller.dart';
 
 void main() {
@@ -35,7 +36,7 @@ void main() {
   test('validated realtime character events preserve the server state', () {
     expect(
       realtimeCharacterKindFor('character.event', {'kind': 'SUCCESS'}),
-      'SUCCESS',
+      CharacterState.success,
     );
     expect(
       realtimeCharacterKindFor('character.event', {'kind': 'MADE_UP'}),
@@ -45,7 +46,7 @@ void main() {
       realtimeCharacterKindFor('presence.updated', {
         'payload': {'presence': 'OFFLINE'},
       }),
-      'OFFLINE',
+      CharacterState.offline,
     );
   });
 }
