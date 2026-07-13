@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../home/home_page.dart';
 import 'auth_controller.dart';
@@ -33,21 +34,116 @@ class ConnectionGatePage extends ConsumerWidget {
   }
 }
 
+enum PairingGateLoadingStage {
+  authenticating(0.15, '로그인 상태를 확인하는 중입니다'),
+  loadingConnections(0.35, '연결된 PC를 확인하는 중입니다'),
+  connectingRealtime(0.60, '실시간 연결을 준비하는 중입니다'),
+  reconcilingCache(0.80, '로컬 표시 상태를 맞추는 중입니다'),
+  ready(1.0, '연결 준비가 끝났습니다');
+
+  const PairingGateLoadingStage(this.progress, this.message);
+
+  final double progress;
+  final String message;
+}
+
 class PairingGateLoadingPage extends StatelessWidget {
-  const PairingGateLoadingPage({super.key});
+  const PairingGateLoadingPage({
+    super.key,
+    this.stage = PairingGateLoadingStage.loadingConnections,
+  });
+
+  final PairingGateLoadingStage stage;
 
   @override
-  Widget build(BuildContext context) => const Scaffold(
-    body: Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) {
+    final disableAnimations =
+        MediaQuery.maybeOf(context)?.disableAnimations ?? false;
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PixelFillMouse(
+              progress: stage.progress,
+              animate: !disableAnimations,
+            ),
+            const SizedBox(height: 20),
+            Text(stage.message, textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            Text(
+              '${(stage.progress * 100).round()}%',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class PixelFillMouse extends StatelessWidget {
+  const PixelFillMouse({
+    super.key,
+    required this.progress,
+    this.size = 128,
+    this.animate = true,
+  });
+
+  final double progress;
+  final double size;
+  final bool animate;
+
+  @override
+  Widget build(BuildContext context) {
+    final clamped = progress.clamp(0, 1).toDouble();
+    if (!animate) {
+      return _PixelFillMouseFrame(progress: clamped, size: size);
+    }
+    return TweenAnimationBuilder<double>(
+      duration: const Duration(milliseconds: 700),
+      curve: Curves.easeOutCubic,
+      tween: Tween<double>(begin: 0, end: clamped),
+      builder: (context, value, _) =>
+          _PixelFillMouseFrame(progress: value, size: size),
+    );
+  }
+}
+
+class _PixelFillMouseFrame extends StatelessWidget {
+  const _PixelFillMouseFrame({required this.progress, required this.size});
+
+  final double progress;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'MouseKeeper loading ${(progress * 100).round()} percent',
+    child: SizedBox.square(
+      dimension: size,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
         children: [
-          CircularProgressIndicator(),
-          SizedBox(height: 16),
-          Text('연결된 PC를 확인하는 중입니다'),
+          Opacity(opacity: 0.20, child: _mouseImage()),
+          ClipRect(
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              heightFactor: progress,
+              child: _mouseImage(),
+            ),
+          ),
         ],
       ),
     ),
+  );
+
+  Widget _mouseImage() => Image.asset(
+    mousekeeperStandAsset,
+    package: mousekeeperMascotPackage,
+    width: size,
+    height: size,
+    fit: BoxFit.contain,
+    filterQuality: FilterQuality.none,
   );
 }
 

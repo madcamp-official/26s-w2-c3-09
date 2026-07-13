@@ -141,8 +141,28 @@ void main() {
   testWidgets('Pairing Gate loading은 이전 메인 화면을 노출하지 않는다', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: PairingGateLoadingPage()));
     expect(find.text('연결된 PC를 확인하는 중입니다'), findsOneWidget);
+    expect(find.text('35%'), findsOneWidget);
     expect(find.text('내 방'), findsNothing);
     expect(find.text('MOUSEKEEPER 캐릭터'), findsNothing);
+  });
+
+  testWidgets('Pairing Gate loading은 단계별 진행률과 reduce-motion을 지원한다', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: PairingGateLoadingPage(
+            stage: PairingGateLoadingStage.connectingRealtime,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('실시간 연결을 준비하는 중입니다'), findsOneWidget);
+    expect(find.text('60%'), findsOneWidget);
+    expect(find.byType(PixelFillMouse), findsOneWidget);
   });
 
   testWidgets('Pairing Gate 오류는 stale cache 대신 재시도를 표시한다', (tester) async {

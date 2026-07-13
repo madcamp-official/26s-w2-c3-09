@@ -508,3 +508,10 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - AI가 server-owned command metadata를 주입하거나 만료 시각 같은 draft 필드를 잘못 만들면 product logic에 들어가기 전에 `AI_OUTPUT_INVALID`로 차단한다.
 - `UNCONFIGURED`와 `NO_ACTION`은 command draft를 만들지 않는 no-draft 경로로 고정했다.
 - DB opt-in ChatService integration suite에 test-only `ScriptedAiProvider`를 추가해 AI `COMMAND_DRAFT`가 command row가 아니라 confirmation draft로만 저장되는 경로를 검증한다.
+
+## 2026-07-14 — Pairing Gate pixel-fill loading
+
+- 접속 로딩 화면을 단순 spinner에서 기존 `mouse_stand.png`를 아래에서 위로 채우는 pixel-fill 캐릭터 UI로 바꿨다.
+- `AUTHENTICATING`, `LOADING_CONNECTIONS`, `CONNECTING_REALTIME`, `RECONCILING_CACHE`, `READY`에 대응하는 진행률과 안내 문구를 enum으로 고정했다.
+- 접근성 reduce-motion 설정에서는 Tween animation 없이 현재 단계의 정적 진행률을 표시한다.
+- loading 화면은 여전히 이전 main 화면을 노출하지 않으며, widget test로 기본 35%와 realtime 60% 단계를 검증했다.

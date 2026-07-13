@@ -157,7 +157,7 @@
 4. **오프라인 복구:** server sync sequence, mobile mutation outbox, desktop SQLite cursor/outbox와 REST replay를 연결했다.
 5. **파일 접근 확장:** read-only browse와 별도 FileTransfer 상태 머신, signed object storage, checksum, ACK/TTL 삭제를 추가했다.
 6. **스마트 캐시 control plane:** opt-in policy, usage score, quota reservation, freshness metadata와 object deletion tombstone을 추가했다.
-7. **제품 경험 기반:** 모바일 home/room/rule/proposal/files/chat session/character 설정과 Desktop Agent/file UI, 8종 PNG 상태 이미지를 연결했다.
+7. **제품 경험 기반:** 모바일 home/room/rule/proposal/files/chat session/character 설정, pairing gate pixel-fill loading과 Desktop Agent/file UI, 8종 PNG 상태 이미지를 연결했다.
 8. **운영 하드닝:** AWS EC2, private S3 IAM role, Nginx/systemd, FCM worker, PostgreSQL backup/restore, Sentry redaction 경계를 추가했다.
 9. **A/B 통합:** Desktop background processor가 server command, decision, browse, transfer, cache reservation 계약을 소비하도록 병합했다.
 10. **브랜드 표준화:** package scope, Rust crate, Flutter package, Android/iOS/Tauri identifier, 환경 변수, local state dir, 배포 unit/path를 MOUSEKEEPER로 통일했다.
