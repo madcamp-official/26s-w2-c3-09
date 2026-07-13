@@ -155,17 +155,54 @@ abstract interface class ConnectionControlApi {
   Future<void> removeRoom(String roomId, String idempotencyKey);
 }
 
+const connectionGateSummaryPath = '/v1/home/summary';
+
+List<Map<String, dynamic>> connectionItemsFromSummary(
+  Map<String, dynamic> summary,
+  String key,
+) {
+  final raw = summary[key];
+  if (raw is! List) {
+    throw FormatException('INVALID_CONNECTION_SUMMARY_${key.toUpperCase()}');
+  }
+  return raw
+      .map((item) {
+        if (item is! Map) {
+          throw FormatException(
+            'INVALID_CONNECTION_SUMMARY_${key.toUpperCase()}',
+          );
+        }
+        return Map<String, dynamic>.from(item);
+      })
+      .toList(growable: false);
+}
+
 class ApiConnectionControl implements ConnectionControlApi {
   ApiConnectionControl(this._api);
 
   final ApiClient _api;
+  Future<Map<String, dynamic>>? _summaryInFlight;
 
   @override
-  Future<List<Map<String, dynamic>>> listDevices() =>
-      _api.getList('/v1/devices');
+  Future<List<Map<String, dynamic>>> listDevices() async =>
+      connectionItemsFromSummary(await _homeSummary(), 'devices');
 
   @override
-  Future<List<Map<String, dynamic>>> listRooms() => _api.getList('/v1/rooms');
+  Future<List<Map<String, dynamic>>> listRooms() async =>
+      connectionItemsFromSummary(await _homeSummary(), 'rooms');
+
+  Future<Map<String, dynamic>> _homeSummary() {
+    final existing = _summaryInFlight;
+    if (existing != null) return existing;
+    late final Future<Map<String, dynamic>> request;
+    request = _api.get(connectionGateSummaryPath).whenComplete(() {
+      if (identical(_summaryInFlight, request)) {
+        _summaryInFlight = null;
+      }
+    });
+    _summaryInFlight = request;
+    return request;
+  }
 
   @override
   Future<void> claimPairing(String code) async {

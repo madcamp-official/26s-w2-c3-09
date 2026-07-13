@@ -125,6 +125,28 @@ void main() {
     },
   );
 
+  test('connection summary parser validates the shared home aggregate', () {
+    final summary = {
+      'devices': [
+        {'id': 'device-a', 'status': 'ACTIVE'},
+      ],
+      'rooms': [
+        {'id': 'room-a', 'desktopDeviceId': 'device-a', 'status': 'ACTIVE'},
+      ],
+    };
+
+    expect(connectionGateSummaryPath, '/v1/home/summary');
+    expect(
+      connectionItemsFromSummary(summary, 'devices').single['id'],
+      'device-a',
+    );
+    expect(connectionItemsFromSummary(summary, 'rooms').single['id'], 'room-a');
+    expect(
+      () => connectionItemsFromSummary({'devices': 'bad'}, 'devices'),
+      throwsFormatException,
+    );
+  });
+
   test(
     'reconcile reports and caches only an actual connection change',
     () async {
