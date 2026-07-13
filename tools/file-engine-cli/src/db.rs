@@ -2,8 +2,10 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::future::Future;
+use std::panic::resume_unwind;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::thread;
 
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
@@ -26,8 +28,33 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    runtime().block_on(future)
+pub fn block_on<F>(future: F) -> F::Output
+where
+    F: Future + Send,
+    F::Output: Send,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle)
+            if matches!(
+                handle.runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::MultiThread
+            ) =>
+        {
+            // Desktop background work already runs on Tauri's Tokio executor. Tell that
+            // executor this worker is blocking before entering the file engine's dedicated
+            // SQLite runtime; calling Runtime::block_on directly here panics.
+            tokio::task::block_in_place(|| runtime().block_on(future))
+        }
+        Ok(_) => thread::scope(|scope| {
+            // A current-thread executor cannot use block_in_place. A scoped thread keeps
+            // borrowed SQLx futures valid while ensuring block_on runs outside that executor.
+            scope
+                .spawn(move || runtime().block_on(future))
+                .join()
+                .unwrap_or_else(|panic| resume_unwind(panic))
+        }),
+        Err(_) => runtime().block_on(future),
+    }
 }
 
 #[derive(Debug)]
@@ -176,6 +203,31 @@ mod tests {
 
             assert_eq!(size, 12);
         });
+    }
+
+    #[test]
+    fn blocks_safely_inside_a_multithread_runtime() {
+        let outer = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("outer runtime");
+
+        let value = outer.block_on(async { block_on(async { 42_u8 }) });
+
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn blocks_safely_inside_a_current_thread_runtime() {
+        let outer = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("outer runtime");
+
+        let value = outer.block_on(async { block_on(async { 42_u8 }) });
+
+        assert_eq!(value, 42);
     }
 
     #[test]

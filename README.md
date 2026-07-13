@@ -83,6 +83,7 @@ Tauri Desktop
 
 - managed root canonicalization, overlap·traversal·symlink/junction/reparse point 방어
 - SQLite WAL 기반 managed root, file index, operation journal과 auto-approval 설정 저장
+- Tauri 비동기 background loop에서 SQLite 동기 경계를 안전하게 넘는 runtime bridge
 - scan, 검색, paginated browse, watcher debounce·reconcile·startup 복원
 - Rule DSL, proposal, 사용자 decision, 실행 직전 precheck
 - journal-before-write, no-overwrite move, 복구형 trash, create/rename, history, undo, journal recovery
@@ -151,7 +152,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | `flutter analyze` | 오류 0개 |
 | Flutter test | FCM·Sentry privacy 포함 27개 통과 |
 | Android debug APK | Firebase Messaging·Sentry SDK 포함 빌드 성공 |
-| Rust file-engine CLI | unit 98개 + integration 3개, 총 101개 통과 |
+| Rust file-engine CLI | unit 100개 + integration 3개, 총 103개 통과 |
 | Rust Desktop/Tauri core | 120개 통과 |
 | Rust fixture E2E | proposal → precheck → execute → undo 통과 |
 | Tauri feature check | `cargo check --features tauri-commands` 통과 |

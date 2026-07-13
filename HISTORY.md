@@ -59,6 +59,7 @@
 - [x] managed root canonicalization, 중복·부모/자식 overlap 차단
 - [x] `..`, 절대 경로, symlink, junction, Windows reparse point 경계 우회 차단
 - [x] SQLite WAL 기반 managed root, file index, operation journal, sync cursor/outbox
+- [x] Tauri Tokio worker와 동기 SQLite API 사이의 nested-runtime-safe bridge
 - [x] 전체 scan, 이름 검색, 상대 경로 browse, watcher incremental upsert/remove
 - [x] 확장자·기간·이름 조건 Rule DSL과 결정론적 proposal 생성
 - [x] source size/mtime precondition, destination 충돌 검출, no-overwrite move
@@ -272,7 +273,7 @@
 | desktop-agent-simulator test | 1개 통과 |
 | Flutter analyze | 오류 0개 |
 | Flutter test | 27개 통과 |
-| Rust file-engine | unit 98개 + CLI integration 3개 통과 |
+| Rust file-engine | unit 100개 + CLI integration 3개 통과 |
 | Rust Desktop core | 120개 통과 |
 | Rust format | 두 crate 모두 통과 |
 | Tauri feature check/test | feature check 통과, feature test 98개 통과 |
