@@ -39,6 +39,8 @@ Node.js 24 LTS, Corepack과 `pnpm@11.11.0`, Git, Nginx, Certbot을 설치한다.
 
 환경 변수 이름은 루트 `.env.example`을 기준으로 `/etc/housemouse/server.env`에 입력한다. 파일에는 실제 값이 필요하지만 Git에는 추가하지 않는다. AWS S3와 IAM role을 사용할 때는 다음 규칙을 따른다.
 
+- `SERVER_HOST`: EC2에서는 `127.0.0.1`; 외부 reverse proxy가 없는 container platform에서만 `0.0.0.0`
+
 - `OBJECT_STORAGE_REGION`: bucket 리전
 - `OBJECT_STORAGE_BUCKET`: private bucket 이름
 - `OBJECT_STORAGE_ENDPOINT`: AWS 기본 S3에서는 빈 값

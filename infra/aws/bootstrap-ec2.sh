@@ -86,6 +86,7 @@ EOF
   cat >"${CONFIG_DIR}/server.env" <<EOF
 NODE_ENV=production
 PORT=3000
+SERVER_HOST=127.0.0.1
 DATABASE_URL=postgresql://housemouse:${postgres_password}@127.0.0.1:5432/housemouse
 REDIS_URL=redis://:${redis_password}@127.0.0.1:6379
 WEB_ORIGIN=https://${DOMAIN}

@@ -11,11 +11,18 @@ services:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: '10000'
+        value: "10000"
+      - key: SERVER_HOST
+        value: "0.0.0.0"
       - key: DATABASE_URL
         fromDatabase: { name: housemouse-postgres, property: connectionString }
       - key: REDIS_URL
-        fromService: { type: keyvalue, name: housemouse-key-value, property: connectionString }
+        fromService:
+          {
+            type: keyvalue,
+            name: housemouse-key-value,
+            property: connectionString,
+          }
       - key: WEB_ORIGIN
         sync: false
       - key: JWT_OR_DEVICE_TOKEN_SECRET
@@ -27,15 +34,23 @@ services:
       - key: FIREBASE_PRIVATE_KEY
         sync: false
       - key: FILE_TRANSFER_MAX_BYTES
-        value: '104857600'
+        value: "104857600"
       - key: FILE_TRANSFER_TTL_SECONDS
-        value: '600'
+        value: "600"
+      - key: FCM_ENABLED
+        value: "false"
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
       - key: SMART_CACHE_ENABLED
-        value: 'false'
+        value: "false"
       - key: SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES
-        value: '524288000'
+        value: "524288000"
       - key: SMART_CACHE_DEFAULT_MAX_FILE_BYTES
-        value: '52428800'
+        value: "52428800"
       - key: OBJECT_STORAGE_ENDPOINT
         sync: false
       - key: OBJECT_STORAGE_REGION
@@ -67,7 +82,7 @@ services:
       - key: OBJECT_STORAGE_SECRET_ACCESS_KEY
         sync: false
       - key: FILE_TRANSFER_TTL_SECONDS
-        value: '600'
+        value: "600"
 
   - type: keyvalue
     name: housemouse-key-value
@@ -78,7 +93,7 @@ services:
 databases:
   - name: housemouse-postgres
     plan: free
-    postgresMajorVersion: '17'
+    postgresMajorVersion: "17"
     databaseName: housemouse
     user: housemouse
     ipAllowList: []

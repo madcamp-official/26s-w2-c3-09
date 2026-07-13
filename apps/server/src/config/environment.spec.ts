@@ -6,6 +6,7 @@ import { loadEnvironment } from './environment';
 const baseEnvironment = {
   NODE_ENV: 'test',
   PORT: '3000',
+  SERVER_HOST: '127.0.0.1',
   DATABASE_URL: 'postgresql://test:test@localhost:5432/test',
   REDIS_URL: 'redis://localhost:6379',
   WEB_ORIGIN: 'http://localhost:5173',
@@ -20,6 +21,18 @@ const baseEnvironment = {
 describe('loadEnvironment', () => {
   it('fails fast when required values are absent', () => {
     expect(() => loadEnvironment({})).toThrow('UNCONFIGURED');
+  });
+
+  it('accepts only explicit loopback or container bind hosts', () => {
+    expect(() =>
+      loadEnvironment({
+        ...baseEnvironment,
+        SERVER_HOST: '192.0.2.10',
+        FIREBASE_PROJECT_ID: 'test-project',
+        FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.com',
+        FIREBASE_PRIVATE_KEY: 'test-private-key',
+      }),
+    ).toThrow('UNCONFIGURED: SERVER_HOST');
   });
 
   it('loads Firebase credentials from an external service account file', () => {

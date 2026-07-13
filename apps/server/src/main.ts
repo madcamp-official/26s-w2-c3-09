@@ -24,6 +24,6 @@ async function bootstrap() {
   );
   app.enableCors({ origin: environment.WEB_ORIGIN, credentials: true });
   app.enableShutdownHooks();
-  await app.listen(environment.PORT, '0.0.0.0');
+  await app.listen(environment.PORT, environment.SERVER_HOST);
 }
 void bootstrap();
