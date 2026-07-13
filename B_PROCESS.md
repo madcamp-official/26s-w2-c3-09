@@ -497,8 +497,9 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - 모바일 채팅 화면을 구형 room 단일 채팅 API에서 `/v1/rooms/:roomId/chat-sessions`, `/v1/chat-sessions/:sessionId/messages` 기반으로 전환했다.
 - 세션 목록 선택, 새 세션 생성, 선택 세션 soft delete 요청, 현재 세션 메시지 조회와 전송을 연결했다.
 - 메시지 전송 후 전체 채팅 reload를 하지 않고 서버가 반환한 사용자 메시지와 assistant 확인 카드만 로컬 목록에 append한다.
+- 채팅 메시지 조회에 cursor/limit pagination을 연결해 “다음 메시지 더 보기”가 기존 목록을 교체하지 않고 다음 page만 append한다.
 - 6번째 세션 생성처럼 서버가 `CHAT_SESSION_LIMIT_REACHED`를 반환하는 경우 성공으로 가장하지 않고 최대 5개 제한 안내를 표시한다.
-- test-scope `ChatGateway` fake로 세션 선택, 전송 append, 5개 제한 안내를 widget test에서 검증했다.
+- test-scope `ChatGateway` fake로 세션 선택, 전송 append, cursor page append, 5개 제한 안내를 widget test에서 검증했다.
 
 ## 2026-07-14 — AI 구조화 출력 검증 경계
 

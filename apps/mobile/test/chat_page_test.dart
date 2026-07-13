@@ -70,6 +70,38 @@ void main() {
     expect(gateway.sentMessages, ['정리해줘']);
   });
 
+  testWidgets('load more appends the next message page by cursor', (
+    tester,
+  ) async {
+    final messages = [
+      for (var index = 0; index < chatMessagePageSize + 1; index += 1)
+        _message('m$index', 's1', 'USER', '메시지 $index'),
+    ];
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화')],
+      messagesBySession: {'s1': messages},
+    );
+
+    await _pumpChat(tester, gateway);
+
+    expect(find.text('메시지 ${chatMessagePageSize - 1}'), findsOneWidget);
+    expect(find.text('메시지 $chatMessagePageSize'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('chat-load-more-messages')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('chat-load-more-messages')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('메시지 $chatMessagePageSize'), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-load-more-messages')), findsNothing);
+    expect(gateway.messageRequests, [
+      {'sessionId': 's1', 'cursor': null, 'limit': chatMessagePageSize},
+      {'sessionId': 's1', 'cursor': 'm29', 'limit': chatMessagePageSize},
+    ]);
+  });
+
   testWidgets('new session limit is shown without pretending success', (
     tester,
   ) async {
@@ -142,6 +174,7 @@ class _FakeChatGateway implements ChatGateway {
   final Map<String, dynamic>? sendResult;
   final Object? createError;
   final Map<String, int> messageLoads = {};
+  final List<Map<String, Object?>> messageRequests = [];
   final List<String> sentMessages = [];
   int createdSessions = 0;
 
@@ -168,9 +201,24 @@ class _FakeChatGateway implements ChatGateway {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> listMessages(String sessionId) async {
+  Future<List<Map<String, dynamic>>> listMessages(
+    String sessionId, {
+    String? cursor,
+    int limit = chatMessagePageSize,
+  }) async {
     messageLoads[sessionId] = (messageLoads[sessionId] ?? 0) + 1;
-    return [...messagesBySession[sessionId] ?? const []];
+    messageRequests.add({
+      'sessionId': sessionId,
+      'cursor': cursor,
+      'limit': limit,
+    });
+    final messages = messagesBySession[sessionId] ?? const [];
+    final start = cursor == null
+        ? 0
+        : messages.indexWhere((message) => message['id'] == cursor) + 1;
+    final safeStart = start < 0 ? 0 : start;
+    final safeEnd = (safeStart + limit).clamp(safeStart, messages.length);
+    return [...messages.sublist(safeStart, safeEnd)];
   }
 
   @override

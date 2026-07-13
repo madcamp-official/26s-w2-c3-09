@@ -140,7 +140,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결 | file ID와 scheduled reconcile scan |
 | 3 규칙·명령·제안 | Desktop/server/mobile processor 연결 | 실제 3자 release E2E |
 | 4 실행·Undo·README·파일 전달 | MOVE/격리/README/transfer 구현 | CREATE_DIR과 실제 3자 transfer E2E |
-| 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
+| 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI·cursor pagination, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
 | 6 오프라인·재접속 | 양쪽 outbox·cursor replay 구현 | 강제 종료·서버 재시작 E2E |
 | 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill | rename migration, signed release, Sentry DSN |
 | 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle | Desktop client encryption과 key lifecycle |

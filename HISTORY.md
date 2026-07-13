@@ -51,7 +51,7 @@
 - [x] file browse 요청, cursor page, timeout/offline/cursor 오류 상태
 - [x] FileTransfer 요청·signed PUT/GET·HEAD 크기 확인·SHA-256 metadata·ACK/cancel/expiry 상태
 - [x] character profile, affinity 원장과 중복 보상 방지; 기존 외형/테마 선택 API는 하위 호환용 deprecated 경로로만 유지
-- [x] chat session/message 영속화와 모바일 세션 선택·생성·삭제 UI. AI 미설정은 assistant 성공을 만들지 않고 명시적으로 `UNCONFIGURED`
+- [x] chat session/message 영속화와 모바일 세션 선택·생성·삭제·cursor pagination UI. AI 미설정은 assistant 성공을 만들지 않고 명시적으로 `UNCONFIGURED`
 - [x] FCM token 등록/해제, notification outbox와 영구 무효 token 정리
 - [x] audit activity summary와 privacy-safe request/Sentry 경계
 

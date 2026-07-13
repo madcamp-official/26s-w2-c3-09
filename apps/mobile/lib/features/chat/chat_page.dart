@@ -11,9 +11,15 @@ abstract interface class ChatGateway {
   Future<List<Map<String, dynamic>>> listSessions(String roomId);
   Future<Map<String, dynamic>> createSession(String roomId);
   Future<void> deleteSession(String sessionId);
-  Future<List<Map<String, dynamic>>> listMessages(String sessionId);
+  Future<List<Map<String, dynamic>>> listMessages(
+    String sessionId, {
+    String? cursor,
+    int limit = chatMessagePageSize,
+  });
   Future<Map<String, dynamic>> sendMessage(String sessionId, String content);
 }
+
+const chatMessagePageSize = 30;
 
 class ApiChatGateway implements ChatGateway {
   ApiChatGateway(this._api);
@@ -34,8 +40,17 @@ class ApiChatGateway implements ChatGateway {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> listMessages(String sessionId) =>
-      _api.getList('/v1/chat-sessions/$sessionId/messages');
+  Future<List<Map<String, dynamic>>> listMessages(
+    String sessionId, {
+    String? cursor,
+    int limit = chatMessagePageSize,
+  }) {
+    final path = Uri(
+      path: '/v1/chat-sessions/$sessionId/messages',
+      queryParameters: {'limit': '$limit', 'cursor': ?cursor},
+    ).toString();
+    return _api.getList(path);
+  }
 
   @override
   Future<Map<String, dynamic>> sendMessage(String sessionId, String content) =>
@@ -98,10 +113,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Object? _error;
   bool _loading = true;
   bool _sending = false;
+  bool _loadingMore = false;
   bool _creating = false;
   bool _deleting = false;
   bool _disposed = false;
   int _loadVersion = 0;
+  String? _messageCursor;
+  bool _hasMoreMessages = false;
 
   ChatGateway get _gateway =>
       widget.gateway ?? ApiChatGateway(ref.read(apiClientProvider));
@@ -144,6 +162,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _sessions = sessions;
         _selectedSessionId = selectedId;
         _messages = messages;
+        _messageCursor = _lastMessageId(messages);
+        _hasMoreMessages = messages.length == chatMessagePageSize;
         _loading = false;
       });
       _scrollToBottom();
@@ -169,6 +189,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (_stale(version)) return;
       setState(() {
         _messages = messages;
+        _messageCursor = _lastMessageId(messages);
+        _hasMoreMessages = messages.length == chatMessagePageSize;
         _loading = false;
       });
       _scrollToBottom();
@@ -191,6 +213,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _sessions = [created, ..._sessions];
         _selectedSessionId = created['id'] as String;
         _messages = const [];
+        _messageCursor = null;
+        _hasMoreMessages = false;
         _error = null;
       });
     } catch (error) {
@@ -215,6 +239,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _sessions = remaining;
         _selectedSessionId = nextId;
         _messages = const [];
+        _messageCursor = null;
+        _hasMoreMessages = false;
       });
       if (nextId != null) {
         await _selectSession(nextId);
@@ -244,6 +270,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ];
       setState(() {
         _messages = newMessages;
+        _messageCursor = _lastMessageId(newMessages);
         _sessions = _touchSessionPreview(_sessions, sessionId, content);
       });
       _scrollToBottom();
@@ -253,6 +280,28 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _showSnack('메시지 저장 실패: ${chatErrorMessage(error)}');
     } finally {
       if (!_disposed) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _loadMoreMessages() async {
+    final sessionId = _selectedSessionId;
+    final cursor = _messageCursor;
+    if (sessionId == null || cursor == null || _loadingMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      final next = await _gateway.listMessages(sessionId, cursor: cursor);
+      if (_disposed || sessionId != _selectedSessionId) return;
+      final merged = _mergeMessages(_messages, next);
+      setState(() {
+        _messages = merged;
+        _messageCursor = _lastMessageId(merged);
+        _hasMoreMessages = next.length == chatMessagePageSize;
+      });
+      _scrollToBottom();
+    } catch (error) {
+      _showSnack('메시지를 더 불러오지 못했습니다: ${chatErrorMessage(error)}');
+    } finally {
+      if (!_disposed) setState(() => _loadingMore = false);
     }
   }
 
@@ -297,6 +346,27 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       else
         session,
   ];
+
+  static String? _lastMessageId(List<Map<String, dynamic>> messages) {
+    if (messages.isEmpty) return null;
+    return messages.last['id'] as String?;
+  }
+
+  static List<Map<String, dynamic>> _mergeMessages(
+    List<Map<String, dynamic>> existing,
+    List<Map<String, dynamic>> received,
+  ) {
+    final seen = existing
+        .map((message) => message['id'])
+        .whereType<String>()
+        .toSet();
+    return [
+      ...existing,
+      for (final message in received)
+        if (message['id'] is String && seen.add(message['id'] as String))
+          message,
+    ];
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -399,8 +469,28 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.all(16),
-      itemCount: _messages.length,
-      itemBuilder: (context, index) => _ChatBubble(message: _messages[index]),
+      itemCount: _messages.length + (_hasMoreMessages ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index == _messages.length) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: OutlinedButton.icon(
+              key: const ValueKey('chat-load-more-messages'),
+              onPressed: _loadingMore
+                  ? null
+                  : () => unawaited(_loadMoreMessages()),
+              icon: _loadingMore
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.expand_more),
+              label: const Text('다음 메시지 더 보기'),
+            ),
+          );
+        }
+        return _ChatBubble(message: _messages[index]);
+      },
     );
   }
 }
