@@ -21,6 +21,7 @@ jobs:
       - run: cargo test --manifest-path tools/file-engine-cli/Cargo.toml --all-targets
       - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
       - run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri-commands
+      - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri-commands --all-targets
 
   node:
     runs-on: ubuntu-latest

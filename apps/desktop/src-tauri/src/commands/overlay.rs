@@ -141,7 +141,11 @@ fn get_overlay_status_impl(runtime: &OverlayRuntime) -> Result<OverlayStatus, St
     runtime.status().map_err(|error| error.to_string())
 }
 
-#[cfg(test)]
+// These tests exercise the `not(feature = "tauri-commands")` variants above, which take a plain
+// `&OverlayRuntime` so they are callable without a live Tauri `AppHandle`/`State`. The
+// `tauri-commands` variants need a running app to construct their `State` argument and are not
+// unit-testable this way, so this module only compiles for the CLI/no-tauri-commands build.
+#[cfg(all(test, not(feature = "tauri-commands")))]
 mod tests {
     use crate::overlay::{CharacterEvent, CharacterEventKind, OverlayRuntime, OverlayState};
 

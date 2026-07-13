@@ -700,7 +700,11 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-#[cfg(test)]
+// These tests exercise the `not(feature = "tauri-commands")` variants above, which take plain
+// `&Store` arguments so they are callable without a live Tauri `State`/`AppHandle`. The
+// `tauri-commands` variants need a running app to construct those arguments and are not
+// unit-testable this way, so this module only compiles for the CLI/no-tauri-commands build.
+#[cfg(all(test, not(feature = "tauri-commands")))]
 mod tests {
     use std::fs;
 

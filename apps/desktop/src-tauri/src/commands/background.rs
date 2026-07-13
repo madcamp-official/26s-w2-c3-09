@@ -51,7 +51,11 @@ fn pause_background_runtime_impl(
     runtime.pause("paused by user")
 }
 
-#[cfg(test)]
+// These tests exercise the `not(feature = "tauri-commands")` variants above, which take a plain
+// `&BackgroundRuntime` so they are callable without a live Tauri `State`. The `tauri-commands`
+// variants need a running app to construct their `State` argument and are not unit-testable this
+// way, so this module only compiles for the CLI/no-tauri-commands build.
+#[cfg(all(test, not(feature = "tauri-commands")))]
 mod tests {
     use crate::background::{BackgroundRuntime, BackgroundRuntimeState};
 
