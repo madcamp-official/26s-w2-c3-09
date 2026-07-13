@@ -463,6 +463,110 @@ mod tests {
     }
 
     #[test]
+    fn delegated_create_batch_journals_before_writes_and_undoes_without_overwrite() {
+        use file_engine_cli::journal::{
+            read_operation_history, JournalAction, JournalStatus, JournalStore,
+        };
+        use file_engine_cli::undo::undo_root;
+
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("Archive")).expect("archive parent");
+        fs::create_dir_all(root.join("Notes")).expect("notes parent");
+        fs::write(root.join("Notes/existing.txt"), "keep").expect("existing file");
+
+        let items = vec![
+            AgentProposalItemRecord {
+                item_order: 0,
+                action_type: "CREATE_DIR".to_string(),
+                source_relative_path: None,
+                destination_relative_path: Some("Archive/Reports".to_string()),
+                reason_code: "USER_REQUESTED_CREATE_DIR".to_string(),
+                precondition: json!({}),
+                conflict_state: "NONE".to_string(),
+            },
+            AgentProposalItemRecord {
+                item_order: 1,
+                action_type: "CREATE_FILE".to_string(),
+                source_relative_path: None,
+                destination_relative_path: Some("Notes/todo.txt".to_string()),
+                reason_code: "USER_REQUESTED_CREATE_FILE".to_string(),
+                precondition: json!({}),
+                conflict_state: "NONE".to_string(),
+            },
+            AgentProposalItemRecord {
+                item_order: 2,
+                action_type: "CREATE_FILE".to_string(),
+                source_relative_path: None,
+                destination_relative_path: Some("Notes/existing.txt".to_string()),
+                reason_code: "USER_REQUESTED_CREATE_FILE".to_string(),
+                precondition: json!({}),
+                conflict_state: "NONE".to_string(),
+            },
+        ];
+
+        let report =
+            build_local_proposal_report(root, &items).expect("local create batch proposal");
+        let execute_report = execute_decision_application(
+            root,
+            DecisionApplication {
+                approved: report,
+                rejected: Vec::new(),
+            },
+        )
+        .expect("execute create batch");
+
+        assert_eq!(execute_report.executed_count, 2);
+        assert_eq!(execute_report.skipped_count, 1);
+        assert!(root.join("Archive/Reports").is_dir());
+        assert_eq!(
+            fs::metadata(root.join("Notes/todo.txt"))
+                .expect("created file")
+                .len(),
+            0
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("Notes/existing.txt")).expect("existing file"),
+            "keep"
+        );
+
+        let entries = JournalStore::open(root)
+            .expect("journal")
+            .read_all()
+            .expect("raw journal entries");
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].action, JournalAction::CreateDir);
+        assert_eq!(entries[0].status, JournalStatus::Planned);
+        assert_eq!(entries[1].action, JournalAction::CreateDir);
+        assert_eq!(entries[1].status, JournalStatus::Executed);
+        assert_eq!(entries[0].operation_id, entries[1].operation_id);
+        assert_eq!(entries[2].action, JournalAction::CreateFile);
+        assert_eq!(entries[2].status, JournalStatus::Planned);
+        assert_eq!(entries[3].action, JournalAction::CreateFile);
+        assert_eq!(entries[3].status, JournalStatus::Executed);
+        assert_eq!(entries[2].operation_id, entries[3].operation_id);
+
+        let history = read_operation_history(root).expect("history");
+        assert_eq!(history.operations.len(), 2);
+        assert!(history.operations.iter().all(|entry| entry.can_undo));
+
+        let undo = undo_root(root).expect("undo create batch");
+        assert_eq!(undo.undone_count, 2);
+        assert!(!root.join("Archive/Reports").exists());
+        assert!(!root.join("Notes/todo.txt").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("Notes/existing.txt")).expect("existing file after undo"),
+            "keep"
+        );
+
+        let history_after_undo = read_operation_history(root).expect("history after undo");
+        assert!(history_after_undo
+            .operations
+            .iter()
+            .all(|entry| !entry.can_undo));
+    }
+
+    #[test]
     fn delegated_readme_write_executes_and_stays_undoable() {
         use file_engine_cli::journal::{read_operation_history, JournalAction};
         use file_engine_cli::undo::undo_operation;

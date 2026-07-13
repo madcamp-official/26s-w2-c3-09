@@ -123,7 +123,7 @@
 - [~] **모바일 로그인:** `com.mousekeeper.app`용 Firebase JSON을 로컬 설치하고 Firebase 활성 debug build까지 통과했다. 실제 Google login과 release SHA 검증은 남았다.
 - [x] **파일 identity 연결:** SQLite `file_index`는 OS-backed nullable `file_id`를 저장한다. proposal/precondition은 같은 identity를 `source_file_id`/`sourceFileId`로 전달해 실행 직전 변경을 `SourceChanged`로 막고, file transfer sourceVersion도 기존 `hm:` hash 대신 같은 OS-backed identity를 사용해 업로드 전후 원본 교체를 `SOURCE_CHANGED`로 차단한다.
 - [x] **watcher 재조정:** watcher event와 overflow full reindex가 있고, 30초 full reconcile pass가 active watched root의 SQLite browse/search index와 청결도 snapshot을 주기적으로 보정한다.
-- [~] **파일 실행 action:** MOVE, QUARANTINE, README_WRITE, CREATE_DIR, CREATE_FILE 경로는 구현됐다. CREATE 계열의 실제 3자 release E2E와 journal/undo 회귀 고정은 남았다.
+- [~] **파일 실행 action:** MOVE, QUARANTINE, README_WRITE, CREATE_DIR, CREATE_FILE 경로는 구현됐다. CREATE 계열의 Desktop batch journal/no-overwrite/undo 회귀는 고정했고, 실제 Android↔server↔Desktop 3자 release E2E는 남았다.
 - [~] **온라인 파일 전달:** server 실제 S3 lifecycle E2E와 Desktop processor 단위 테스트는 있으나 Android↔Desktop↔server 한 기기 E2E 회귀가 현재 자동화되어 있지 않다.
 - [~] **오프라인 큐:** DB queue, mobile/desktop outbox와 cursor replay는 있으나 프로세스 강제 종료·서버 재시작을 포함한 전체 E2E script가 없다.
 - [~] **캐릭터 기본 상태:** 8종 PNG 상태 전환은 있으나 기획서의 실제 애니메이션 상태 머신은 없다.
@@ -212,7 +212,7 @@
 | Rule DSL | 부분 완료 | extension/age/name 결정론 평가 완료, 확장 DSL은 서버 계약 추가 후 Desktop evaluator 통합 대기 |
 | 파일별 제안 | 완료 | reason/destination/collision UI |
 | 전체 승인·거절 | 완료 | DB 영속·idempotency |
-| 파일 실행 | 부분 | MOVE/QUARANTINE/README/CREATE_DIR/CREATE_FILE 구현, release E2E 고정 필요 |
+| 파일 실행 | 부분 | MOVE/QUARANTINE/README/CREATE_DIR/CREATE_FILE 구현, CREATE batch journal/no-overwrite/undo 로컬 회귀 고정, 3자 release E2E 필요 |
 | 복구형 trash | 완료 | metadata/journal/undo |
 | README 제안·적용 | 완료 | hash/write/backup/undo |
 | 청결도 | 완료 | 0~100와 감점 근거 |
@@ -239,7 +239,7 @@
 - [ ] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞추고 mobile 복호화·tag 검증을 연결한다.
 - [x] Indexed file identity를 proposal/precondition/transfer sourceVersion에서 size·mtime과 함께 비교하도록 연결했다.
 - [ ] scan/write/transfer 동시성 제한을 명시하고 테스트한다.
-- [ ] 승인된 CREATE_DIR/CREATE_FILE의 journal-before-write/no-overwrite/undo 정책을 실제 3자 E2E로 고정한다.
+- [~] 승인된 CREATE_DIR/CREATE_FILE의 journal-before-write/no-overwrite/undo 정책은 Desktop batch 회귀로 고정했고, 실제 3자 E2E 고정은 남았다.
 - [ ] 자연어 command provider를 선택하고 출력 Zod validation, 사용자 draft 확인, `UNCONFIGURED` 경계를 구현한다.
 - [ ] 로컬 설치된 `com.mousekeeper.app` Firebase 설정에 debug/release SHA를 확인하고 Google login/FCM을 실기기 검증한다.
 - [ ] Android↔server↔Desktop command/proposal/execute/undo와 browse/transfer를 하나의 반복 가능한 E2E로 고정한다.
@@ -251,7 +251,7 @@
 ### 우선순위 1 — 캐릭터 interaction 전 backend/infra 보완
 
 1. 스마트 캐시를 기본 `false`로 유지한 채 실제 Desktop encryption/key lifecycle을 먼저 완성한다.
-2. Indexed file ID 기반 proposal/precondition/transfer 안전 회귀와 CREATE_DIR/CREATE_FILE 안전 operation을 release E2E로 고정한다.
+2. Indexed file ID 기반 proposal/precondition/transfer 안전 회귀는 유지하고, CREATE_DIR/CREATE_FILE 안전 operation은 추가된 Desktop batch 회귀를 기반으로 release E2E까지 확장한다.
 3. 외부 DB/S3 integration suite를 CI의 secret-protected opt-in job으로 실행한다.
 4. Firebase debug/release SHA, release keystore, Sentry DSN을 secret manager와 provider console에 등록한다.
 5. 새 systemd/path/IAM 이름으로 EC2를 migration하고 health/ready/worker/backup/restore를 재검증한다.

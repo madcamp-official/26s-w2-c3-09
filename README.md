@@ -21,6 +21,7 @@
 - Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.
 - OpenAI Responses provider is now configurable behind `AI_PROVIDER=openai`, `AI_API_KEY`, and `AI_MODEL`; model output is parsed as structured JSON and revalidated against MouseKeeper command/rule Zod contracts before any draft enters product logic. Missing or rejected credentials still return explicit `AI_PROVIDER_UNCONFIGURED`.
 - Desktop command processing now accepts server `RENAME`, `MOVE`, `TRASH`, directory `CREATE`, and empty-file `CREATE` commands as proposal generation only: the agent validates the managed-root binding, source paths, filenames/destinations, parent directory safety, symlink/reparse safety, and destination conflicts, then submits `MOVE`, quarantine, `CREATE_DIR`, or `CREATE_FILE` proposal items without touching files before user approval.
+- Delegated `CREATE_DIR`/`CREATE_FILE` batch execution now has a desktop regression that proves planned journal entries are written before created paths, existing targets are skipped without overwrite, and undo removes only the newly created paths.
 
 > 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md), 현재 완료/누락 판정은 [구현 이력 및 MVP 감사](HISTORY.md)를 기준으로 합니다.
 >
@@ -209,7 +210,7 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 
 1. Android USB를 다시 연결해 새 package 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
 2. Desktop smart-cache 업로더에 authenticated encryption과 OS 보안 저장소 key lifecycle을 구현한다.
-3. Indexed file ID 기반 proposal/precondition/transfer 회귀와 CREATE_DIR/CREATE_FILE journal/undo 경로를 release E2E에서 검증한다.
+3. Indexed file ID 기반 proposal/precondition/transfer 회귀를 유지하고, 추가된 CREATE_DIR/CREATE_FILE Desktop batch journal/no-overwrite/undo 회귀를 실제 3자 release E2E로 확장한다.
 4. command/proposal/execute/undo와 browse/transfer를 한 managed root·실기기에서 왕복 검증한다.
 5. 새 EC2 unit/path와 Firebase package로 rename migration을 실행하고 rollback을 확인한다.
 6. 실제 `.riv`와 overlay shell을 연결하고 artboard/state machine/input을 실기기·Desktop에서 확인한다.
