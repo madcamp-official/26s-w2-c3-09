@@ -515,3 +515,10 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - `AUTHENTICATING`, `LOADING_CONNECTIONS`, `CONNECTING_REALTIME`, `RECONCILING_CACHE`, `READY`에 대응하는 진행률과 안내 문구를 enum으로 고정했다.
 - 접근성 reduce-motion 설정에서는 Tween animation 없이 현재 단계의 정적 진행률을 표시한다.
 - loading 화면은 여전히 이전 main 화면을 노출하지 않으며, widget test로 기본 35%와 realtime 60% 단계를 검증했다.
+
+## 2026-07-14 — Rules 화면 부분 갱신
+
+- 모바일 규칙 화면을 `FutureBuilder + setState(_reload)` 중심 구조에서 명시적 local rule list 상태와 `RuleGateway`로 분리했다.
+- rule enable toggle, 생성, 수정은 서버가 반환한 rule 객체만 `upsertRule`로 반영하고 전체 목록 재조회는 초기 진입·수동 새로고침·에러 재시도에만 사용한다.
+- version conflict, room/rule not found는 fake success 없이 사용자 안내로 표시하고 로컬 rule 상태를 임의 성공 처리하지 않는다.
+- test-scope fake gateway로 toggle 후 list reload 없음, 생성 후 upsert, priority 정렬을 widget/unit test에서 검증했다.
