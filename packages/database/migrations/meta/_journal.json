@@ -113,6 +113,13 @@
       "when": 1783918452230,
       "tag": "0015_peaceful_riptide",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1783932257135,
+      "tag": "0016_wandering_vanisher",
+      "breakpoints": true
     }
   ]
 }

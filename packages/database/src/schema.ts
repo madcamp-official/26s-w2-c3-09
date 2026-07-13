@@ -149,6 +149,31 @@ export const rooms = pgTable(
     index("rooms_device_status_idx").on(t.desktopDeviceId, t.status),
   ],
 );
+export const connectionMutationReceipts = pgTable(
+  "connection_mutation_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    actorScope: varchar("actor_scope", { length: 160 }).notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    actorDeviceId: uuid("actor_device_id").references(() => devices.id),
+    operation: varchar("operation", { length: 40 }).notNull(),
+    aggregateId: uuid("aggregate_id").notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+    result: jsonb("result").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("connection_mutation_actor_key_idx").on(
+      t.actorScope,
+      t.idempotencyKey,
+    ),
+    index("connection_mutation_aggregate_idx").on(t.operation, t.aggregateId),
+  ],
+);
 export const rules = pgTable(
   "rules",
   {
@@ -313,6 +338,9 @@ export const roomSnapshots = pgTable(
       .references(() => rooms.id),
     score: integer("score").notNull(),
     metrics: jsonb("metrics").notNull(),
+    formulaVersion: varchar("formula_version", { length: 80 })
+      .notNull()
+      .default("mousekeeper-cleanliness-v1"),
     calculatedAt: timestamp("calculated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -411,6 +439,10 @@ export const fileBrowseRequests = pgTable(
       .references(() => devices.id),
     relativeDirectory: text("relative_directory").notNull(),
     cursor: varchar("cursor", { length: 512 }),
+    query: varchar("query", { length: 100 }),
+    searchScope: varchar("search_scope", { length: 30 })
+      .notNull()
+      .default("CURRENT_DIRECTORY"),
     status: varchar("status", { length: 40 }).notNull().default("REQUESTED"),
     failureCode: varchar("failure_code", { length: 60 }),
     resultPage: jsonb("result_page"),
