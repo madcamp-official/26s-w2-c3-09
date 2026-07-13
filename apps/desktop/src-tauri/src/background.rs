@@ -458,6 +458,7 @@ async fn run_background_tick(
     let outbox = app.state::<crate::storage::outbox::OutboxStore>();
     let smart_cache = app.state::<crate::storage::smart_cache::SmartCacheStore>();
     let watchers = app.state::<crate::storage::watchers::WatcherStore>();
+    let work_limiter = app.state::<crate::work_limiter::WorkLimiter>();
 
     // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
     let mut activity = crate::overlay::OverlayActivity::default();
@@ -551,42 +552,47 @@ async fn run_background_tick(
     // desktop still owns an active server connection.
     let mut pending_auto_cleanup = None;
     if should_run_auto_cleanup(status) {
-        match crate::auto_cleanup_processor::process_auto_cleanup(&roots, &auto_approval) {
-            Ok(report) => {
-                for proposal in &report.proposals {
-                    let _ = app.emit(
-                        crate::auto_cleanup_processor::AUTO_CLEANUP_PROPOSAL_EVENT,
-                        proposal,
-                    );
-                }
-                activity.executed_item_count += report.executed_count;
-                if report.failed_count > 0 {
-                    activity.had_error = true;
-                }
-                update_status(status, |status| {
-                    status.state = BackgroundRuntimeState::Running;
-                    status.last_auto_cleanup_unix_ms = Some(unix_ms());
-                    status.last_auto_cleanup_root_count = report.proposed_root_count;
-                    status.last_auto_cleanup_approved_count = report.approved_count;
-                    status.last_auto_cleanup_executed_count = report.executed_count;
-                    status.last_auto_cleanup_failed_count = report.failed_count;
-                    if report.failed_count > 0 {
-                        status.last_error_message = Some(format!(
-                            "{} auto cleanup root(s) failed",
-                            report.failed_count
-                        ));
+        match work_limiter.try_write() {
+            Ok(_permit) => {
+                match crate::auto_cleanup_processor::process_auto_cleanup(&roots, &auto_approval) {
+                    Ok(report) => {
+                        for proposal in &report.proposals {
+                            let _ = app.emit(
+                                crate::auto_cleanup_processor::AUTO_CLEANUP_PROPOSAL_EVENT,
+                                proposal,
+                            );
+                        }
+                        activity.executed_item_count += report.executed_count;
+                        if report.failed_count > 0 {
+                            activity.had_error = true;
+                        }
+                        update_status(status, |status| {
+                            status.state = BackgroundRuntimeState::Running;
+                            status.last_auto_cleanup_unix_ms = Some(unix_ms());
+                            status.last_auto_cleanup_root_count = report.proposed_root_count;
+                            status.last_auto_cleanup_approved_count = report.approved_count;
+                            status.last_auto_cleanup_executed_count = report.executed_count;
+                            status.last_auto_cleanup_failed_count = report.failed_count;
+                            if report.failed_count > 0 {
+                                status.last_error_message = Some(format!(
+                                    "{} auto cleanup root(s) failed",
+                                    report.failed_count
+                                ));
+                            }
+                        });
+                        pending_auto_cleanup = Some(report);
                     }
-                });
-                pending_auto_cleanup = Some(report);
+                    Err(error) => {
+                        activity.had_error = true;
+                        update_status(status, |status| {
+                            status.state = BackgroundRuntimeState::Running;
+                            status.last_auto_cleanup_unix_ms = Some(unix_ms());
+                            status.last_error_message = Some(error);
+                        });
+                    }
+                }
             }
-            Err(error) => {
-                activity.had_error = true;
-                update_status(status, |status| {
-                    status.state = BackgroundRuntimeState::Running;
-                    status.last_auto_cleanup_unix_ms = Some(unix_ms());
-                    status.last_error_message = Some(error);
-                });
-            }
+            Err(error) => record_busy_skip(status, error),
         }
     }
 
@@ -608,120 +614,149 @@ async fn run_background_tick(
         }
     }
 
-    match crate::command_processor::process_pending_commands(&agent, &roots, &outbox).await {
-        Ok(report) => {
-            activity.processed_command_count = report.processed_count;
-            activity.submitted_proposal_count = report.submitted_proposal_count;
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_command_poll_unix_ms = Some(unix_ms());
-                status.last_command_count = report.inspected_count;
-                status.last_processed_command_count = report.processed_count;
-                status.last_submitted_proposal_count = report.submitted_proposal_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} command(s) failed during proposal processing",
-                        report.failed_count
-                    ));
+    match work_limiter.try_scan() {
+        Ok(_permit) => {
+            match crate::command_processor::process_pending_commands(&agent, &roots, &outbox).await
+            {
+                Ok(report) => {
+                    activity.processed_command_count = report.processed_count;
+                    activity.submitted_proposal_count = report.submitted_proposal_count;
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_command_poll_unix_ms = Some(unix_ms());
+                        status.last_command_count = report.inspected_count;
+                        status.last_processed_command_count = report.processed_count;
+                        status.last_submitted_proposal_count = report.submitted_proposal_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} command(s) failed during proposal processing",
+                                report.failed_count
+                            ));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }
 
-    match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox).await {
-        Ok(report) => {
-            activity.executed_item_count = report.executed_item_count;
-            activity.execution_failed_count = report.failed_count;
-            update_status(status, |status| {
-                status.last_decision_poll_unix_ms = Some(unix_ms());
-                status.last_decision_count = report.inspected_count;
-                status.last_executed_item_count = report.executed_item_count;
-                status.last_execution_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} decision(s) failed during execution",
-                        report.failed_count
-                    ));
+    match work_limiter.try_write() {
+        Ok(_permit) => {
+            match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox)
+                .await
+            {
+                Ok(report) => {
+                    activity.executed_item_count = report.executed_item_count;
+                    activity.execution_failed_count = report.failed_count;
+                    update_status(status, |status| {
+                        status.last_decision_poll_unix_ms = Some(unix_ms());
+                        status.last_decision_count = report.inspected_count;
+                        status.last_executed_item_count = report.executed_item_count;
+                        status.last_execution_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} decision(s) failed during execution",
+                                report.failed_count
+                            ));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }
 
     if mode.runs_heavy_rest() {
-        match crate::watcher_lifecycle::reconcile_watched_root_indexes(
-            &roots,
-            &watchers,
-            |root_id| crate::cleanliness::reconcile_cleanliness_snapshot(app, root_id).map(|_| ()),
-        ) {
-            Ok(report) => {
-                if report.failed_root_count > 0 {
-                    activity.had_error = true;
-                }
-                update_status(status, |status| {
-                    status.last_file_index_reconcile_unix_ms = Some(unix_ms());
-                    status.last_file_index_reconcile_root_count = report.inspected_root_count;
-                    status.last_file_index_reconcile_failed_count = report.failed_root_count;
-                    if report.failed_root_count > 0 {
-                        status.last_error_message = Some(format!(
-                            "{} managed root index reconcile(s) failed",
-                            report.failed_root_count
-                        ));
+        match work_limiter.try_scan() {
+            Ok(_permit) => {
+                match crate::watcher_lifecycle::reconcile_watched_root_indexes(
+                    &roots,
+                    &watchers,
+                    |root_id| {
+                        crate::cleanliness::reconcile_cleanliness_snapshot(app, root_id).map(|_| ())
+                    },
+                ) {
+                    Ok(report) => {
+                        if report.failed_root_count > 0 {
+                            activity.had_error = true;
+                        }
+                        update_status(status, |status| {
+                            status.last_file_index_reconcile_unix_ms = Some(unix_ms());
+                            status.last_file_index_reconcile_root_count =
+                                report.inspected_root_count;
+                            status.last_file_index_reconcile_failed_count =
+                                report.failed_root_count;
+                            if report.failed_root_count > 0 {
+                                status.last_error_message = Some(format!(
+                                    "{} managed root index reconcile(s) failed",
+                                    report.failed_root_count
+                                ));
+                            }
+                        });
                     }
-                });
+                    Err(error) => {
+                        activity.had_error = true;
+                        update_status(status, |status| {
+                            status.last_error_message = Some(error);
+                        });
+                    }
+                }
             }
-            Err(error) => {
-                activity.had_error = true;
-                update_status(status, |status| {
-                    status.last_error_message = Some(error);
-                });
-            }
+            Err(error) => record_busy_skip(status, error),
         }
     }
 
-    match crate::file_browse_processor::process_pending_file_browse_requests(&agent, &roots).await {
-        Ok(report) => {
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_file_browse_poll_unix_ms = Some(unix_ms());
-                status.last_file_browse_count = report.inspected_count;
-                status.last_file_browse_completed_count = report.completed_count;
-                status.last_file_browse_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} file browse request(s) failed",
-                        report.failed_count
-                    ));
+    match work_limiter.try_scan() {
+        Ok(_permit) => {
+            match crate::file_browse_processor::process_pending_file_browse_requests(&agent, &roots)
+                .await
+            {
+                Ok(report) => {
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_file_browse_poll_unix_ms = Some(unix_ms());
+                        status.last_file_browse_count = report.inspected_count;
+                        status.last_file_browse_completed_count = report.completed_count;
+                        status.last_file_browse_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} file browse request(s) failed",
+                                report.failed_count
+                            ));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
@@ -740,67 +775,79 @@ async fn run_background_tick(
         return BackgroundTickOutcome::Continue;
     }
 
-    match crate::file_transfer_processor::process_pending_file_transfers(&agent, &roots, &outbox)
-        .await
-    {
-        Ok(report) => {
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_file_transfer_poll_unix_ms = Some(unix_ms());
-                status.last_file_transfer_count = report.inspected_count;
-                status.last_file_transfer_uploaded_count = report.uploaded_count;
-                status.last_file_transfer_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message =
-                        Some(format!("{} file transfer(s) failed", report.failed_count));
+    match work_limiter.try_transfer() {
+        Ok(_permit) => {
+            match crate::file_transfer_processor::process_pending_file_transfers(
+                &agent, &roots, &outbox,
+            )
+            .await
+            {
+                Ok(report) => {
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_file_transfer_poll_unix_ms = Some(unix_ms());
+                        status.last_file_transfer_count = report.inspected_count;
+                        status.last_file_transfer_uploaded_count = report.uploaded_count;
+                        status.last_file_transfer_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message =
+                                Some(format!("{} file transfer(s) failed", report.failed_count));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }
 
-    match crate::smart_cache_processor::process_smart_cache_for_enabled_rooms(
-        &agent,
-        &roots,
-        &smart_cache,
-        &outbox,
-        25,
-    )
-    .await
-    {
-        Ok(report) => {
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_smart_cache_poll_unix_ms = Some(unix_ms());
-                status.last_smart_cache_candidate_count = report.inspected_count;
-                status.last_smart_cache_uploaded_count = report.uploaded_count;
-                status.last_smart_cache_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} smart cache item(s) failed",
-                        report.failed_count
-                    ));
+    match work_limiter.try_transfer() {
+        Ok(_permit) => {
+            match crate::smart_cache_processor::process_smart_cache_for_enabled_rooms(
+                &agent,
+                &roots,
+                &smart_cache,
+                &outbox,
+                25,
+            )
+            .await
+            {
+                Ok(report) => {
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_smart_cache_poll_unix_ms = Some(unix_ms());
+                        status.last_smart_cache_candidate_count = report.inspected_count;
+                        status.last_smart_cache_uploaded_count = report.uploaded_count;
+                        status.last_smart_cache_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} smart cache item(s) failed",
+                                report.failed_count
+                            ));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
@@ -951,6 +998,13 @@ fn mark_suspended(status: &Arc<Mutex<BackgroundRuntimeStatus>>, reason: &str) {
         status.state = BackgroundRuntimeState::Suspended;
         status.last_stopped_unix_ms = Some(unix_ms());
         status.last_error_message = Some(reason.to_string());
+    });
+}
+
+#[cfg(feature = "tauri-commands")]
+fn record_busy_skip(status: &Arc<Mutex<BackgroundRuntimeStatus>>, message: String) {
+    update_status(status, |status| {
+        status.last_error_message = Some(message);
     });
 }
 

@@ -15,6 +15,8 @@ use crate::storage::agent_sync::AgentSyncStore;
 use crate::storage::managed_roots::{ManagedRootStore, RoomBindingStatus};
 use crate::storage::outbox::OutboxStore;
 use crate::storage::watchers::WatcherStore;
+#[cfg(feature = "tauri-commands")]
+use crate::work_limiter::WorkLimiter;
 use file_engine_cli::journal::{read_operation_history, JournalStatus};
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
@@ -170,7 +172,9 @@ pub async fn process_agent_commands(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
     outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CommandProcessingReport, String> {
+    let _permit = limiter.try_scan()?;
     process_pending_commands(&runtime, &roots, &outbox).await
 }
 
@@ -189,7 +193,9 @@ pub async fn process_agent_decisions(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
     outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<DecisionProcessingReport, String> {
+    let _permit = limiter.try_write()?;
     process_pending_decisions(&runtime, &roots, &outbox).await
 }
 
@@ -207,7 +213,9 @@ pub async fn process_agent_decisions(
 pub async fn process_agent_file_browse_requests(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileBrowseProcessingReport, String> {
+    let _permit = limiter.try_scan()?;
     process_pending_file_browse_requests(&runtime, &roots).await
 }
 
@@ -225,7 +233,9 @@ pub async fn process_agent_file_transfers(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
     outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileTransferProcessingReport, String> {
+    let _permit = limiter.try_transfer()?;
     process_pending_file_transfers(&runtime, &roots, &outbox).await
 }
 

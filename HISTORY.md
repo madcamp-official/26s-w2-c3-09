@@ -238,7 +238,7 @@
 - [ ] Desktop smart-cache upload에 AES-256-GCM 등 client-side authenticated encryption을 적용하고 key를 OS 보안 저장소에 보관한다.
 - [ ] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞추고 mobile 복호화·tag 검증을 연결한다.
 - [x] Indexed file identity를 proposal/precondition/transfer sourceVersion에서 size·mtime과 함께 비교하도록 연결했다.
-- [ ] scan/write/transfer 동시성 제한을 명시하고 테스트한다.
+- [x] scan/write/transfer 동시성 제한을 명시하고 테스트한다. Desktop `WorkLimiter`가 scan, write, transfer gate를 분리해 수동 Tauri command와 background runtime의 중복 작업을 `BUSY`로 차단한다.
 - [~] 승인된 CREATE_DIR/CREATE_FILE의 journal-before-write/no-overwrite/undo 정책은 Desktop batch 회귀로 고정했고, 실제 3자 E2E 고정은 남았다.
 - [ ] 자연어 command provider를 선택하고 출력 Zod validation, 사용자 draft 확인, `UNCONFIGURED` 경계를 구현한다.
 - [ ] 로컬 설치된 `com.mousekeeper.app` Firebase 설정에 debug/release SHA를 확인하고 Google login/FCM을 실기기 검증한다.

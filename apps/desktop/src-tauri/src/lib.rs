@@ -16,6 +16,7 @@ pub mod storage;
 pub mod tray;
 pub mod watcher;
 pub mod watcher_lifecycle;
+pub mod work_limiter;
 
 #[cfg(feature = "tauri-commands")]
 pub fn run() {
@@ -35,6 +36,7 @@ pub fn run() {
         .manage(storage::outbox::OutboxStore::default())
         .manage(storage::smart_cache::SmartCacheStore::default())
         .manage(storage::watchers::WatcherStore::default())
+        .manage(work_limiter::WorkLimiter::default())
         .setup(|app| {
             use tauri::Manager;
 
