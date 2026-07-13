@@ -189,7 +189,9 @@ describeObjectStorage('Smart cache production object lifecycle', () => {
       await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
     expect(deletionCompleted).toBe(true);
-    expect((await fetch(target.downloadUrl)).status).toBe(404);
+    // Without ListBucket on the cache prefix, S3 intentionally hides a missing
+    // key as 403. Both responses prove the previously readable object is gone.
+    expect([403, 404]).toContain((await fetch(target.downloadUrl)).status);
   });
 
   afterAll(async () => {
