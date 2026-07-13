@@ -12,6 +12,18 @@ final realtimeRevisionProvider = NotifierProvider<RealtimeController, int>(
   RealtimeController.new,
 );
 
+final realtimeCharacterKindProvider =
+    NotifierProvider<RealtimeCharacterKindController, String?>(
+      RealtimeCharacterKindController.new,
+    );
+
+class RealtimeCharacterKindController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void emit(String kind) => state = kind;
+}
+
 class RealtimeNotice {
   const RealtimeNotice({
     required this.eventId,
@@ -62,6 +74,41 @@ RealtimeNotice? realtimeNoticeFor(String event, Object? data) {
       : RealtimeNotice(eventId: eventId, eventType: event, message: message);
 }
 
+String? realtimeCharacterKindFor(String event, Object? data) {
+  if (data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  if (event == 'character.event') {
+    return _validatedCharacterKind(value['kind']);
+  }
+  if (event != 'presence.updated') return null;
+  final payload = Map<String, dynamic>.from(
+    value['payload'] as Map? ?? const {},
+  );
+  return switch (payload['presence']) {
+    'OFFLINE' => 'OFFLINE',
+    'ONLINE_IDLE' => 'IDLE',
+    'ONLINE_SCANNING' => 'ANALYZING',
+    'ONLINE_EXECUTING' => 'WORKING',
+    'DEGRADED' => 'ERROR',
+    _ => null,
+  };
+}
+
+String? _validatedCharacterKind(Object? value) =>
+    value is String &&
+        const {
+          'IDLE',
+          'ANALYZING',
+          'WAITING_APPROVAL',
+          'WORKING',
+          'SUCCESS',
+          'ERROR',
+          'USER_WORKING',
+          'OFFLINE',
+        }.contains(value)
+    ? value
+    : null;
+
 class RealtimeController extends Notifier<int> {
   io.Socket? _socket;
   bool _replaying = false;
@@ -111,6 +158,10 @@ class RealtimeController extends Notifier<int> {
       final notice = realtimeNoticeFor(event, data);
       if (notice != null) {
         ref.read(realtimeNoticeProvider.notifier).emit(notice);
+      }
+      final characterKind = realtimeCharacterKindFor(event, data);
+      if (characterKind != null) {
+        ref.read(realtimeCharacterKindProvider.notifier).emit(characterKind);
       }
       if (shouldRefresh) state++;
     });

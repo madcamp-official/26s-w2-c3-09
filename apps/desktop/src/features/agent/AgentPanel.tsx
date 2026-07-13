@@ -26,16 +26,17 @@ import {
   startAgentPairing,
   updateAgentCommandStatus
 } from "./agentApi";
+import {
+  HousemouseMotion,
+  housemouseMotionUrls,
+  motionForAgent,
+  motionFromSyncEvents
+} from "../character/characterMotion";
 
 const backgroundRefreshIntervalMs = 15_000;
 // The server allows ten pairing requests per minute. One create, one mobile claim,
 // and polling must all fit in that shared budget.
 const pairingPollIntervalMs = 10_000;
-const mascotUrl = new URL(
-  "../../../../../packages/character-assets/mascot.svg",
-  import.meta.url
-).href;
-
 export function AgentPanel() {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
   const [background, setBackground] = useState<BackgroundRuntimeStatus | null>(null);
@@ -45,6 +46,7 @@ export function AgentPanel() {
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
+  const [replayMotion, setReplayMotion] = useState<HousemouseMotion | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -281,6 +283,8 @@ export function AgentPanel() {
     const replay = await replayAgentEvents();
     setSyncCursor(replay.next_cursor);
     setLastReplayCount(replay.events.length);
+    const motion = motionFromSyncEvents(replay.events);
+    if (motion) setReplayMotion(motion);
     if (replay.events.some((event) => event.event_type === "command.available")) {
       setCommands(await pollAgentCommands());
     }
@@ -311,6 +315,7 @@ export function AgentPanel() {
       setCommands([]);
       setSyncCursor(null);
       setLastReplayCount(0);
+      setReplayMotion(null);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -318,11 +323,23 @@ export function AgentPanel() {
     }
   }
 
+  const mascotMotion = motionForAgent({
+    connection,
+    pairing: pairing !== null,
+    commandStatuses: commands.map((command) => command.status),
+    replayMotion,
+    localError: error !== null
+  });
+
   return (
     <section className="panel agent-panel">
       <div className="section-header">
         <div className="mascot-heading">
-          <img className="mascot-image" src={mascotUrl} alt="HouseMouse mascot" />
+          <img
+            className={`mascot-image motion-${mascotMotion}`}
+            src={housemouseMotionUrls[mascotMotion]}
+            alt={`HouseMouse ${mascotMotion}`}
+          />
           <div>
             <h2>Desktop Agent connection</h2>
             <p className="path-text">
