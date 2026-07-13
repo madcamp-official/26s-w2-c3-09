@@ -255,7 +255,10 @@ export const proposals = pgTable(
       .notNull()
       .defaultNow(),
   },
-  (t) => [uniqueIndex("proposals_idempotency_idx").on(t.idempotencyKey)],
+  (t) => [
+    uniqueIndex("proposals_idempotency_idx").on(t.idempotencyKey),
+    index("proposals_room_status_idx").on(t.roomId, t.status),
+  ],
 );
 export const proposalItems = pgTable(
   "proposal_items",
@@ -327,6 +330,7 @@ export const executions = pgTable(
   },
   (t) => [
     uniqueIndex("executions_result_idempotency_idx").on(t.resultIdempotencyKey),
+    index("executions_proposal_started_idx").on(t.proposalId, t.startedAt),
   ],
 );
 export const roomSnapshots = pgTable(

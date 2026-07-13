@@ -120,6 +120,13 @@
       "when": 1783932257135,
       "tag": "0016_wandering_vanisher",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1783950863031,
+      "tag": "0017_glossy_goliath",
+      "breakpoints": true
     }
   ]
 }
