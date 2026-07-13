@@ -89,11 +89,9 @@ pub fn run() {
                 &watchers,
             )?;
             for result in restore_results {
-                if let Some(error) = result.error {
-                    eprintln!(
-                        "failed to restore watcher for {} on startup: {}",
-                        result.root_id, error
-                    );
+                if result.error.is_some() {
+                    // Watcher provider errors can include the managed absolute path.
+                    eprintln!("WATCHER_RESTORE_FAILED root_id={}", result.root_id);
                 }
             }
             app.state::<background::BackgroundRuntime>()

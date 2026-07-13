@@ -24,8 +24,10 @@ pub fn start_root_watcher(
     let index_root = root.clone();
 
     let watcher = crate::watcher::watch_root_changes(root, move |change| {
-        if let Err(error) = apply_index_change(&index_root, change) {
-            eprintln!("failed to update index for {index_root}: {error}");
+        if apply_index_change(&index_root, change).is_err() {
+            // Never emit the managed root or filesystem error text: both can contain an
+            // absolute user path. The UI receives the root-scoped refresh event below.
+            eprintln!("MANAGED_ROOT_INDEX_UPDATE_FAILED");
         }
         let _ = app.emit(ROOT_CHANGED_EVENT, &event_root_id);
     })?;
