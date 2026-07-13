@@ -80,7 +80,7 @@ Current frontend behavior:
 
 ## Proposed Tauri Commands
 
-These command names are the app-facing bridge contract. They should return JSON-compatible structs matching `tools/file-engine-cli/README.md`.
+These command names are the app-facing bridge contract. They should return JSON-compatible structs matching `docs/FILE_ENGINE_CLI.md`.
 
 ```rust
 register_managed_root(path: String) -> ManagedRoot

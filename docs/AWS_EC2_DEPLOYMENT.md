@@ -148,7 +148,9 @@ pnpm --filter @housemouse/desktop tauri:dev
 
 Set-Location apps/mobile
 flutter run `
-  --dart-define=HOUSEMOUSE_API_URL=https://mousekeeper.madcamp-kaist.org
+  --dart-define=FIREBASE_ENABLED=true `
+  --dart-define=HOUSEMOUSE_API_URL=https://mousekeeper.madcamp-kaist.org `
+  --dart-define=GOOGLE_SERVER_CLIENT_ID=<Google-Web-OAuth-Client-ID>
 ```
 
 운영 URL을 사용하면 `adb reverse`는 필요하지 않다.

@@ -451,3 +451,43 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - Worker 첫 운영 시작에서 `tsx` CJS 변환이 top-level `await`를 거절하는 문제를 발견했다. 진입점을 명시적 `start()` 함수로 감싸 `2902a88`에 수정·배포했다.
 - Worker는 수정 후 30초 주기를 두 번 이상 통과해 `active`를 유지했고 최근 warning/error가 없었다. API도 `/health=ok`, `/ready=ready`를 유지한다.
 - 원시 object 연산과 worker 기동은 완료됐지만, A FileTransfer를 통한 upload/download/checksum/ACK/TTL 삭제 전체 흐름은 아직 다음 E2E 대상이다.
+
+## 2026-07-13 — B 잔여 계획 구현과 운영 검증
+
+### 실제 object lifecycle E2E
+
+- 운영 private S3에서 FileTransfer signed PUT → server HEAD/complete → signed GET → SHA-256 → ACK → worker delete를 실제 실행했다.
+- smart cache는 테스트 메모리에만 둔 AES-256-GCM key로 ciphertext를 업로드하고 HEAD/크기/SHA를 검증했다. 서버 공개 응답과 DB에 key·plaintext가 없음을 확인한 뒤 download/decrypt와 policy disable worker 삭제까지 통과했다.
+- private bucket의 삭제된 cache key는 ListBucket 제한으로 403 또는 404가 될 수 있으므로 둘 다 삭제 증거로 처리하되, worker job `COMPLETED`와 함께 확인한다.
+
+### FCM 알림
+
+- `push_notification_tokens`, `notification_jobs` migration과 token hash unique index를 추가했다. token 원문은 전송에만 쓰고 공개 응답·로그에는 노출하지 않는다.
+- proposal 생성, terminal execution, transfer READY sync event와 같은 transaction에서 notification outbox를 적재한다.
+- worker는 FCM 500개 batch, 영구 무효 token revoke, transient retry, 5분 processing lease를 사용한다. EC2의 기존 Firebase service account로 `FCM_ENABLED=true` worker 기동을 확인했다.
+- 모바일은 Android 알림 권한, token 등록·refresh·logout revoke, foreground와 notification-open 처리, WebSocket과 동일 event ID 중복 억제를 구현했다.
+- 현재 Android USB 기기가 연결 해제돼 background/terminated 실기기 수신은 검증 대기다. 가짜 수신 성공을 기록하지 않는다.
+
+### 운영 복구와 네트워크 경계
+
+- EC2 API bind를 `127.0.0.1:3000`으로 제한하고 Nginx만 접근하게 했다. 공개 `/health`, `/ready`는 계속 200이다.
+- root-only `/var/backups/housemouse` custom dump와 일일 systemd timer를 설치했다. 실제 backup SHA-256 검증, 임시 PostgreSQL DB restore, 필수 schema 확인과 임시 DB 삭제를 통과했다.
+- Sentry SDK를 server·worker·mobile에 연결했다. DSN이 없으면 비활성이고, 값이 있으면 PII 전송을 끄며 request/user/extra/breadcrumb, token과 절대 경로를 제거한다. 실제 dashboard 수신은 DSN 미제공으로 검증 대기다.
+- Sentry 의존성 추가 뒤 저사양 EC2 Nest build가 기본 512MB heap에서 OOM이 나므로 배포 빌드에만 `NODE_OPTIONS=--max-old-space-size=1024`를 적용했다. runtime heap은 변경하지 않았다.
+
+### 최신 검증
+
+- `pnpm check:contracts`: controller 60개와 OpenAPI 일치.
+- Node workspace 전체 typecheck 통과.
+- server 일반 테스트 29개 통과, 외부 DB suite 6개 skip. worker 테스트 8개 통과.
+- Flutter analyze 0건, 테스트 27개 통과, Firebase Messaging·Sentry 포함 debug APK 빌드 성공.
+- 운영 DNS/TLS `/health=ok`, PostgreSQL·Valkey 포함 `/ready=ready`, server·worker systemd active.
+- PostgreSQL backup/restore drill 통과.
+
+### 저장소 밖 입력이 필요한 최종 차단선
+
+- Android 기기 재연결과 사용자 Google 로그인/알림 권한: FCM background·terminated 수신 검증.
+- 실제 `.riv`와 artboard/state machine/input 명세, A overlay shell: Rive animation 검증.
+- Android release keystore path/alias/password: signed APK/AAB와 Firebase release SHA 등록.
+- Sentry project DSN/dashboard 권한: 실제 redacted event 수신 확인.
+- A command/FileTransfer/smart-cache local adapter: managed root 전체 통합 E2E.

@@ -112,42 +112,45 @@ Tauri Desktop
 ### B — Product & Cloud
 
 - Firebase Android 및 Google 로그인, Firebase Admin token 검증 경로
-- PostgreSQL/Drizzle 15개 migration과 Redis/Valkey local compose
+- PostgreSQL/Drizzle 16개 migration과 Redis/Valkey local compose
 - pairing, device, room, heartbeat/presence, command/proposal/decision/execution API
 - Socket.IO `/realtime`, idempotency, audit, cursor replay
 - Flutter home/room/rule/proposal/result/chat/files/smart-cache UI와 Drift cache/outbox
 - P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
-- worker, AWS EC2 systemd/Nginx 구성, Render blueprint, backup/restore 및 안전 문서
+- FCM token API·outbox·worker 전송과 모바일 foreground/background 수신 경로
+- worker, AWS EC2 systemd/Nginx 구성, Render blueprint, 실제 backup/restore drill 및 안전 문서
+- server·worker·mobile Sentry SDK와 request/path/token redaction 경계
 
-AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`까지 운영 검증됐다. Private S3 bucket과 최소 권한 EC2 IAM role의 LIST/PUT/HEAD/GET/DELETE를 검증했고 object lifecycle worker도 운영 중이다. Rive asset, Android release keystore, Sentry가 없는 기능은 계속 `UNCONFIGURED` 또는 검증 대기 상태다.
+AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`까지 운영 검증됐다. Private S3 bucket과 최소 권한 EC2 IAM role의 LIST/PUT/HEAD/GET/DELETE, FileTransfer와 암호화 smart-cache object lifecycle, worker 삭제를 실제 검증했다. FCM worker는 기존 Firebase service account로 운영 중이고 PostgreSQL backup/격리 restore drill도 통과했다. Rive asset, Android release keystore, Sentry DSN이 필요한 최종 검증은 계속 `UNCONFIGURED` 또는 검증 대기 상태다.
 
 ### Phase별 판정
 
 | Phase | 현재 판정 | 남은 완료 조건 |
 |---|---|---|
 | 0 계약·파일 안전 POC | 완료 | 148개 Rust test와 fixture E2E 통과 상태 유지 |
-| 1 로그인·페어링·Presence | REST 경로 구현 | 실제 mobile claim E2E와 Socket.IO 알림 client |
+| 1 로그인·페어링·Presence | REST·Socket.IO·FCM 경로 구현 | 재연결한 Android에서 background/terminated FCM 수신 확인 |
 | 2 관리 폴더·스캔·청결도 | room 등록 연결 | 실제 snapshot 동기화 |
 | 3 규칙·명령·제안 | 양쪽 코드 구현, 통합 전 | 서버 command를 Rust proposal로 변환해 왕복 |
-| 4 실행·Undo·README·파일 전달 | private S3 object 연산 검증 | README와 A FileTransfer를 통한 실제 전송·TTL E2E |
+| 4 실행·Undo·README·파일 전달 | B signed PUT/GET/checksum/ACK/worker 삭제 E2E 완료 | A FileTransfer adapter를 통한 동일 E2E |
 | 5 캐릭터·채팅 | skeleton/metadata | Rive asset, 실제 overlay window, AI provider 선택 |
-| 6 오프라인·재접속 | Desktop cursor/replay 구현 | durable outbox, Socket.IO 재접속과 reconnect E2E |
-| 7 하드닝·배포 | EC2 API·PostgreSQL·Valkey·private S3 worker 운영 검증 | updater, release signing |
-| 8 P1 스마트 캐시 | B control plane만 선행 | P0 안정화 뒤 A usage scoring/upload/stale 처리 |
+| 6 오프라인·재접속 | mobile outbox·cursor replay 구현 | A와 Socket.IO 재접속 전체 E2E |
+| 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill 완료 | Android release keystore, Sentry DSN |
+| 8 P1 스마트 캐시 | B quota·암호화 object lifecycle 완료 | A usage scoring/encryption key adapter 연동 |
 
 ## 검증 기록 (`2026-07-13`)
 
 | 검사 | 결과 |
 |---|---|
-| `pnpm check:contracts` | 서버 controller 58개와 OpenAPI 일치 |
+| `pnpm check:contracts` | 서버 controller 60개와 OpenAPI 일치 |
 | `pnpm typecheck` | Node/React workspace 전체 통과 |
 | Desktop `tsc + vite build` | production web bundle 성공 |
-| contracts test | 17개 통과 |
-| server test | 일반 모드 24개 통과·DB 통합 4개 skip, 별도 실제 PostgreSQL 검증 23개 통과 |
-| worker test | EC2 IAM role·static credential·불완전 credential 거절 3개 통과 |
+| contracts test | 18개 통과 |
+| server test | 일반 모드 29개 통과·외부 DB 통합 6개 skip, 실제 S3 lifecycle E2E 별도 통과 |
+| worker test | IAM role·FCM config·영구 무효 token·Sentry redaction 포함 8개 통과 |
 | desktop-agent-simulator test | 1개 통과 |
 | `flutter analyze` | 오류 0개 |
-| Flutter test | 23개 통과 |
+| Flutter test | FCM·Sentry privacy 포함 27개 통과 |
+| Android debug APK | Firebase Messaging·Sentry SDK 포함 빌드 성공 |
 | Rust file-engine CLI | unit 92개 + integration 3개, 총 95개 통과 |
 | Rust Desktop/Tauri core | 53개 통과 |
 | Rust fixture E2E | proposal → precheck → execute → undo 통과 |
@@ -158,19 +161,22 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | Managed root ↔ mobile room | Desktop `POST /v1/rooms` `201`, 자동 동기화 계약 test 통과 |
 | AWS production | DNS·TLS·HTTP→HTTPS·`/health=ok`·`/ready=ready` 통과, 3000·5432·6379 외부 차단 |
 | AWS S3 production | EC2 IAM role로 LIST·PUT·HEAD·GET·DELETE 및 삭제 후 404 통과, worker 30초 주기 무오류 실행 |
+| FileTransfer production E2E | signed PUT → HEAD/complete → GET/SHA-256 → ACK → worker delete 통과 |
+| Smart cache production E2E | client-side AES-256-GCM ciphertext → HEAD/SHA → download/decrypt → disable/delete 통과; key/plaintext 서버 미저장 확인 |
+| PostgreSQL recovery | root-only custom dump 생성·검증, 임시 DB restore와 필수 schema 검증, 임시 DB 삭제 통과 |
+| FCM/Sentry runtime | Firebase Admin 기반 FCM worker active; Sentry SDK는 DSN 미설정으로 전송 검증 대기 |
 
 CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 Tauri feature check를 실행한다.
 
 ## 다음 구현 순서
 
-1. 실제 server와 mobile을 함께 켜서 Desktop pairing code claim → keychain 저장 → heartbeat E2E를 확인한다.
-2. Socket.IO는 새 데이터 알림으로만 연결하고, 실패 시 현재 REST cursor replay로 복구한다. 전송 실패 event는 SQLite durable outbox에 적재한다.
-3. 첫 P0 vertical slice(command → proposal → mobile approval → journaled execute → result → undo)를 한 managed root로 연결한다.
-4. A의 FileTransfer validation/chunk/SHA-256/cancel/source-change를 B의 transfer session에 연결한다.
-5. AWS EC2 API·private S3·IAM role·worker 배포는 완료됐다. A FileTransfer와 연결해 upload/download/checksum/ACK/TTL 삭제 E2E를 수행한다.
-6. 실제 전송 E2E가 안정화되면 cache object의 quota/reservation/delete lifecycle을 검증한다.
-7. updater와 Windows release signing을 마무리한다.
-8. Rive·FCM·Sentry를 마무리한다. P1 스마트 캐시는 두 P0 slice가 안정화된 뒤 진행한다.
+1. Android USB를 다시 연결해 운영 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
+2. A의 command/proposal/execute/undo adapter를 B control plane과 한 managed root에서 왕복 검증한다.
+3. A의 FileTransfer validation/chunk/SHA-256/cancel/source-change를 이미 검증된 B transfer session에 연결한다.
+4. A의 usage scoring·client encryption key adapter를 이미 검증된 B smart-cache object lifecycle에 연결한다.
+5. 실제 `.riv`와 overlay shell을 연결하고 artboard/state machine/input을 실기기·Desktop에서 확인한다.
+6. Android release keystore 4개 값을 안전하게 주입해 signed APK/AAB와 Firebase release SHA를 검증한다.
+7. Sentry project DSN을 운영 secret으로 주입해 redacted test event 수신을 dashboard에서 확인한다.
 
 ## 실행 방법
 
@@ -345,7 +351,8 @@ flutter test
 
 A-side local file engine documentation:
 
-- CLI usage and JSON contracts: [`tools/file-engine-cli/README.md`](tools/file-engine-cli/README.md)
+- CLI usage and JSON contracts: [`docs/FILE_ENGINE_CLI.md`](docs/FILE_ENGINE_CLI.md)
+- Shared server/Desktop contracts: [`docs/CONTRACTS.md`](docs/CONTRACTS.md)
 - Desktop/Tauri integration plan: [`apps/desktop/src-tauri/INTEGRATION.md`](apps/desktop/src-tauri/INTEGRATION.md)
 
 Current safe flow:
