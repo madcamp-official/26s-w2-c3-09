@@ -1,8 +1,8 @@
-# HOUSEMOUSE (26s-w2-c3-09)
+# MOUSEKEEPER (26s-w2-c3-09)
 
-> 폴더 룸메이트 MVP의 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md)을 기준으로 합니다.
+> 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md), 현재 완료/누락 판정은 [구현 이력 및 MVP 감사](HISTORY.md)를 기준으로 합니다.
 >
-> 현재 작업 기준: `B` / `72eb4f9` (`2026-07-13`), `origin/B` 기반 AWS 배포 변경 검증 완료
+> 현재 감사 기준: `main` (`2026-07-13`), A/B 통합 코드 포함
 
 ## 공통과제 II : 협업형 실전 산출물 제작 (2인 1팀)
 
@@ -41,7 +41,7 @@
 
 ## 프로젝트 개요
 
-HOUSEMOUSE는 사용자가 등록한 로컬 폴더를 데스크톱 에이전트가 안전하게 분석하고, 모바일에서 제안을 검토·승인한 뒤 파일 정리와 복구를 수행하는 local-first 크로스플랫폼 서비스다.
+MOUSEKEEPER는 사용자가 등록한 로컬 폴더를 데스크톱 에이전트가 안전하게 분석하고, 모바일에서 제안을 검토·승인한 뒤 파일 정리와 복구를 수행하는 local-first 크로스플랫폼 서비스다.
 
 - **P0 정리 흐름:** 모바일 command → 서버 영속 저장 → 데스크톱 분석 → proposal → 사용자 승인 → 실행 직전 재검증 → journal → no-overwrite 실행 → 결과 동기화 → undo
 - **P0 파일 접근:** 온라인 데스크톱 탐색 → managed root 재검증 → 만료형 전송 → 모바일 checksum 검증 → ACK/TTL 삭제
@@ -56,7 +56,7 @@ Flutter Android
   ↕ REST + Socket.IO
 NestJS/Fastify Server ─ PostgreSQL
   ├─ Redis/Valkey: presence TTL, rate limit, 짧은 lock
-  ├─ BullMQ Worker: 알림, 재시도, object 만료·삭제
+  ├─ PostgreSQL durable worker: 알림, 재시도, object 만료·삭제
   └─ S3-compatible Storage: P0 만료형 전송 / P1 opt-in cache
   ↕ REST + Socket.IO
 Tauri Desktop
@@ -75,7 +75,7 @@ Tauri Desktop
 | `packages/contracts` | OpenAPI, JSON Schema, Zod 공개 계약 |
 | `packages/database` | Drizzle schema와 PostgreSQL migration |
 
-## `dev` 브랜치 구현 현황
+## 현재 구현 현황
 
 ### A — Desktop Agent
 
@@ -93,19 +93,19 @@ Tauri Desktop
 - Desktop Agent 연결·pairing·replay 상태 UI
 - managed root 등록 시 서버 room 자동 생성·중복 조회와 수동 `Sync to mobile` 재시도
 - system tray, 사용자가 직접 설정하는 autostart, MSI/NSIS Windows bundle 구성
-- Desktop·Flutter가 함께 사용하는 8종 픽셀풍 HouseMouse PNG 상태 모션
+- Desktop·Flutter가 함께 사용하는 8종 픽셀풍 MouseKeeper PNG 상태 모션
 - Windows에서 Cargo object 파일 잠금으로 Vite가 종료되지 않도록 `src-tauri/target` 감시 제외
 - overlay window/event bridge skeleton
 - 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
 
-아직 연결되지 않은 범위:
+아직 완료되지 않은 범위:
 
-- Socket.IO 알림 client와 durable sync outbox
-- 서버 command → 로컬 proposal → 모바일 decision → execution 결과의 첫 P0 E2E
-- README 생성/diff/write 로컬 적용
-- FileTransfer source version 검증, chunk, SHA-256, 취소와 source-change 처리
-- updater와 Windows release signing
-- 실제 Rive overlay와 P1 usage event/cache candidate
+- 새 Android identifier용 Firebase debug build 완료, Google login·FCM 실기기 재검증
+- Android release signing, updater signing과 rename 이후 Windows installer 재검증
+- 실제 Rive animation/interaction과 schema-validated 자연어 command provider
+- SQLite file ID, scheduled reconcile scan과 위임된 CREATE_DIR 안전 실행
+- Desktop smart-cache client-side encryption과 key lifecycle
+- Android ↔ server ↔ Desktop 전체 P0 release E2E 자동화
 
 서버 URL 또는 pairing이 없으면 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. pairing 뒤에도 heartbeat나 인증 요청이 성공하기 전에는 `offline`이며, device token은 React 계층으로 전달되지 않는다.
 
@@ -127,15 +127,15 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 
 | Phase | 현재 판정 | 남은 완료 조건 |
 |---|---|---|
-| 0 계약·파일 안전 POC | 완료 | 148개 Rust test와 fixture E2E 통과 상태 유지 |
-| 1 로그인·페어링·Presence | REST·Socket.IO·FCM 경로 구현 | 재연결한 Android에서 background/terminated FCM 수신 확인 |
-| 2 관리 폴더·스캔·청결도 | room 등록 연결 | 실제 snapshot 동기화 |
-| 3 규칙·명령·제안 | 양쪽 코드 구현, 통합 전 | 서버 command를 Rust proposal로 변환해 왕복 |
-| 4 실행·Undo·README·파일 전달 | B signed PUT/GET/checksum/ACK/worker 삭제 E2E 완료 | A FileTransfer adapter를 통한 동일 E2E |
-| 5 캐릭터·채팅 | skeleton/metadata | Rive asset, 실제 overlay window, AI provider 선택 |
-| 6 오프라인·재접속 | mobile outbox·cursor replay 구현 | A와 Socket.IO 재접속 전체 E2E |
-| 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill 완료 | Android release keystore, Sentry DSN |
-| 8 P1 스마트 캐시 | B quota·암호화 object lifecycle 완료 | A usage scoring/encryption key adapter 연동 |
+| 0 계약·파일 안전 POC | 완료 | Rust 안전 회귀와 fixture E2E 유지 |
+| 1 로그인·페어링·Presence | 코드 경로와 새 Firebase debug build | Google login과 background/terminated FCM 수신 확인 |
+| 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결 | file ID와 scheduled reconcile scan |
+| 3 규칙·명령·제안 | Desktop/server/mobile processor 연결 | 실제 3자 release E2E |
+| 4 실행·Undo·README·파일 전달 | MOVE/격리/README/transfer 구현 | CREATE_DIR과 실제 3자 transfer E2E |
+| 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell | Rive asset과 AI provider |
+| 6 오프라인·재접속 | 양쪽 outbox·cursor replay 구현 | 강제 종료·서버 재시작 E2E |
+| 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill | rename migration, signed release, Sentry DSN |
+| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle | Desktop client encryption과 key lifecycle |
 
 ## 검증 기록 (`2026-07-13`)
 
@@ -151,8 +151,8 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | `flutter analyze` | 오류 0개 |
 | Flutter test | FCM·Sentry privacy 포함 27개 통과 |
 | Android debug APK | Firebase Messaging·Sentry SDK 포함 빌드 성공 |
-| Rust file-engine CLI | unit 92개 + integration 3개, 총 95개 통과 |
-| Rust Desktop/Tauri core | 53개 통과 |
+| Rust file-engine CLI | unit 98개 + integration 3개, 총 101개 통과 |
+| Rust Desktop/Tauri core | 120개 통과 |
 | Rust fixture E2E | proposal → precheck → execute → undo 통과 |
 | Tauri feature check | `cargo check --features tauri-commands` 통과 |
 | Windows release bundle | 실제 앱 feature를 포함한 MSI 6.82MB, NSIS 4.81MB 생성 성공 |
@@ -170,13 +170,13 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 
 ## 다음 구현 순서
 
-1. Android USB를 다시 연결해 운영 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
-2. A의 command/proposal/execute/undo adapter를 B control plane과 한 managed root에서 왕복 검증한다.
-3. A의 FileTransfer validation/chunk/SHA-256/cancel/source-change를 이미 검증된 B transfer session에 연결한다.
-4. A의 usage scoring·client encryption key adapter를 이미 검증된 B smart-cache object lifecycle에 연결한다.
-5. 실제 `.riv`와 overlay shell을 연결하고 artboard/state machine/input을 실기기·Desktop에서 확인한다.
-6. Android release keystore 4개 값을 안전하게 주입해 signed APK/AAB와 Firebase release SHA를 검증한다.
-7. Sentry project DSN을 운영 secret으로 주입해 redacted test event 수신을 dashboard에서 확인한다.
+1. Android USB를 다시 연결해 새 package 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
+2. Desktop smart-cache 업로더에 authenticated encryption과 OS 보안 저장소 key lifecycle을 구현한다.
+3. file ID, scheduled reconcile scan과 CREATE_DIR journal/undo 경로를 보완한다.
+4. command/proposal/execute/undo와 browse/transfer를 한 managed root·실기기에서 왕복 검증한다.
+5. 새 EC2 unit/path와 Firebase package로 rename migration을 실행하고 rollback을 확인한다.
+6. 실제 `.riv`와 overlay shell을 연결하고 artboard/state machine/input을 실기기·Desktop에서 확인한다.
+7. Android release keystore와 Sentry DSN을 secret으로 주입해 signed AAB와 redacted event 수신을 검증한다.
 
 ## 실행 방법
 
@@ -188,17 +188,17 @@ pnpm install --frozen-lockfile
 
 # PostgreSQL + Redis/Valkey
 docker compose up -d
-pnpm --filter @housemouse/database db:migrate
+pnpm --filter @mousekeeper/database db:migrate
 
 # Server
-pnpm --filter @housemouse/server start:dev
+pnpm --filter @mousekeeper/server start:dev
 
 # Desktop: Rust stable/MSVC toolchain 필요
-$env:HOUSEMOUSE_SERVER_BASE_URL = "http://127.0.0.1:3000"
-pnpm --filter @housemouse/desktop tauri:dev
+$env:MOUSEKEEPER_SERVER_BASE_URL = "http://127.0.0.1:3000"
+pnpm --filter @mousekeeper/desktop tauri:dev
 
 # Windows MSI/NSIS 생성
-pnpm --filter @housemouse/desktop tauri:build
+pnpm --filter @mousekeeper/desktop tauri:build
 ```
 
 Android 실기기에서 USB로 로컬 서버를 사용할 때:
@@ -209,7 +209,7 @@ Android 실기기에서 USB로 로컬 서버를 사용할 때:
 Set-Location apps/mobile
 flutter run `
   --dart-define=FIREBASE_ENABLED=true `
-  --dart-define=HOUSEMOUSE_API_URL=http://127.0.0.1:3000 `
+  --dart-define=MOUSEKEEPER_API_URL=http://127.0.0.1:3000 `
   --dart-define=GOOGLE_SERVER_CLIENT_ID=<Google-Web-OAuth-Client-ID>
 ```
 
