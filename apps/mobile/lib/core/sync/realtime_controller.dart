@@ -49,6 +49,7 @@ class RealtimeHomeUpdate {
     required this.eventType,
     this.deviceId,
     this.roomId,
+    this.executionId,
     this.presence,
     this.executionStatus,
   });
@@ -57,6 +58,7 @@ class RealtimeHomeUpdate {
   final String eventType;
   final String? deviceId;
   final String? roomId;
+  final String? executionId;
   final String? presence;
   final String? executionStatus;
 }
@@ -88,6 +90,12 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
     _ => null,
   };
   final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final executionId = switch (payload['executionId'] ??
+      value['executionId'] ??
+      value['aggregateId']) {
     final String id when id.isNotEmpty => id,
     _ => null,
   };
@@ -127,6 +135,7 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
         kind: RealtimeHomeUpdateKind.executionStatus,
         eventType: event,
         roomId: roomId,
+        executionId: executionId,
         executionStatus: status,
       );
     }

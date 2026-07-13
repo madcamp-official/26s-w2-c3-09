@@ -92,7 +92,11 @@ export class ExecutionsService {
         eventType: 'execution.updated',
         aggregateType: 'execution',
         aggregateId: execution.id,
-        payload: { status: execution.status },
+        payload: executionUpdatedPayload({
+          executionId: execution.id,
+          roomId: source.proposal.roomId,
+          status: execution.status,
+        }),
       });
       return this.publicExecution(execution);
     });
@@ -186,7 +190,11 @@ export class ExecutionsService {
         eventType: 'execution.updated',
         aggregateType: 'execution',
         aggregateId: executionId,
-        payload: { status: body.status },
+        payload: executionUpdatedPayload({
+          executionId,
+          roomId: source.proposal.roomId,
+          status: body.status,
+        }),
       });
       await tx.insert(auditEvents).values({
         userId,
@@ -259,4 +267,16 @@ export class ExecutionsService {
     const { idempotencyKey: _, ...safe } = proposal;
     return safe;
   }
+}
+
+export function executionUpdatedPayload(input: {
+  executionId: string;
+  roomId: string;
+  status: string;
+}) {
+  return {
+    executionId: input.executionId,
+    roomId: input.roomId,
+    status: input.status,
+  };
 }

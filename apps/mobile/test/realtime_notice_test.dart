@@ -82,7 +82,12 @@ void main() {
       'eventId': 'execution-event',
       'eventType': 'execution.updated',
       'roomId': 'room-a',
-      'payload': {'status': 'SUCCEEDED'},
+      'aggregateId': 'execution-a',
+      'payload': {
+        'executionId': 'execution-a',
+        'roomId': 'room-a',
+        'status': 'SUCCEEDED',
+      },
     });
     final snapshot = realtimeHomeUpdateFor('room.snapshot.updated', {
       'eventId': 'snapshot-event',
@@ -93,7 +98,23 @@ void main() {
 
     expect(execution?.kind, RealtimeHomeUpdateKind.executionStatus);
     expect(execution?.roomId, 'room-a');
+    expect(execution?.executionId, 'execution-a');
     expect(execution?.executionStatus, 'SUCCEEDED');
     expect(snapshot?.kind, RealtimeHomeUpdateKind.refreshSummary);
+  });
+
+  test('execution updated falls back to envelope aggregate id', () {
+    final execution = realtimeHomeUpdateFor('execution.updated', {
+      'eventId': 'execution-event',
+      'eventType': 'execution.updated',
+      'aggregateId': 'execution-from-envelope',
+      'roomId': 'room-a',
+      'payload': {'status': 'FAILED'},
+    });
+
+    expect(execution?.kind, RealtimeHomeUpdateKind.executionStatus);
+    expect(execution?.executionId, 'execution-from-envelope');
+    expect(execution?.roomId, 'room-a');
+    expect(execution?.executionStatus, 'FAILED');
   });
 }
