@@ -102,6 +102,120 @@ void main() {
     expect(snapshot?.kind, RealtimeHomeUpdateKind.refreshSummary);
   });
 
+  test('complete realtime patches suppress generic page revision fan-out', () {
+    final presence = realtimeHomeUpdateFor('presence.updated', {
+      'deviceId': 'device-a',
+      'presence': 'ONLINE_IDLE',
+    });
+    final proposal = realtimeHomeUpdateFor('proposal.created', {
+      'eventId': 'proposal-event',
+      'eventType': 'proposal.created',
+      'aggregateId': 'proposal-a',
+      'roomId': 'room-a',
+      'payload': {
+        'proposalId': 'proposal-a',
+        'roomId': 'room-a',
+        'status': 'OPEN',
+        'pendingProposalCount': 1,
+      },
+    });
+    final decision = realtimeHomeUpdateFor('decision.created', {
+      'eventId': 'decision-event',
+      'eventType': 'decision.created',
+      'aggregateId': 'decision-a',
+      'roomId': 'room-a',
+      'payload': {
+        'proposalId': 'proposal-a',
+        'roomId': 'room-a',
+        'proposalStatus': 'APPROVED',
+        'pendingProposalCount': 0,
+      },
+    });
+    final snapshot = realtimeHomeUpdateFor('room.snapshot.updated', {
+      'eventId': 'snapshot-event',
+      'eventType': 'room.snapshot.updated',
+      'aggregateId': 'snapshot-a',
+      'roomId': 'room-a',
+      'payload': {
+        'snapshotId': 'snapshot-a',
+        'roomId': 'room-a',
+        'score': 88,
+        'metrics': {'deductions': []},
+        'formulaVersion': 'mousekeeper-cleanliness-v1',
+        'calculatedAt': '2026-07-13T00:00:00.000Z',
+      },
+    });
+    final command = realtimeHomeUpdateFor('command.updated', {
+      'eventId': 'command-event',
+      'eventType': 'command.updated',
+      'aggregateId': 'command-a',
+      'roomId': 'room-a',
+      'payload': {
+        'commandId': 'command-a',
+        'roomId': 'room-a',
+        'status': 'ANALYZING',
+      },
+    });
+    final execution = realtimeHomeUpdateFor('execution.updated', {
+      'eventId': 'execution-event',
+      'eventType': 'execution.updated',
+      'aggregateId': 'execution-a',
+      'roomId': 'room-a',
+      'payload': {
+        'executionId': 'execution-a',
+        'roomId': 'room-a',
+        'status': 'SUCCEEDED',
+      },
+    });
+    final deviceRemoved = realtimeHomeUpdateFor('device.revoked', {
+      'payload': {'deviceId': 'device-a'},
+    });
+    final roomRemoved = realtimeHomeUpdateFor('room.removed', {
+      'payload': {'roomId': 'room-a'},
+    });
+
+    for (final entry in <(String, RealtimeHomeUpdate?)>[
+      ('presence.updated', presence),
+      ('proposal.created', proposal),
+      ('decision.created', decision),
+      ('room.snapshot.updated', snapshot),
+      ('command.updated', command),
+      ('execution.updated', execution),
+      ('device.revoked', deviceRemoved),
+      ('room.removed', roomRemoved),
+    ]) {
+      expect(realtimeUpdateSuppressesGenericRevision(entry.$1, entry.$2), true);
+    }
+    expect(
+      realtimeUpdateSuppressesGenericRevision('presence.updated', null),
+      true,
+    );
+  });
+
+  test(
+    'summary fallback and unknown events keep generic revision available',
+    () {
+      final summaryFallback = realtimeHomeUpdateFor('proposal.created', {
+        'eventId': 'proposal-event',
+        'eventType': 'proposal.created',
+        'payload': {'proposalId': 'proposal-a'},
+      });
+
+      expect(summaryFallback?.kind, RealtimeHomeUpdateKind.refreshSummary);
+      expect(
+        realtimeUpdateSuppressesGenericRevision(
+          'proposal.created',
+          summaryFallback,
+        ),
+        false,
+      );
+      expect(
+        realtimeUpdateSuppressesGenericRevision('command.available', null),
+        false,
+      );
+    },
+  );
+
   test('execution updated falls back to envelope aggregate id', () {
     final execution = realtimeHomeUpdateFor('execution.updated', {
       'eventId': 'execution-event',

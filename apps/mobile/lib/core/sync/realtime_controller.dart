@@ -319,6 +319,24 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
   return null;
 }
 
+bool realtimeUpdateSuppressesGenericRevision(
+  String event,
+  RealtimeHomeUpdate? update,
+) {
+  if (event == 'presence.updated') return true;
+  return switch (update?.kind) {
+    RealtimeHomeUpdateKind.presence ||
+    RealtimeHomeUpdateKind.deviceRemoved ||
+    RealtimeHomeUpdateKind.roomRemoved ||
+    RealtimeHomeUpdateKind.proposalCreated ||
+    RealtimeHomeUpdateKind.decisionCreated ||
+    RealtimeHomeUpdateKind.roomSnapshotUpdated ||
+    RealtimeHomeUpdateKind.commandStatus ||
+    RealtimeHomeUpdateKind.executionStatus => true,
+    RealtimeHomeUpdateKind.refreshSummary || null => false,
+  };
+}
+
 const _validPresences = <String>{
   'OFFLINE',
   'ONLINE_IDLE',
@@ -552,10 +570,10 @@ class RealtimeController extends Notifier<int> {
         _isActiveSocket(session, socket)) {
       ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
     }
-    // Presence has a complete, device-scoped payload and is patched directly
-    // by HomeController. It must not fan out through generic invalidation.
+    // Complete realtime projections are patched by their owning controllers.
+    // Generic invalidation is reserved for incomplete or unknown projections.
     if (shouldRefresh &&
-        event != 'presence.updated' &&
+        !realtimeUpdateSuppressesGenericRevision(event, homeUpdate) &&
         _isActiveSocket(session, socket)) {
       state++;
     }
@@ -583,6 +601,7 @@ class RealtimeController extends Notifier<int> {
         );
         if (!_isCurrent(session)) return;
         if (events.isEmpty) break;
+        var requiresGenericRevision = false;
         for (final event in events) {
           if (!_isCurrent(session)) return;
           final eventType = event['eventType'];
@@ -593,13 +612,21 @@ class RealtimeController extends Notifier<int> {
             if (homeUpdate != null) {
               ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
             }
+            if (!realtimeUpdateSuppressesGenericRevision(
+              eventType,
+              homeUpdate,
+            )) {
+              requiresGenericRevision = true;
+            }
+          } else {
+            requiresGenericRevision = true;
           }
           final sequence = event['sequence'];
           if (sequence is int && sequence > cursor) cursor = sequence;
         }
         await _advanceCursor(session, cursor);
         if (!_isCurrent(session)) return;
-        state++;
+        if (requiresGenericRevision) state++;
         if (events.length < 200) break;
       }
     } finally {
