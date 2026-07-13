@@ -199,20 +199,14 @@ fn build_local_proposal_report(
 }
 
 fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, String> {
-    // MVP delegation is intentionally limited to relocating existing files. A delegated rename
-    // arrives as a MOVE whose destination is a sibling of the source (folder/old -> folder/new);
-    // it needs no separate action because the local engine already journals every MOVE the same
-    // way a manual rename does. CREATE_DIR and README_WRITE are write actions that create new
-    // content, so they are refused here — no delegated command may turn into an arbitrary write.
+    // Delegated write actions stay deliberately narrow. CREATE_DIR can only create one empty
+    // directory after explicit server approval and local precheck; README_WRITE can only target
+    // README.md with approved content. Arbitrary file writes are still not accepted here.
     let action = match item.action_type.as_str() {
         "MOVE" => ProposalAction::Move,
         "QUARANTINE" => ProposalAction::Trash,
+        "CREATE_DIR" => ProposalAction::CreateDir,
         "README_WRITE" => ProposalAction::ReadmeWrite,
-        write @ "CREATE_DIR" => {
-            return Err(format!(
-                "delegated write action {write} is not allowed; README_WRITE is the only delegated create/write action supported"
-            ))
-        }
         other => {
             return Err(format!(
                 "delegated action type {other} is not supported yet"
@@ -225,6 +219,7 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
             .source_relative_path
             .clone()
             .ok_or_else(|| format!("proposal item {} is missing a source path", item.item_order))?,
+        ProposalAction::CreateDir => String::new(),
         ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
@@ -236,6 +231,12 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
             )
         })?,
         ProposalAction::Trash => TRASH_DIR.to_string(),
+        ProposalAction::CreateDir => item.destination_relative_path.clone().ok_or_else(|| {
+            format!(
+                "proposal item {} is missing a destination path",
+                item.item_order
+            )
+        })?,
         ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
@@ -367,18 +368,41 @@ mod tests {
     }
 
     #[test]
-    fn delegated_create_dir_is_refused() {
+    fn delegated_create_dir_executes_and_stays_undoable() {
+        use file_engine_cli::journal::{read_operation_history, JournalAction};
+        use file_engine_cli::undo::undo_operation;
+
         let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("Archive")).expect("archive parent");
 
-        let mut item = move_item(0, "a.pdf", "Documents/a.pdf");
-        item.action_type = "CREATE_DIR".to_string();
+        let item = AgentProposalItemRecord {
+            item_order: 0,
+            action_type: "CREATE_DIR".to_string(),
+            source_relative_path: None,
+            destination_relative_path: Some("Archive/Reports".to_string()),
+            reason_code: "USER_REQUESTED_CREATE_DIR".to_string(),
+            precondition: json!({}),
+            conflict_state: "NONE".to_string(),
+        };
 
-        let error =
-            build_local_proposal_report(dir.path(), &[item]).expect_err("create must be refused");
-        assert!(
-            error.contains("is not allowed"),
-            "unexpected error: {error}"
-        );
+        let report = build_local_proposal_report(root, &[item]).expect("local create dir proposal");
+        let application = DecisionApplication {
+            approved: report,
+            rejected: Vec::new(),
+        };
+        let execute_report =
+            execute_decision_application(root, application).expect("execute create dir");
+        let history = read_operation_history(root).expect("history");
+
+        assert_eq!(execute_report.executed_count, 1);
+        assert!(root.join("Archive/Reports").is_dir());
+        assert_eq!(history.operations[0].action, JournalAction::CreateDir);
+        assert!(history.operations[0].can_undo);
+
+        let undo = undo_operation(root, &history.operations[0].operation_id).expect("undo");
+        assert_eq!(undo.undone_count, 1);
+        assert!(!root.join("Archive/Reports").exists());
     }
 
     #[test]

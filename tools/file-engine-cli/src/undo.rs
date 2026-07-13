@@ -89,10 +89,27 @@ fn undo_with_filter(
         if entry.status != JournalStatus::Executed
             || !matches!(
                 entry.action,
-                JournalAction::Move | JournalAction::Trash | JournalAction::ReadmeWrite
+                JournalAction::Move
+                    | JournalAction::Trash
+                    | JournalAction::CreateDir
+                    | JournalAction::ReadmeWrite
             )
             || undone_operation_ids.contains(&entry.operation_id)
         {
+            continue;
+        }
+
+        if entry.action == JournalAction::CreateDir {
+            match undo_create_dir(&guard, &store, entry)? {
+                Ok(result) => {
+                    undone_count += 1;
+                    results.push(result);
+                }
+                Err(reason) => {
+                    skipped_count += 1;
+                    results.push(skipped_result(entry, Some(reason)));
+                }
+            }
             continue;
         }
 
@@ -193,6 +210,59 @@ fn undo_with_filter(
         skipped_count,
         results,
     })
+}
+
+fn undo_create_dir(
+    guard: &PathGuard,
+    store: &JournalStore,
+    entry: &JournalEntry,
+) -> Result<Result<UndoResult, String>, UndoError> {
+    let target = guard.root().join(&entry.to);
+    if !target.exists() {
+        store
+            .append(&undo_entry(entry, JournalStatus::Undone))
+            .map_err(UndoError::Journal)?;
+        return Ok(Ok(UndoResult {
+            from: entry.to.clone(),
+            to: entry.from.clone(),
+            status: UndoStatus::Undone,
+            reason: Some(
+                "created directory is already missing; recorded recovered undo".to_string(),
+            ),
+        }));
+    }
+    if !target.is_dir() {
+        return Ok(Err(
+            "created path is no longer a directory; refusing undo".to_string(),
+        ));
+    }
+    if fs::read_dir(&target)
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(true)
+    {
+        return Ok(Err(
+            "created directory is not empty; refusing to delete user data".to_string(),
+        ));
+    }
+
+    store
+        .append(&undo_entry(entry, JournalStatus::UndoPlanned))
+        .map_err(UndoError::Journal)?;
+    fs::remove_dir(&target).map_err(|error| UndoError::Move {
+        from: target.clone(),
+        to: target.clone(),
+        message: error.to_string(),
+    })?;
+    store
+        .append(&undo_entry(entry, JournalStatus::Undone))
+        .map_err(UndoError::Journal)?;
+
+    Ok(Ok(UndoResult {
+        from: entry.to.clone(),
+        to: entry.from.clone(),
+        status: UndoStatus::Undone,
+        reason: None,
+    }))
 }
 
 fn undo_readme_write(
@@ -312,6 +382,9 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::execute::execute_root;
+    use crate::proposal::{
+        proposal_id, Proposal, ProposalAction, ProposalReport, ProposalStatus,
+    };
 
     use super::undo_root;
 
@@ -378,5 +451,35 @@ mod tests {
             history.operations[0].latest_status,
             crate::journal::JournalStatus::Undone
         );
+    }
+
+    #[test]
+    fn refuses_to_undo_created_directory_when_it_is_not_empty() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("archive")).expect("archive parent");
+        let action = ProposalAction::CreateDir;
+        let proposal = ProposalReport {
+            root: root.canonicalize().expect("canonical").display().to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "archive/reports"),
+                action,
+                from: String::new(),
+                to: "archive/reports".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                reason: "USER_REQUESTED_CREATE_DIR".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+        crate::execute::execute_proposals(&root, proposal).expect("execute create dir");
+        fs::write(root.join("archive/reports/keep.txt"), "user data").expect("user data");
+
+        let report = undo_root(&root).expect("undo create dir");
+
+        assert_eq!(report.undone_count, 0);
+        assert_eq!(report.skipped_count, 1);
+        assert!(root.join("archive/reports/keep.txt").exists());
     }
 }

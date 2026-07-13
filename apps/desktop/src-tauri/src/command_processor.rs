@@ -24,6 +24,7 @@ const ANALYZE: &str = "ANALYZE";
 const RENAME: &str = "RENAME";
 const MOVE: &str = "MOVE";
 const TRASH: &str = "TRASH";
+const CREATE: &str = "CREATE";
 const ORGANIZE: &str = "ORGANIZE";
 const ORGANIZE_FILES: &str = "organize_files";
 const ORGANIZE_ROOT: &str = "ORGANIZE_ROOT";
@@ -31,6 +32,7 @@ const DEFAULT_MAX_PROPOSALS: usize = 50;
 const USER_REQUESTED_RENAME_REASON: &str = "USER_REQUESTED_RENAME";
 const USER_REQUESTED_MOVE_REASON: &str = "USER_REQUESTED_MOVE";
 const USER_REQUESTED_TRASH_REASON: &str = "USER_REQUESTED_TRASH";
+const USER_REQUESTED_CREATE_DIR_REASON: &str = "USER_REQUESTED_CREATE_DIR";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CommandProcessingReport {
@@ -104,6 +106,16 @@ struct TrashCommandPayload {
     source_relative_paths: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CreateCommandPayload {
+    root_id: String,
+    kind: String,
+    relative_path: String,
+    #[serde(default)]
+    content: Option<String>,
+}
+
 impl OrganizeFilesPayload {
     fn scope(&self) -> &str {
         self.scope_relative_path
@@ -154,6 +166,7 @@ pub struct AgentProposalItem {
 pub enum AgentProposalActionType {
     Move,
     Quarantine,
+    CreateDir,
     ReadmeWrite,
 }
 
@@ -212,6 +225,7 @@ pub async fn process_commands(
             RENAME => process_rename_command(agent, roots, outbox, &command).await,
             MOVE => process_move_command(agent, roots, outbox, &command).await,
             TRASH => process_trash_command(agent, roots, outbox, &command).await,
+            CREATE => process_create_command(agent, roots, outbox, &command).await,
             _ => process_organize_command(agent, roots, outbox, &command).await,
         };
         match result {
@@ -242,6 +256,42 @@ pub async fn process_commands(
     }
 
     Ok(report)
+}
+
+async fn process_create_command(
+    agent: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    command: &AgentCommand,
+) -> Result<usize, String> {
+    let payload = parse_create_payload(command)?;
+
+    agent
+        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let room = agent
+        .root_id_for_room(command.room_id.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    let managed_root = roots.ensure_active_room_binding(&room.root_id, &command.room_id)?;
+    if payload.root_id != managed_root.root_id {
+        return Err("command rootId does not match the room binding".to_string());
+    }
+    if !managed_root.enabled {
+        return Err(format!(
+            "managed root is disabled: {}",
+            managed_root.root_id
+        ));
+    }
+
+    let local_report = build_create_dir_proposal_report(&managed_root.root, &payload)?;
+    let submission = build_agent_proposal_submission(command, local_report, 1)?;
+    let item_count = submission.items.len();
+    enqueue_proposal(outbox, &submission)?;
+
+    Ok(item_count)
 }
 
 async fn process_trash_command(
@@ -418,6 +468,49 @@ fn parse_move_payload(command: &AgentCommand) -> Result<MoveCommandPayload, Stri
 fn parse_trash_payload(command: &AgentCommand) -> Result<TrashCommandPayload, String> {
     serde_json::from_value(command.payload.clone())
         .map_err(|error| format!("invalid trash payload: {error}"))
+}
+
+fn parse_create_payload(command: &AgentCommand) -> Result<CreateCommandPayload, String> {
+    serde_json::from_value(command.payload.clone())
+        .map_err(|error| format!("invalid create payload: {error}"))
+}
+
+fn build_create_dir_proposal_report(
+    root: &str,
+    payload: &CreateCommandPayload,
+) -> Result<ProposalReport, String> {
+    if payload.kind != "DIRECTORY" {
+        return Err("CREATE currently supports DIRECTORY only".to_string());
+    }
+    if payload.content.is_some() {
+        return Err("CREATE DIRECTORY must not include file content".to_string());
+    }
+    let relative_path = normalize_remote_directory_target(&payload.relative_path)?;
+    let parent = parent_relative_directory(&relative_path);
+    let guard = PathGuard::new(root).map_err(|error| error.to_string())?;
+    ensure_existing_directory_is_safe(&guard, parent)?;
+    let target = guard.root().join(&relative_path);
+    let status = if target.exists() {
+        ProposalStatus::DestinationExists
+    } else {
+        ProposalStatus::Ready
+    };
+    let action = ProposalAction::CreateDir;
+
+    Ok(ProposalReport {
+        root: guard.root().display().to_string(),
+        proposals: vec![Proposal {
+            proposal_id: proposal_id(&action, "", &relative_path),
+            action,
+            from: String::new(),
+            to: relative_path,
+            content: None,
+            source_size_bytes: 0,
+            source_modified_unix_ms: None,
+            reason: USER_REQUESTED_CREATE_DIR_REASON.to_string(),
+            status,
+        }],
+    })
 }
 
 fn build_trash_proposal_report(
@@ -631,6 +724,7 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
     let action_type = match proposal.action {
         ProposalAction::Move => AgentProposalActionType::Move,
         ProposalAction::Trash => AgentProposalActionType::Quarantine,
+        ProposalAction::CreateDir => AgentProposalActionType::CreateDir,
         ProposalAction::ReadmeWrite => AgentProposalActionType::ReadmeWrite,
     };
     let conflict_state = match proposal.status {
@@ -641,10 +735,14 @@ fn proposal_item(item_order: usize, proposal: &Proposal) -> AgentProposalItem {
     AgentProposalItem {
         item_order,
         action_type,
-        source_relative_path: Some(proposal.from.clone()),
+        source_relative_path: match proposal.action {
+            ProposalAction::Move | ProposalAction::Trash => Some(proposal.from.clone()),
+            ProposalAction::CreateDir | ProposalAction::ReadmeWrite => None,
+        },
         destination_relative_path: match proposal.action {
             ProposalAction::Move => Some(proposal.to.clone()),
             ProposalAction::Trash => None,
+            ProposalAction::CreateDir => Some(proposal.to.clone()),
             ProposalAction::ReadmeWrite => Some("README.md".to_string()),
         },
         reason_code: reason_code(proposal),
@@ -668,10 +766,14 @@ fn reason_code(proposal: &Proposal) -> String {
     if proposal.reason == USER_REQUESTED_TRASH_REASON {
         return USER_REQUESTED_TRASH_REASON.to_string();
     }
+    if proposal.reason == USER_REQUESTED_CREATE_DIR_REASON {
+        return USER_REQUESTED_CREATE_DIR_REASON.to_string();
+    }
 
     match proposal.action {
         ProposalAction::Move => "RULE_MOVE_BY_EXTENSION",
         ProposalAction::Trash => "RULE_QUARANTINE",
+        ProposalAction::CreateDir => "RULE_CREATE_DIR",
         ProposalAction::ReadmeWrite => "README_WRITE",
     }
     .to_string()
@@ -764,6 +866,46 @@ fn normalize_remote_relative_directory(path: &str) -> Result<String, String> {
     }
     validate_remote_relative_path(trimmed)?;
     Ok(normalize_slashes(trimmed))
+}
+
+fn normalize_remote_directory_target(path: &str) -> Result<String, String> {
+    let normalized = normalize_remote_relative_directory(path)?;
+    if normalized.is_empty() {
+        return Err("CREATE_DIR target must not be the managed root".to_string());
+    }
+    Ok(normalized)
+}
+
+fn parent_relative_directory(path: &str) -> &str {
+    path.rsplit_once('/')
+        .map(|(parent, _)| parent)
+        .unwrap_or("")
+}
+
+fn ensure_existing_directory_is_safe(
+    guard: &PathGuard,
+    relative_directory: &str,
+) -> Result<(), String> {
+    if relative_directory.is_empty() {
+        return Ok(());
+    }
+    let resolved = guard
+        .resolve_existing(relative_directory)
+        .map_err(|error| error.to_string())?;
+    let metadata = fs::symlink_metadata(guard.root().join(relative_directory))
+        .map_err(|error| format!("cannot inspect destination parent: {error}"))?;
+    if is_link_or_reparse_point(&metadata, metadata.file_type()) {
+        return Err(
+            "CREATE_DIR parent refuses symlinks, junctions, and reparse points".to_string(),
+        );
+    }
+    if !metadata.is_dir() {
+        return Err("CREATE_DIR parent is not a directory".to_string());
+    }
+    if !resolved.starts_with(guard.root()) {
+        return Err("CREATE_DIR parent escaped managed root".to_string());
+    }
+    Ok(())
 }
 
 fn ensure_destination_directory_is_safe(
@@ -874,7 +1016,7 @@ fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
 fn is_supported_command(command: &AgentCommand) -> bool {
     matches!(
         command.command_type.as_str(),
-        ANALYZE | RENAME | MOVE | TRASH | ORGANIZE | ORGANIZE_FILES | ORGANIZE_ROOT
+        ANALYZE | RENAME | MOVE | TRASH | CREATE | ORGANIZE | ORGANIZE_FILES | ORGANIZE_ROOT
     )
 }
 
@@ -895,11 +1037,13 @@ mod tests {
     use crate::storage::outbox::OutboxStore;
 
     use super::{
-        build_agent_proposal_submission, build_move_proposal_report, build_rename_proposal_report,
-        build_trash_proposal_report, parse_organize_payload, process_commands, resolve_proposal,
-        validate_relative_scope, AgentCommand, AgentProposalActionType, AgentProposalConflictState,
+        build_agent_proposal_submission, build_create_dir_proposal_report,
+        build_move_proposal_report, build_rename_proposal_report, build_trash_proposal_report,
+        parse_organize_payload, process_commands, resolve_proposal, validate_relative_scope,
+        AgentCommand, AgentProposalActionType, AgentProposalConflictState, CreateCommandPayload,
         MoveCommandPayload, OrganizeFilesPayload, RenameCommandPayload, TrashCommandPayload,
-        USER_REQUESTED_MOVE_REASON, USER_REQUESTED_RENAME_REASON, USER_REQUESTED_TRASH_REASON,
+        USER_REQUESTED_CREATE_DIR_REASON, USER_REQUESTED_MOVE_REASON, USER_REQUESTED_RENAME_REASON,
+        USER_REQUESTED_TRASH_REASON,
     };
 
     fn command(payload: serde_json::Value) -> AgentCommand {
@@ -1280,6 +1424,112 @@ mod tests {
         let error = build_trash_proposal_report(&root.to_string_lossy(), &directory)
             .expect_err("reject directory");
         assert!(error.contains("regular files only"));
+    }
+
+    #[test]
+    fn create_directory_command_builds_a_create_dir_proposal_without_touching_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("archive")).expect("archive parent");
+
+        let payload = CreateCommandPayload {
+            root_id: "root:archive".to_string(),
+            kind: "DIRECTORY".to_string(),
+            relative_path: "archive/reports".to_string(),
+            content: None,
+        };
+
+        let report = build_create_dir_proposal_report(&root.to_string_lossy(), &payload)
+            .expect("create dir proposal");
+
+        assert!(!root.join("archive/reports").exists());
+        assert_eq!(report.proposals.len(), 1);
+        let proposal = &report.proposals[0];
+        assert_eq!(proposal.action, ProposalAction::CreateDir);
+        assert_eq!(proposal.from, "");
+        assert_eq!(proposal.to, "archive/reports");
+        assert_eq!(proposal.reason, USER_REQUESTED_CREATE_DIR_REASON);
+        assert_eq!(proposal.status, ProposalStatus::Ready);
+
+        let submission =
+            build_agent_proposal_submission(&command(json!({"maxProposals": 1})), report, 1)
+                .expect("submission");
+        assert_eq!(submission.summary.item_count, 1);
+        assert_eq!(
+            submission.items[0].action_type,
+            AgentProposalActionType::CreateDir
+        );
+        assert_eq!(submission.items[0].source_relative_path, None);
+        assert_eq!(
+            submission.items[0].destination_relative_path.as_deref(),
+            Some("archive/reports")
+        );
+        assert_eq!(
+            submission.items[0].reason_code,
+            USER_REQUESTED_CREATE_DIR_REASON
+        );
+    }
+
+    #[test]
+    fn create_directory_command_marks_existing_directory_as_conflict() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("archive/reports")).expect("existing");
+
+        let payload = CreateCommandPayload {
+            root_id: "root:archive".to_string(),
+            kind: "DIRECTORY".to_string(),
+            relative_path: "archive/reports".to_string(),
+            content: None,
+        };
+
+        let report = build_create_dir_proposal_report(&root.to_string_lossy(), &payload)
+            .expect("create dir proposal");
+        let submission =
+            build_agent_proposal_submission(&command(json!({"maxProposals": 1})), report, 1)
+                .expect("submission");
+
+        assert_eq!(
+            submission.items[0].conflict_state,
+            AgentProposalConflictState::NameConflict
+        );
+    }
+
+    #[test]
+    fn create_directory_command_rejects_files_content_and_missing_parent() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("root");
+
+        let file_create = CreateCommandPayload {
+            root_id: "root:archive".to_string(),
+            kind: "FILE".to_string(),
+            relative_path: "note.txt".to_string(),
+            content: None,
+        };
+        let error = build_create_dir_proposal_report(&root.to_string_lossy(), &file_create)
+            .expect_err("reject file");
+        assert!(error.contains("DIRECTORY only"));
+
+        let with_content = CreateCommandPayload {
+            root_id: "root:archive".to_string(),
+            kind: "DIRECTORY".to_string(),
+            relative_path: "reports".to_string(),
+            content: Some("nope".to_string()),
+        };
+        let error = build_create_dir_proposal_report(&root.to_string_lossy(), &with_content)
+            .expect_err("reject content");
+        assert!(error.contains("must not include file content"));
+
+        let missing_parent = CreateCommandPayload {
+            root_id: "root:archive".to_string(),
+            kind: "DIRECTORY".to_string(),
+            relative_path: "missing/reports".to_string(),
+            content: None,
+        };
+        let error = build_create_dir_proposal_report(&root.to_string_lossy(), &missing_parent)
+            .expect_err("reject missing parent");
+        assert!(error.contains("does not exist"));
     }
 
     #[test]

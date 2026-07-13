@@ -36,6 +36,7 @@ pub struct Proposal {
 pub enum ProposalAction {
     Move,
     Trash,
+    CreateDir,
     ReadmeWrite,
 }
 
@@ -150,6 +151,7 @@ impl ProposalAction {
         match self {
             ProposalAction::Move => "move",
             ProposalAction::Trash => "trash",
+            ProposalAction::CreateDir => "create_dir",
             ProposalAction::ReadmeWrite => "readme_write",
         }
     }

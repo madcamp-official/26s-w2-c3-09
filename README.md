@@ -8,7 +8,7 @@
 - Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
 - Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.
 - OpenAI Responses provider is now configurable behind `AI_PROVIDER=openai`, `AI_API_KEY`, and `AI_MODEL`; model output is parsed as structured JSON and revalidated against MouseKeeper command/rule Zod contracts before any draft enters product logic. Missing or rejected credentials still return explicit `AI_PROVIDER_UNCONFIGURED`.
-- Desktop command processing now accepts server `RENAME`, `MOVE`, and `TRASH` commands as proposal generation only: the agent validates the managed-root binding, source paths, filenames/destinations, symlink/reparse safety, and destination conflicts, then submits `MOVE`/quarantine proposal items without touching files before user approval.
+- Desktop command processing now accepts server `RENAME`, `MOVE`, `TRASH`, and directory `CREATE` commands as proposal generation only: the agent validates the managed-root binding, source paths, filenames/destinations, parent directory safety, symlink/reparse safety, and destination conflicts, then submits `MOVE`, quarantine, or `CREATE_DIR` proposal items without touching files before user approval.
 
 > 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md), 현재 완료/누락 판정은 [구현 이력 및 MVP 감사](HISTORY.md)를 기준으로 합니다.
 >
@@ -107,7 +107,7 @@ Tauri Desktop
 - Desktop·Flutter가 함께 사용하는 8종 픽셀풍 MouseKeeper PNG 상태 모션
 - Windows에서 Cargo object 파일 잠금으로 Vite가 종료되지 않도록 `src-tauri/target` 감시 제외
 - overlay window/event bridge skeleton
-- 서버 `RENAME`·`MOVE`·`TRASH` command를 직접 파일 변경이 아닌 승인 대기 `MOVE`/격리 proposal로 변환하는 Desktop processor 경로
+- 서버 `RENAME`·`MOVE`·`TRASH`·directory `CREATE` command를 직접 파일 변경이 아닌 승인 대기 `MOVE`/격리/`CREATE_DIR` proposal로 변환하는 Desktop processor 경로
 - 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
 
 아직 완료되지 않은 범위:

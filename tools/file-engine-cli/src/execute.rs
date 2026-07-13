@@ -148,6 +148,16 @@ fn execute_prechecked(
                     reason: None,
                 });
             }
+            ProposalAction::CreateDir => match execute_create_dir(&guard, &store, check, index)? {
+                Ok(result) => {
+                    executed_count += 1;
+                    results.push(result);
+                }
+                Err(reason) => {
+                    skipped_count += 1;
+                    results.push(skipped_result(check, Some(reason)));
+                }
+            },
             ProposalAction::ReadmeWrite => {
                 match execute_readme_write(&guard, &store, check, index)? {
                     Ok(result) => {
@@ -171,6 +181,45 @@ fn execute_prechecked(
         rejected_count: 0,
         results,
     })
+}
+
+fn execute_create_dir(
+    guard: &PathGuard,
+    store: &JournalStore,
+    check: &PrecheckResult,
+    index: usize,
+) -> Result<Result<ExecuteResult, String>, ExecuteError> {
+    let operation_id = format!("op-{}-{index}", unix_ms());
+    store
+        .append(&planned_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    let target = match guard.resolve_for_create(&check.to) {
+        Ok(target) => target,
+        Err(error) => return Ok(Err(error.to_string())),
+    };
+    if target.exists() {
+        return Ok(Err(
+            "directory appeared before create; refusing to overwrite".to_string(),
+        ));
+    }
+
+    fs::create_dir(&target).map_err(|error| ExecuteError::CreateParentDir {
+        path: target.clone(),
+        message: error.to_string(),
+    })?;
+
+    store
+        .append(&executed_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    Ok(Ok(ExecuteResult {
+        action: check.action.clone(),
+        from: check.from.clone(),
+        to: check.to.clone(),
+        status: ExecuteStatus::Executed,
+        reason: None,
+    }))
 }
 
 fn execute_readme_write(
@@ -373,6 +422,7 @@ fn journal_entry(
         action: match check.action {
             ProposalAction::Move => JournalAction::Move,
             ProposalAction::Trash => JournalAction::Trash,
+            ProposalAction::CreateDir => JournalAction::CreateDir,
             ProposalAction::ReadmeWrite => JournalAction::ReadmeWrite,
         },
         from: check.from.clone(),
@@ -468,7 +518,9 @@ mod tests {
 
     use crate::decision::{Decision, DecisionEntry};
     use crate::journal::{JournalAction, JournalEntry, JournalStatus, JournalStore};
-    use crate::proposal::propose_for_root;
+    use crate::proposal::{
+        proposal_id, propose_for_root, Proposal, ProposalAction, ProposalReport, ProposalStatus,
+    };
 
     use super::{execute_decision_application, execute_proposals, execute_root, ExecuteStatus};
 
@@ -583,6 +635,90 @@ mod tests {
         assert!(root.join(trashed_dir).join("original.json").exists());
         assert!(trashed_relative.starts_with(crate::journal::TRASH_DIR));
         assert_eq!(history.operations[0].action, JournalAction::Trash);
+    }
+
+    #[test]
+    fn create_dir_proposal_executes_and_is_undoable_when_empty() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("archive")).expect("archive parent");
+        let action = ProposalAction::CreateDir;
+        let proposal = ProposalReport {
+            root: root.canonicalize().expect("canonical").display().to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "archive/reports"),
+                action,
+                from: String::new(),
+                to: "archive/reports".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                reason: "USER_REQUESTED_CREATE_DIR".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+
+        let report = execute_proposals(&root, proposal).expect("execute create dir");
+        let history = crate::journal::read_operation_history(&root).expect("history");
+
+        assert_eq!(report.executed_count, 1);
+        assert_eq!(report.skipped_count, 0);
+        assert!(root.join("archive/reports").is_dir());
+        assert_eq!(history.operations[0].action, JournalAction::CreateDir);
+        assert!(history.operations[0].can_undo);
+
+        let undo = crate::undo::undo_operation(&root, &history.operations[0].operation_id)
+            .expect("undo create dir");
+        assert_eq!(undo.undone_count, 1);
+        assert!(!root.join("archive/reports").exists());
+    }
+
+    #[test]
+    fn create_dir_proposal_requires_existing_parent_and_no_overwrite() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        let action = ProposalAction::CreateDir;
+        let proposal = ProposalReport {
+            root: root.canonicalize().expect("canonical").display().to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "missing/reports"),
+                action,
+                from: String::new(),
+                to: "missing/reports".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                reason: "USER_REQUESTED_CREATE_DIR".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+
+        let report = execute_proposals(&root, proposal).expect("execute create dir");
+
+        assert_eq!(report.executed_count, 0);
+        assert_eq!(report.skipped_count, 1);
+        assert!(!root.join("missing").exists());
+
+        fs::create_dir_all(root.join("archive/reports")).expect("existing target");
+        let action = ProposalAction::CreateDir;
+        let existing = ProposalReport {
+            root: root.canonicalize().expect("canonical").display().to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "archive/reports"),
+                action,
+                from: String::new(),
+                to: "archive/reports".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                reason: "USER_REQUESTED_CREATE_DIR".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+        let report = execute_proposals(&root, existing).expect("execute existing create dir");
+        assert_eq!(report.executed_count, 0);
+        assert_eq!(report.skipped_count, 1);
     }
 
     #[test]
