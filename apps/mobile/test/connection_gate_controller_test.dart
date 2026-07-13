@@ -125,7 +125,7 @@ void main() {
     },
   );
 
-  test('connection summary parser validates the shared home aggregate', () {
+  test('connection summary parser validates the lightweight gate aggregate', () {
     final summary = {
       'devices': [
         {'id': 'device-a', 'status': 'ACTIVE'},
@@ -135,7 +135,7 @@ void main() {
       ],
     };
 
-    expect(connectionGateSummaryPath, '/v1/home/summary');
+    expect(connectionGateSummaryPath, '/v1/connections/summary');
     expect(
       connectionItemsFromSummary(summary, 'devices').single['id'],
       'device-a',

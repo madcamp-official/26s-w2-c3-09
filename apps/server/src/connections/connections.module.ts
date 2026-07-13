@@ -6,6 +6,8 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { SyncModule } from '../sync/sync.module';
 import { AgentDevicesController } from './agent-devices.controller';
 import { AgentRoomsController } from './agent-rooms.controller';
+import { ConnectionSummaryController } from './connection-summary.controller';
+import { ConnectionSummaryService } from './connection-summary.service';
 import { ConnectionLifecycleService } from './connection-lifecycle.service';
 
 @Module({
@@ -16,8 +18,12 @@ import { ConnectionLifecycleService } from './connection-lifecycle.service';
     RealtimeModule,
     SyncModule,
   ],
-  controllers: [AgentDevicesController, AgentRoomsController],
-  providers: [ConnectionLifecycleService],
+  controllers: [
+    AgentDevicesController,
+    AgentRoomsController,
+    ConnectionSummaryController,
+  ],
+  providers: [ConnectionLifecycleService, ConnectionSummaryService],
   exports: [ConnectionLifecycleService],
 })
 export class ConnectionsModule {}

@@ -4,7 +4,7 @@
 
 - Mobile file browse requests now listen for `file.browse.ready` / `file.browse.failed` WebSocket events and wake only the matching active request; REST status checks are a 5-second safety fallback instead of a fixed 2-second polling loop, and browse events no longer trigger Home summary reloads.
 - Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but HomeController no longer subscribes to that gate as a summary dependency, with regression coverage proving the loop does not trigger another `/v1/home/summary` fetch.
-- Mobile connection safety reads now coalesce device and room gate data through one shared `/v1/home/summary` request, removing the previous paired `/v1/devices` + `/v1/rooms` round trips during the 5-second liveness reconcile.
+- Mobile connection safety reads now use one lightweight `/v1/connections/summary` request for ACTIVE device/room gate data only; `/v1/home/summary` remains the richer Home projection and is no longer reused by the 5-second safety reconcile.
 - Realtime Home updates remain item-scoped where payloads are complete: `presence.updated` patches only the affected device, lifecycle events remove only affected devices/rooms, and execution status patches only the affected room.
 - `execution.updated` events now carry `executionId`, `roomId`, and `status` in the payload itself, so mobile reducers can perform targeted result upserts without depending on envelope-only fields.
 - Mobile Room now patches/upserts only the affected execution row for `execution.updated` realtime events and skips the redundant full room reload that follows from the generic revision signal.

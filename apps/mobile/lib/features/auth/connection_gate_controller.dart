@@ -155,7 +155,7 @@ abstract interface class ConnectionControlApi {
   Future<void> removeRoom(String roomId, String idempotencyKey);
 }
 
-const connectionGateSummaryPath = '/v1/home/summary';
+const connectionGateSummaryPath = '/v1/connections/summary';
 
 List<Map<String, dynamic>> connectionItemsFromSummary(
   Map<String, dynamic> summary,
@@ -181,26 +181,26 @@ class ApiConnectionControl implements ConnectionControlApi {
   ApiConnectionControl(this._api);
 
   final ApiClient _api;
-  Future<Map<String, dynamic>>? _summaryInFlight;
+  Future<Map<String, dynamic>>? _connectionSummaryInFlight;
 
   @override
   Future<List<Map<String, dynamic>>> listDevices() async =>
-      connectionItemsFromSummary(await _homeSummary(), 'devices');
+      connectionItemsFromSummary(await _connectionSummary(), 'devices');
 
   @override
   Future<List<Map<String, dynamic>>> listRooms() async =>
-      connectionItemsFromSummary(await _homeSummary(), 'rooms');
+      connectionItemsFromSummary(await _connectionSummary(), 'rooms');
 
-  Future<Map<String, dynamic>> _homeSummary() {
-    final existing = _summaryInFlight;
+  Future<Map<String, dynamic>> _connectionSummary() {
+    final existing = _connectionSummaryInFlight;
     if (existing != null) return existing;
     late final Future<Map<String, dynamic>> request;
     request = _api.get(connectionGateSummaryPath).whenComplete(() {
-      if (identical(_summaryInFlight, request)) {
-        _summaryInFlight = null;
+      if (identical(_connectionSummaryInFlight, request)) {
+        _connectionSummaryInFlight = null;
       }
     });
-    _summaryInFlight = request;
+    _connectionSummaryInFlight = request;
     return request;
   }
 

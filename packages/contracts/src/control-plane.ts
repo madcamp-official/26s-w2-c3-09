@@ -588,6 +588,39 @@ export const homeSummaryResponseSchema = z
 
 export type HomeSummaryResponse = z.infer<typeof homeSummaryResponseSchema>;
 
+export const connectionSummaryDeviceSchema = z
+  .object({
+    id: uuidSchema,
+    platform: platformSchema,
+    deviceName: z.string().min(1).max(120),
+    status: z.literal("ACTIVE"),
+    lastSeenAt: z.iso.datetime().nullable(),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+
+export const connectionSummaryRoomSchema = z
+  .object({
+    id: uuidSchema,
+    desktopDeviceId: uuidSchema,
+    name: z.string().min(1).max(120),
+    rootAlias: z.string().min(1).max(120),
+    status: z.literal("ACTIVE"),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+
+export const connectionSummaryResponseSchema = z
+  .object({
+    devices: z.array(connectionSummaryDeviceSchema),
+    rooms: z.array(connectionSummaryRoomSchema),
+  })
+  .strict();
+
+export type ConnectionSummaryResponse = z.infer<
+  typeof connectionSummaryResponseSchema
+>;
+
 export const createFileBrowseRequestSchema = z
   .object({
     relativeDirectory: relativePathSchema.or(z.literal("")),

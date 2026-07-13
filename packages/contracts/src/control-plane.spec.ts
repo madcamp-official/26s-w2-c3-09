@@ -6,6 +6,7 @@ import {
   createRoomSnapshotSchema,
   createRuleSchema,
   failFileTransferSchema,
+  connectionSummaryResponseSchema,
   homeSummaryResponseSchema,
   registerPushNotificationTokenSchema,
   updateCharacterSchema,
@@ -819,6 +820,74 @@ describe("home summary contract", () => {
           nextUnlockAffinity: 3,
           riveAssetStatus: "UNCONFIGURED",
         },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("connection summary contract", () => {
+  const deviceId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a1";
+  const roomId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a2";
+  const timestamp = "2026-07-13T01:02:03.000Z";
+
+  it("keeps the five-second safety check scoped to active connection data", () => {
+    const response = {
+      devices: [
+        {
+          id: deviceId,
+          platform: "WINDOWS",
+          deviceName: "Desktop",
+          status: "ACTIVE",
+          lastSeenAt: timestamp,
+          createdAt: timestamp,
+        },
+      ],
+      rooms: [
+        {
+          id: roomId,
+          desktopDeviceId: deviceId,
+          name: "Downloads",
+          rootAlias: "Downloads",
+          status: "ACTIVE",
+          createdAt: timestamp,
+        },
+      ],
+    };
+
+    expect(connectionSummaryResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("rejects home projection fields and private database fields", () => {
+    expect(
+      connectionSummaryResponseSchema.safeParse({
+        devices: [
+          {
+            id: deviceId,
+            platform: "WINDOWS",
+            deviceName: "Desktop",
+            status: "ACTIVE",
+            lastSeenAt: timestamp,
+            createdAt: timestamp,
+            presence: "ONLINE_IDLE",
+          },
+        ],
+        rooms: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      connectionSummaryResponseSchema.safeParse({
+        devices: [
+          {
+            id: deviceId,
+            userId: roomId,
+            platform: "WINDOWS",
+            deviceName: "Desktop",
+            status: "ACTIVE",
+            lastSeenAt: timestamp,
+            createdAt: timestamp,
+          },
+        ],
+        rooms: [],
       }).success,
     ).toBe(false);
   });

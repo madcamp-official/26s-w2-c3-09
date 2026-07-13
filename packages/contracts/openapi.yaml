@@ -67,6 +67,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HomeSummary" }
+  /v1/connections/summary:
+    get:
+      description: Lightweight mobile connection gate state for five-second safety reconcile.
+      responses:
+        "200":
+          description: Active devices and rooms only, without home projection enrichment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionSummary" }
   /v1/devices:
     get:
       responses:
@@ -1261,6 +1270,39 @@ components:
           items: { type: string, minLength: 1, maxLength: 120 }
         nextUnlockAffinity: { type: [integer, "null"], minimum: 0 }
         riveAssetStatus: { type: string, enum: [CONFIGURED, UNCONFIGURED] }
+    ConnectionSummary:
+      type: object
+      additionalProperties: false
+      required: [devices, rooms]
+      properties:
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/ConnectionSummaryDevice" }
+        rooms:
+          type: array
+          items: { $ref: "#/components/schemas/ConnectionSummaryRoom" }
+    ConnectionSummaryDevice:
+      type: object
+      additionalProperties: false
+      required: [id, platform, deviceName, status, lastSeenAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string, enum: [WINDOWS, MACOS, ANDROID, IOS] }
+        deviceName: { type: string, minLength: 1, maxLength: 120 }
+        status: { type: string, const: ACTIVE }
+        lastSeenAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+    ConnectionSummaryRoom:
+      type: object
+      additionalProperties: false
+      required: [id, desktopDeviceId, name, rootAlias, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        desktopDeviceId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        rootAlias: { type: string, minLength: 1, maxLength: 120 }
+        status: { type: string, const: ACTIVE }
+        createdAt: { type: string, format: date-time }
     Heartbeat:
       type: object
       additionalProperties: false
