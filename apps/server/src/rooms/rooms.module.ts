@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { DatabaseModule } from '../database/database.module';
-import { SyncModule } from '../sync/sync.module';
+import { ConnectionsModule } from '../connections/connections.module';
 import { RoomsController } from './rooms.controller';
 @Module({
-  imports: [DatabaseModule, AuthModule, SyncModule],
+  imports: [DatabaseModule, AuthModule, ConnectionsModule],
   controllers: [RoomsController],
 })
 export class RoomsModule {}

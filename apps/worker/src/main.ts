@@ -10,6 +10,8 @@ import {
   cacheReservationDeletionJobs,
   cacheUploadReservations,
   createDatabase,
+  devices,
+  fileBrowseRequests,
   fileTransfers,
   objectDeletionJobs,
   notificationJobs,
@@ -110,6 +112,112 @@ async function appendSyncEvent(
 }
 
 async function scheduleExpired() {
+  const browseRequests = await connection.db
+    .select({ request: fileBrowseRequests, userId: rooms.userId })
+    .from(fileBrowseRequests)
+    .innerJoin(rooms, eq(fileBrowseRequests.roomId, rooms.id))
+    .where(
+      and(
+        lte(fileBrowseRequests.expiresAt, new Date()),
+        eq(fileBrowseRequests.status, "REQUESTED"),
+      ),
+    );
+  for (const item of browseRequests) {
+    await connection.db.transaction(async (tx) => {
+      const activeDevice = (
+        await tx
+          .select({ id: devices.id })
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, item.request.desktopDeviceId),
+              eq(devices.userId, item.userId),
+              eq(devices.status, "ACTIVE"),
+            ),
+          )
+          .for("share")
+          .limit(1)
+      )[0];
+      if (!activeDevice) {
+        await clearAbandonedBrowseRequest(tx, item.request.id);
+        return;
+      }
+      const activeRoom = (
+        await tx
+          .select({ id: rooms.id })
+          .from(rooms)
+          .where(
+            and(
+              eq(rooms.id, item.request.roomId),
+              eq(rooms.desktopDeviceId, activeDevice.id),
+              eq(rooms.userId, item.userId),
+              eq(rooms.status, "ACTIVE"),
+            ),
+          )
+          .for("share")
+          .limit(1)
+      )[0];
+      if (!activeRoom) {
+        await clearAbandonedBrowseRequest(tx, item.request.id);
+        return;
+      }
+      const expired = (
+        await tx
+          .update(fileBrowseRequests)
+          .set({
+            status: "FAILED",
+            failureCode: "TIMED_OUT",
+            query: null,
+            resultPage: null,
+          })
+          .where(
+            and(
+              eq(fileBrowseRequests.id, item.request.id),
+              eq(fileBrowseRequests.status, "REQUESTED"),
+            ),
+          )
+          .returning()
+      )[0];
+      if (!expired) return;
+      await appendSyncEvent(tx, {
+        userId: item.userId,
+        deviceId: expired.desktopDeviceId,
+        roomId: expired.roomId,
+        aggregateId: expired.id,
+        eventType: "file.browse.failed",
+        aggregateType: "file_browse_request",
+        payload: { requestId: expired.id, failureCode: "TIMED_OUT" },
+      });
+    });
+  }
+
+  // Search terms and result pages are request-scoped data, not a server-side
+  // filename index. A READY row without its page would violate the response
+  // state invariant, so expire it explicitly before removing the page.
+  await connection.db
+    .update(fileBrowseRequests)
+    .set({
+      status: "FAILED",
+      failureCode: "TIMED_OUT",
+      query: null,
+      resultPage: null,
+    })
+    .where(
+      and(
+        lte(fileBrowseRequests.expiresAt, new Date()),
+        eq(fileBrowseRequests.status, "READY"),
+      ),
+    );
+  await connection.db
+    .update(fileBrowseRequests)
+    .set({ query: null, resultPage: null })
+    .where(
+      and(
+        lte(fileBrowseRequests.expiresAt, new Date()),
+        eq(fileBrowseRequests.status, "FAILED"),
+      ),
+    );
+
   const transfers = await connection.db
     .select()
     .from(fileTransfers)
@@ -121,6 +229,16 @@ async function scheduleExpired() {
     );
   for (const transfer of transfers) {
     await connection.db.transaction(async (tx) => {
+      const active = await lockActiveConnection(
+        tx,
+        transfer.requestedByUserId,
+        transfer.desktopDeviceId,
+        transfer.roomId,
+      );
+      if (!active) {
+        await expireAbandonedTransfer(tx, transfer.id);
+        return;
+      }
       const expired = (
         await tx
           .update(fileTransfers)
@@ -169,6 +287,16 @@ async function scheduleExpired() {
   for (const item of reservations) {
     const reservation = item.reservation;
     await connection.db.transaction(async (tx) => {
+      const active = await lockActiveConnection(
+        tx,
+        item.userId,
+        reservation.desktopDeviceId,
+        reservation.roomId,
+      );
+      if (!active) {
+        await expireAbandonedReservation(tx, reservation.id);
+        return;
+      }
       const expired = (
         await tx
           .update(cacheUploadReservations)
@@ -196,6 +324,107 @@ async function scheduleExpired() {
         payload: { reservationId: expired.id, status: expired.status },
       });
     });
+  }
+}
+
+async function clearAbandonedBrowseRequest(tx: Transaction, requestId: string) {
+  await tx
+    .update(fileBrowseRequests)
+    .set({
+      status: "FAILED",
+      failureCode: "TIMED_OUT",
+      query: null,
+      resultPage: null,
+    })
+    .where(
+      and(
+        eq(fileBrowseRequests.id, requestId),
+        eq(fileBrowseRequests.status, "REQUESTED"),
+      ),
+    );
+}
+
+async function lockActiveConnection(
+  tx: Transaction,
+  userId: string,
+  deviceId: string,
+  roomId: string,
+) {
+  const device = (
+    await tx
+      .select({ id: devices.id })
+      .from(devices)
+      .where(
+        and(
+          eq(devices.id, deviceId),
+          eq(devices.userId, userId),
+          eq(devices.status, "ACTIVE"),
+        ),
+      )
+      .for("share")
+      .limit(1)
+  )[0];
+  if (!device) return false;
+  const room = (
+    await tx
+      .select({ id: rooms.id })
+      .from(rooms)
+      .where(
+        and(
+          eq(rooms.id, roomId),
+          eq(rooms.desktopDeviceId, device.id),
+          eq(rooms.userId, userId),
+          eq(rooms.status, "ACTIVE"),
+        ),
+      )
+      .for("share")
+      .limit(1)
+  )[0];
+  return Boolean(room);
+}
+
+async function expireAbandonedTransfer(tx: Transaction, transferId: string) {
+  const expired = (
+    await tx
+      .update(fileTransfers)
+      .set({ status: "EXPIRED", completedAt: new Date() })
+      .where(
+        and(
+          eq(fileTransfers.id, transferId),
+          inArray(fileTransfers.status, ["REQUESTED", "UPLOADING", "READY"]),
+        ),
+      )
+      .returning()
+  )[0];
+  if (expired?.objectKey) {
+    await tx
+      .insert(objectDeletionJobs)
+      .values({ transferId: expired.id, objectKey: expired.objectKey })
+      .onConflictDoNothing();
+  }
+}
+
+async function expireAbandonedReservation(
+  tx: Transaction,
+  reservationId: string,
+) {
+  const expired = (
+    await tx
+      .update(cacheUploadReservations)
+      .set({ status: "EXPIRED" })
+      .where(
+        and(
+          eq(cacheUploadReservations.id, reservationId),
+          eq(cacheUploadReservations.status, "RESERVED"),
+        ),
+      )
+      .returning()
+  )[0];
+  if (expired) {
+    await tx
+      .insert(cacheReservationDeletionJobs)
+      .values({ reservationId: expired.id, objectKey: expired.objectKey })
+      .onConflictDoNothing();
   }
 }
 

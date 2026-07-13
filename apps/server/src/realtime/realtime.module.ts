@@ -8,6 +8,6 @@ import { SyncModule } from '../sync/sync.module';
 @Module({
   imports: [DatabaseModule, AuthModule, SyncModule],
   providers: [RealtimeGateway, RealtimeDispatcher],
-  exports: [RealtimeGateway],
+  exports: [RealtimeGateway, RealtimeDispatcher],
 })
 export class RealtimeModule {}

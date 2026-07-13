@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mousekeeper.app/contracts/events/room-snapshot.schema.json",
+  "title": "RoomSnapshot",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["score", "metrics", "calculatedAt"],
+  "properties": {
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "calculatedAt": { "type": "string", "format": "date-time" },
+    "formulaVersion": {
+      "const": "mousekeeper-cleanliness-v1",
+      "default": "mousekeeper-cleanliness-v1"
+    },
+    "metrics": {
+      "type": "object",
+      "description": "managedFileCount and unorganizedFileCount must each be less than or equal to totalFileCount.",
+      "x-mousekeeper-invariants": [
+        "managedFileCount <= totalFileCount",
+        "unorganizedFileCount <= totalFileCount"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "totalFileCount",
+        "managedFileCount",
+        "unorganizedFileCount",
+        "deductions"
+      ],
+      "properties": {
+        "totalFileCount": { "type": "integer", "minimum": 0 },
+        "managedFileCount": { "type": "integer", "minimum": 0 },
+        "unorganizedFileCount": { "type": "integer", "minimum": 0 },
+        "deductions": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["reasonCode", "count", "points"],
+            "properties": {
+              "reasonCode": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "count": { "type": "integer", "minimum": 0 },
+              "points": { "type": "integer", "minimum": 0, "maximum": 100 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

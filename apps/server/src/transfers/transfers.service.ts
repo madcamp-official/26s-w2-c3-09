@@ -18,7 +18,7 @@ import {
   rooms,
   type Database,
 } from '@mousekeeper/database';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, gt } from 'drizzle-orm';
 import { z } from 'zod';
 import Redis from 'ioredis';
 import { loadEnvironment } from '../config/environment';
@@ -26,6 +26,8 @@ import { DATABASE } from '../database/database.module';
 import { REDIS } from '../presence/redis.module';
 import { SyncService } from '../sync/sync.service';
 import { ObjectStorageService } from './object-storage.service';
+
+type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 @Injectable()
 export class TransfersService {
@@ -41,26 +43,57 @@ export class TransfersService {
     key: string,
     body: z.infer<typeof createFileTransferSchema>,
   ) {
-    const room = (
-      await this.db
-        .select()
-        .from(rooms)
-        .where(
-          and(
-            eq(rooms.id, roomId),
-            eq(rooms.userId, userId),
-            eq(rooms.status, 'ACTIVE'),
-          ),
-        )
-        .limit(1)
-    )[0];
-    if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
     this.storage.assertConfigured();
     if (this.redis.status === 'wait') await this.redis.connect();
-    if (!(await this.redis.exists(`presence:${room.desktopDeviceId}`)))
-      throw new ConflictException({ code: 'DEVICE_OFFLINE' });
     const ttl = loadEnvironment().FILE_TRANSFER_TTL_SECONDS;
     return this.db.transaction(async (tx) => {
+      const candidate = (
+        await tx
+          .select()
+          .from(rooms)
+          .where(
+            and(
+              eq(rooms.id, roomId),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
+      const device = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, candidate.desktopDeviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
+      const room = (
+        await tx
+          .select()
+          .from(rooms)
+          .where(
+            and(
+              eq(rooms.id, roomId),
+              eq(rooms.desktopDeviceId, device.id),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (!(await this.redis.exists(`presence:${room.desktopDeviceId}`)))
+        throw new ConflictException({ code: 'DEVICE_OFFLINE' });
       const inserted = (
         await tx
           .insert(fileTransfers)
@@ -110,31 +143,39 @@ export class TransfersService {
     });
   }
   async pending(userId: string, deviceId: string) {
-    const device = (
-      await this.db
-        .select()
-        .from(devices)
+    return this.db.transaction(async (tx) => {
+      const device = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, deviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!device) throw new ForbiddenException({ code: 'FORBIDDEN' });
+      const pending = await tx
+        .select({ transfer: fileTransfers })
+        .from(fileTransfers)
+        .innerJoin(
+          rooms,
+          and(eq(fileTransfers.roomId, rooms.id), eq(rooms.status, 'ACTIVE')),
+        )
         .where(
           and(
-            eq(devices.id, deviceId),
-            eq(devices.userId, userId),
-            eq(devices.status, 'ACTIVE'),
+            eq(fileTransfers.desktopDeviceId, deviceId),
+            eq(fileTransfers.status, 'REQUESTED'),
+            gt(fileTransfers.expiresAt, new Date()),
           ),
         )
-        .limit(1)
-    )[0];
-    if (!device) throw new ForbiddenException({ code: 'FORBIDDEN' });
-    const pending = await this.db
-      .select()
-      .from(fileTransfers)
-      .where(
-        and(
-          eq(fileTransfers.desktopDeviceId, deviceId),
-          eq(fileTransfers.status, 'REQUESTED'),
-        ),
-      )
-      .orderBy(asc(fileTransfers.createdAt));
-    return pending.map((transfer) => this.publicTransfer(transfer));
+        .orderBy(asc(fileTransfers.createdAt));
+      return pending.map(({ transfer }) => this.publicTransfer(transfer));
+    });
   }
   async uploadTarget(
     userId: string,
@@ -155,7 +196,7 @@ export class TransfersService {
       Math.floor((transfer.expiresAt.getTime() - Date.now()) / 1000),
     );
     const uploadUrl = await this.storage.uploadUrl(objectKey, expiresIn);
-    await this.db
+    const updated = await this.db
       .update(fileTransfers)
       .set({
         status: 'UPLOADING',
@@ -163,7 +204,16 @@ export class TransfersService {
         objectKey,
         sizeBytes: body.sourceVersion.sizeBytes,
       })
-      .where(eq(fileTransfers.id, transferId));
+      .where(
+        and(
+          eq(fileTransfers.id, transferId),
+          eq(fileTransfers.status, 'REQUESTED'),
+          gt(fileTransfers.expiresAt, new Date()),
+        ),
+      )
+      .returning({ id: fileTransfers.id });
+    if (!updated[0])
+      throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
     return { transferId, uploadUrl, expiresAt: transfer.expiresAt };
   }
   async complete(
@@ -207,6 +257,23 @@ export class TransfersService {
     if (storedSize !== body.sizeBytes)
       throw new ConflictException({ code: 'SOURCE_CHANGED' });
     return this.db.transaction(async (tx) => {
+      const current = await this.lockOwned(tx, userId, transferId, deviceId);
+      if (
+        current.status === 'READY' &&
+        current.uploadCompletionIdempotencyKey === idempotencyKey &&
+        current.sizeBytes === body.sizeBytes &&
+        current.sha256 === body.sha256
+      ) {
+        return this.publicTransfer(current);
+      }
+      if (
+        current.status !== 'UPLOADING' ||
+        !current.objectKey ||
+        current.sizeBytes !== body.sizeBytes ||
+        current.objectKey !== transfer.objectKey
+      ) {
+        throw new ConflictException({ code: 'SOURCE_CHANGED' });
+      }
       const updated = (
         await tx
           .update(fileTransfers)
@@ -244,15 +311,15 @@ export class TransfersService {
     transferId: string,
     body: z.infer<typeof failFileTransferSchema>,
   ) {
-    const transfer = await this.owned(userId, transferId, deviceId);
-    if (transfer.status === 'FAILED') {
-      if (transfer.failureCode === body.failureCode)
-        return this.publicTransfer(transfer);
-      throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
-    }
-    if (!['REQUESTED', 'UPLOADING'].includes(transfer.status))
-      throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
     return this.db.transaction(async (tx) => {
+      const transfer = await this.lockOwned(tx, userId, transferId, deviceId);
+      if (transfer.status === 'FAILED') {
+        if (transfer.failureCode === body.failureCode)
+          return this.publicTransfer(transfer);
+        throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+      }
+      if (!['REQUESTED', 'UPLOADING'].includes(transfer.status))
+        throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
       const failed = (
         await tx
           .update(fileTransfers)
@@ -270,7 +337,7 @@ export class TransfersService {
           .returning()
       )[0];
       if (!failed) {
-        const current = await this.owned(userId, transferId, deviceId);
+        const current = await this.lockOwned(tx, userId, transferId, deviceId);
         if (
           current.status === 'FAILED' &&
           current.failureCode === body.failureCode
@@ -302,35 +369,37 @@ export class TransfersService {
   }
 
   async download(userId: string, transferId: string) {
-    const transfer = await this.owned(userId, transferId);
-    if (
-      transfer.status !== 'READY' ||
-      !transfer.objectKey ||
-      transfer.expiresAt <= new Date()
-    )
-      throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
-    return {
-      downloadUrl: await this.storage.downloadUrl(
-        transfer.objectKey,
-        Math.max(
-          1,
-          Math.min(
-            60,
-            Math.floor((transfer.expiresAt.getTime() - Date.now()) / 1000),
+    return this.db.transaction(async (tx) => {
+      const transfer = await this.lockOwned(tx, userId, transferId);
+      if (
+        transfer.status !== 'READY' ||
+        !transfer.objectKey ||
+        transfer.expiresAt <= new Date()
+      )
+        throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
+      return {
+        downloadUrl: await this.storage.downloadUrl(
+          transfer.objectKey,
+          Math.max(
+            1,
+            Math.min(
+              60,
+              Math.floor((transfer.expiresAt.getTime() - Date.now()) / 1000),
+            ),
           ),
         ),
-      ),
-      sizeBytes: transfer.sizeBytes,
-      sha256: transfer.sha256,
-      expiresAt: transfer.expiresAt,
-    };
+        sizeBytes: transfer.sizeBytes,
+        sha256: transfer.sha256,
+        expiresAt: transfer.expiresAt,
+      };
+    });
   }
   async get(userId: string, transferId: string) {
     return this.publicTransfer(await this.owned(userId, transferId));
   }
   async ack(userId: string, transferId: string) {
     return this.db.transaction(async (tx) => {
-      const transfer = await this.owned(userId, transferId);
+      const transfer = await this.lockOwned(tx, userId, transferId);
       if (transfer.status === 'COMPLETED') return this.publicTransfer(transfer);
       if (transfer.status !== 'READY' || !transfer.objectKey)
         throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
@@ -371,7 +440,7 @@ export class TransfersService {
     transferId: string,
   ) {
     return this.db.transaction(async (tx) => {
-      const transfer = await this.owned(userId, transferId, deviceId);
+      const transfer = await this.lockOwned(tx, userId, transferId, deviceId);
       if (transfer.status === 'CANCELLED') return this.publicTransfer(transfer);
       if (['COMPLETED', 'EXPIRED'].includes(transfer.status))
         throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
@@ -388,7 +457,7 @@ export class TransfersService {
           .returning()
       )[0];
       if (!updated) {
-        const current = await this.owned(userId, transferId, deviceId);
+        const current = await this.lockOwned(tx, userId, transferId, deviceId);
         if (current.status === 'CANCELLED') return this.publicTransfer(current);
         throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
       }
@@ -414,6 +483,37 @@ export class TransfersService {
   private async owned(userId: string, transferId: string, deviceId?: string) {
     const transfer = (
       await this.db
+        .select({ transfer: fileTransfers })
+        .from(fileTransfers)
+        .innerJoin(
+          rooms,
+          and(
+            eq(fileTransfers.roomId, rooms.id),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
+        )
+        .where(
+          and(
+            eq(fileTransfers.id, transferId),
+            eq(fileTransfers.requestedByUserId, userId),
+            ...(deviceId ? [eq(fileTransfers.desktopDeviceId, deviceId)] : []),
+          ),
+        )
+        .limit(1)
+    )[0]?.transfer;
+    if (!transfer) throw new NotFoundException({ code: 'NOT_FOUND' });
+    return transfer;
+  }
+
+  private async lockOwned(
+    tx: Transaction,
+    userId: string,
+    transferId: string,
+    deviceId?: string,
+  ) {
+    const candidate = (
+      await tx
         .select()
         .from(fileTransfers)
         .where(
@@ -423,6 +523,56 @@ export class TransfersService {
             ...(deviceId ? [eq(fileTransfers.desktopDeviceId, deviceId)] : []),
           ),
         )
+        .limit(1)
+    )[0];
+    if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
+
+    const device = (
+      await tx
+        .select()
+        .from(devices)
+        .where(
+          and(
+            eq(devices.id, candidate.desktopDeviceId),
+            eq(devices.userId, userId),
+            eq(devices.status, 'ACTIVE'),
+          ),
+        )
+        .for('share')
+        .limit(1)
+    )[0];
+    if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
+
+    const room = (
+      await tx
+        .select()
+        .from(rooms)
+        .where(
+          and(
+            eq(rooms.id, candidate.roomId),
+            eq(rooms.desktopDeviceId, device.id),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
+        )
+        .for('share')
+        .limit(1)
+    )[0];
+    if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
+
+    const transfer = (
+      await tx
+        .select()
+        .from(fileTransfers)
+        .where(
+          and(
+            eq(fileTransfers.id, transferId),
+            eq(fileTransfers.desktopDeviceId, device.id),
+            eq(fileTransfers.roomId, room.id),
+            eq(fileTransfers.requestedByUserId, userId),
+          ),
+        )
+        .for('update')
         .limit(1)
     )[0];
     if (!transfer) throw new NotFoundException({ code: 'NOT_FOUND' });
@@ -437,6 +587,10 @@ export class TransfersService {
       requestedByUserId: ____,
       ...safe
     } = transfer;
+    void _;
+    void __;
+    void ___;
+    void ____;
     return safe;
   }
 }

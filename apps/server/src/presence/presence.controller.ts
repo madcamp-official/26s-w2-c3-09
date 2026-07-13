@@ -23,6 +23,8 @@ import { DATABASE } from '../database/database.module';
 import { REDIS } from './redis.module';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 
+export const PRESENCE_TTL_SECONDS = 15;
+
 @Controller('v1/devices')
 @UseGuards(FirebaseAuthGuard)
 export class PresenceController {
@@ -57,18 +59,38 @@ export class PresenceController {
     body: z.infer<typeof heartbeatSchema>,
   ) {
     requireAgentDevice(p, id);
-    await this.owned(p.userId, id);
     if (this.redis.status === 'wait') await this.redis.connect();
-    await this.redis
-      .multi()
-      .set(`presence:${id}`, body.presence, 'EX', 45)
-      .zadd('presence:known', Date.now() + 45_000, id)
-      .exec();
-    await this.db
-      .update(devices)
-      .set({ lastSeenAt: new Date() })
-      .where(eq(devices.id, id));
-    const response = { deviceId: id, presence: body.presence, ttlSeconds: 45 };
+    await this.db.transaction(async (tx) => {
+      const device = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, id),
+              eq(devices.userId, p.userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
+      await this.redis
+        .multi()
+        .set(`presence:${id}`, body.presence, 'EX', PRESENCE_TTL_SECONDS)
+        .zadd('presence:known', Date.now() + PRESENCE_TTL_SECONDS * 1000, id)
+        .exec();
+      await tx
+        .update(devices)
+        .set({ lastSeenAt: new Date() })
+        .where(eq(devices.id, id));
+    });
+    const response = {
+      deviceId: id,
+      presence: body.presence,
+      ttlSeconds: PRESENCE_TTL_SECONDS,
+    };
     this.realtime.publish({
       eventType: 'presence.updated',
       userId: p.userId,

@@ -57,7 +57,8 @@
     "SafeRelativePathOrRoot": {
       "type": "string",
       "minLength": 0,
-      "maxLength": 4096,
+      "maxLength": 1024,
+      "pattern": "^(?:$|(?!(?:[A-Za-z]:|[\\\\/]))(?!.*[\\\\/]$)(?!.*[\\\\/]{2})(?!.*(?:^|[\\\\/])\\.{1,2}(?:[\\\\/]|$))[^\\u0000]+)$",
       "not": {
         "anyOf": [
           { "pattern": "^[A-Za-z]:" },

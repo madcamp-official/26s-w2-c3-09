@@ -54,4 +54,18 @@ describe('RealtimeGateway contract', () => {
     );
     expect(emit).toHaveBeenCalledWith('command.updated', expect.any(Object));
   });
+
+  it('force-disconnects every socket bound to a revoked device', () => {
+    const gateway = new RealtimeGateway({} as never);
+    const disconnectSockets = jest.fn();
+    const inRoom = jest.fn().mockReturnValue({ disconnectSockets });
+    gateway.server = { in: inRoom } as unknown as Server;
+
+    gateway.disconnectDevice('018f4c7b-1ad6-7c95-bf34-5e45881f98a2');
+
+    expect(inRoom).toHaveBeenCalledWith(
+      'device:018f4c7b-1ad6-7c95-bf34-5e45881f98a2',
+    );
+    expect(disconnectSockets).toHaveBeenCalledWith(true);
+  });
 });

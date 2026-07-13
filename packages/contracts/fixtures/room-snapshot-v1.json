@@ -1,0 +1,17 @@
+{
+  "score": 53,
+  "metrics": {
+    "totalFileCount": 3,
+    "managedFileCount": 1,
+    "unorganizedFileCount": 2,
+    "deductions": [
+      {
+        "reasonCode": "UNORGANIZED_FILES",
+        "count": 2,
+        "points": 47
+      }
+    ]
+  },
+  "calculatedAt": "2026-07-13T00:00:00.000Z",
+  "formulaVersion": "mousekeeper-cleanliness-v1"
+}

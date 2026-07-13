@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mousekeeper.app/contracts/events/file-browse-request.schema.json",
+  "title": "FileBrowseRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["relativeDirectory"],
+  "properties": {
+    "relativeDirectory": {
+      "$ref": "file-browse.schema.json#/$defs/SafeRelativePathOrRoot"
+    },
+    "cursor": { "type": ["string", "null"], "maxLength": 512, "default": null },
+    "query": {
+      "type": ["string", "null"],
+      "minLength": 2,
+      "maxLength": 100,
+      "default": null
+    },
+    "searchScope": {
+      "type": "string",
+      "enum": ["CURRENT_DIRECTORY", "MANAGED_ROOT"],
+      "default": "CURRENT_DIRECTORY"
+    }
+  }
+}

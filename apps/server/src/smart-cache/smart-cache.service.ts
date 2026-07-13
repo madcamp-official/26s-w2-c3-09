@@ -35,6 +35,8 @@ import { SyncService } from '../sync/sync.service';
 import { canonicalJson } from '../common/canonical-json';
 import { matchesExcludedPattern } from './cache-policy';
 
+type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
 @Injectable()
 export class SmartCacheService {
   constructor(
@@ -68,7 +70,7 @@ export class SmartCacheService {
     return room;
   }
   async getPolicy(userId: string, roomId: string) {
-    const room = await this.room(userId, roomId);
+    await this.room(userId, roomId);
     const policy = (
       await this.db
         .select()
@@ -99,6 +101,7 @@ export class SmartCacheService {
     }
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${roomId}))`);
+      await this.lockActiveRoom(tx, userId, room.desktopDeviceId, roomId);
       if (body.enabled) {
         const availableBytes = Number(
           (
@@ -254,6 +257,37 @@ export class SmartCacheService {
       await tx.execute(
         sql`select pg_advisory_xact_lock(hashtext(${body.roomId}))`,
       );
+      const activeDevice = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, deviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!activeDevice) throw new ForbiddenException({ code: 'FORBIDDEN' });
+      const activeRoom = (
+        await tx
+          .select()
+          .from(rooms)
+          .where(
+            and(
+              eq(rooms.id, body.roomId),
+              eq(rooms.desktopDeviceId, deviceId),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!activeRoom) throw new NotFoundException({ code: 'NOT_FOUND' });
       const replay = (
         await tx
           .select()
@@ -369,7 +403,7 @@ export class SmartCacheService {
           allocated + candidate.sizeBytes > policy.quotaBytes &&
           evictionIndex < evictable.length
         ) {
-          const file = evictable[evictionIndex++]!;
+          const file = evictable[evictionIndex++];
           if (!candidate.manualPin && file.usageScore >= candidate.usageScore)
             break;
           const invalidated = (
@@ -492,6 +526,7 @@ export class SmartCacheService {
               idempotencyKey,
             ),
             eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
           ),
         )
         .limit(1)
@@ -512,6 +547,7 @@ export class SmartCacheService {
             eq(cacheUploadReservations.id, reservationId),
             eq(cacheUploadReservations.desktopDeviceId, deviceId),
             eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
           ),
         )
         .limit(1)
@@ -528,6 +564,38 @@ export class SmartCacheService {
     )
       throw new ConflictException({ code: 'UPLOAD_FAILED' });
     return this.db.transaction(async (tx) => {
+      const activeDevice = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, deviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!activeDevice) throw new ForbiddenException({ code: 'FORBIDDEN' });
+      const activeRoom = (
+        await tx
+          .select()
+          .from(rooms)
+          .where(
+            and(
+              eq(rooms.id, reservation.roomId),
+              eq(rooms.desktopDeviceId, deviceId),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!activeRoom)
+        throw new NotFoundException({ code: 'RESERVATION_EXPIRED' });
       const current = (
         await tx
           .select()
@@ -650,6 +718,7 @@ export class SmartCacheService {
             eq(cacheUploadReservations.id, reservationId),
             eq(cacheUploadReservations.desktopDeviceId, deviceId),
             eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
           ),
         )
         .limit(1)
@@ -660,6 +729,36 @@ export class SmartCacheService {
     if (reservation.reservation.status !== 'RESERVED')
       throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
     return this.db.transaction(async (tx) => {
+      await this.lockActiveRoom(
+        tx,
+        userId,
+        deviceId,
+        reservation.reservation.roomId,
+      );
+      const current = (
+        await tx
+          .select()
+          .from(cacheUploadReservations)
+          .where(
+            and(
+              eq(cacheUploadReservations.id, reservationId),
+              eq(cacheUploadReservations.desktopDeviceId, deviceId),
+              eq(
+                cacheUploadReservations.roomId,
+                reservation.reservation.roomId,
+              ),
+            ),
+          )
+          .for('update')
+          .limit(1)
+      )[0];
+      if (!current) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (current.status === 'CANCELLED') {
+        return { reservationId, status: 'CANCELLED' };
+      }
+      if (current.status !== 'RESERVED') {
+        throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
+      }
       const cancelled = (
         await tx
           .update(cacheUploadReservations)
@@ -676,7 +775,11 @@ export class SmartCacheService {
         throw new ConflictException({ code: 'INVALID_STATE_TRANSITION' });
       await tx
         .insert(cacheReservationDeletionJobs)
-        .values({ reservationId, objectKey: cancelled.objectKey })
+        .values({
+          reservationId,
+          objectKey: cancelled.objectKey,
+          nextAttemptAt: cancelled.expiresAt,
+        })
         .onConflictDoNothing();
       await this.sync.append(tx, {
         userId,
@@ -694,18 +797,45 @@ export class SmartCacheService {
   async remove(userId: string, cachedFileId: string) {
     const owned = (
       await this.db
-        .select({ file: cachedFiles })
+        .select({ file: cachedFiles, room: rooms })
         .from(cachedFiles)
         .innerJoin(
           rooms,
-          and(eq(cachedFiles.roomId, rooms.id), eq(rooms.userId, userId)),
+          and(
+            eq(cachedFiles.roomId, rooms.id),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
         )
         .where(eq(cachedFiles.id, cachedFileId))
         .limit(1)
-    )[0]?.file;
+    )[0];
     if (!owned) throw new NotFoundException({ code: 'NOT_FOUND' });
-    if (owned.availabilityStatus !== 'AVAILABLE') return this.publicFile(owned);
+    if (owned.file.availabilityStatus !== 'AVAILABLE')
+      return this.publicFile(owned.file);
     return this.db.transaction(async (tx) => {
+      await this.lockActiveRoom(
+        tx,
+        userId,
+        owned.room.desktopDeviceId,
+        owned.room.id,
+      );
+      const current = (
+        await tx
+          .select()
+          .from(cachedFiles)
+          .where(
+            and(
+              eq(cachedFiles.id, cachedFileId),
+              eq(cachedFiles.roomId, owned.room.id),
+            ),
+          )
+          .for('update')
+          .limit(1)
+      )[0];
+      if (!current) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (current.availabilityStatus !== 'AVAILABLE')
+        return this.publicFile(current);
       const removed = (
         await tx
           .update(cachedFiles)
@@ -715,12 +845,12 @@ export class SmartCacheService {
       )[0];
       await tx
         .insert(cacheDeletionJobs)
-        .values({ cachedFileId, objectKey: owned.objectKey })
+        .values({ cachedFileId, objectKey: current.objectKey })
         .onConflictDoNothing();
       await this.sync.append(tx, {
         userId,
         deviceId: null,
-        roomId: owned.roomId,
+        roomId: current.roomId,
         eventType: 'smart-cache.updated',
         aggregateType: 'cached_file',
         aggregateId: cachedFileId,
@@ -732,36 +862,98 @@ export class SmartCacheService {
 
   async download(userId: string, cachedFileId: string) {
     this.enabled();
-    const owned = (
-      await this.db
-        .select({ file: cachedFiles })
-        .from(cachedFiles)
-        .innerJoin(
-          rooms,
-          and(eq(cachedFiles.roomId, rooms.id), eq(rooms.userId, userId)),
-        )
+    return this.db.transaction(async (tx) => {
+      const candidate = (
+        await tx
+          .select({ file: cachedFiles, room: rooms })
+          .from(cachedFiles)
+          .innerJoin(
+            rooms,
+            and(
+              eq(cachedFiles.roomId, rooms.id),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .where(eq(cachedFiles.id, cachedFileId))
+          .limit(1)
+      )[0];
+      if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
+      await this.lockActiveRoom(
+        tx,
+        userId,
+        candidate.room.desktopDeviceId,
+        candidate.room.id,
+      );
+      const owned = (
+        await tx
+          .select()
+          .from(cachedFiles)
+          .where(
+            and(
+              eq(cachedFiles.id, cachedFileId),
+              eq(cachedFiles.roomId, candidate.room.id),
+              eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
+            ),
+          )
+          .for('update')
+          .limit(1)
+      )[0];
+      if (!owned) throw new NotFoundException({ code: 'NOT_FOUND' });
+      if (!owned.sha256)
+        throw new ConflictException({ code: 'CHECKSUM_UNAVAILABLE' });
+      await tx
+        .update(cachedFiles)
+        .set({ lastAccessedAt: new Date() })
+        .where(eq(cachedFiles.id, cachedFileId));
+      return {
+        downloadUrl: await this.storage.downloadUrl(owned.objectKey, 60),
+        sizeBytes: owned.sizeBytes,
+        sha256: owned.sha256,
+        freshnessStatus: owned.freshnessStatus,
+        lastVerifiedAt: owned.lastVerifiedAt,
+      };
+    });
+  }
+
+  private async lockActiveRoom(
+    tx: Transaction,
+    userId: string,
+    deviceId: string,
+    roomId: string,
+  ) {
+    const device = (
+      await tx
+        .select()
+        .from(devices)
         .where(
           and(
-            eq(cachedFiles.id, cachedFileId),
-            eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
+            eq(devices.id, deviceId),
+            eq(devices.userId, userId),
+            eq(devices.status, 'ACTIVE'),
           ),
         )
+        .for('share')
         .limit(1)
-    )[0]?.file;
-    if (!owned) throw new NotFoundException({ code: 'NOT_FOUND' });
-    if (!owned.sha256)
-      throw new ConflictException({ code: 'CHECKSUM_UNAVAILABLE' });
-    await this.db
-      .update(cachedFiles)
-      .set({ lastAccessedAt: new Date() })
-      .where(eq(cachedFiles.id, cachedFileId));
-    return {
-      downloadUrl: await this.storage.downloadUrl(owned.objectKey, 60),
-      sizeBytes: owned.sizeBytes,
-      sha256: owned.sha256,
-      freshnessStatus: owned.freshnessStatus,
-      lastVerifiedAt: owned.lastVerifiedAt,
-    };
+    )[0];
+    if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const room = (
+      await tx
+        .select()
+        .from(rooms)
+        .where(
+          and(
+            eq(rooms.id, roomId),
+            eq(rooms.desktopDeviceId, device.id),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
+        )
+        .for('share')
+        .limit(1)
+    )[0];
+    if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
+    return room;
   }
 
   private async completedCache(
@@ -797,6 +989,7 @@ export class SmartCacheService {
     overrides: Partial<typeof cachedFiles.$inferSelect> = {},
   ) {
     const { objectKey: _, ...safe } = { ...file, ...overrides };
+    void _;
     return safe;
   }
 }

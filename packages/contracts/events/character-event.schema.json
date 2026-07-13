@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mousekeeper.app/contracts/events/character-event.schema.json",
+  "title": "CharacterEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "roomId", "kind", "occurredAt"],
+  "properties": {
+    "eventId": { "type": "string", "format": "uuid" },
+    "roomId": { "type": ["string", "null"], "format": "uuid" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "IDLE",
+        "CONNECTING",
+        "ANALYZING",
+        "WAITING_APPROVAL",
+        "WORKING",
+        "SUCCESS",
+        "ERROR",
+        "USER_WORKING",
+        "OFFLINE"
+      ]
+    },
+    "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" }
+  }
+}

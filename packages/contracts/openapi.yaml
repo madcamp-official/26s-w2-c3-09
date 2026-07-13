@@ -61,7 +61,7 @@ paths:
   /v1/devices:
     get:
       responses:
-        "200": { description: Owned devices }
+        "200": { description: Owned ACTIVE desktop devices only }
   /v1/devices/{deviceId}:
     parameters:
       - {
@@ -71,11 +71,35 @@ paths:
           schema: { type: string, format: uuid },
         }
     delete:
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
       responses:
         "200":
           {
             description: Device revoked and active transfer/cache cleanup scheduled,
           }
+        "409": { description: Idempotency key reused for another mutation }
+  /v1/agent/devices/self:
+    delete:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      responses:
+        "200":
+          {
+            description: Authenticated desktop device revoked; an identical key replays the final result,
+          }
+        "409": { description: Idempotency key reused for another mutation }
   /v1/notification-tokens:
     post:
       requestBody:
@@ -148,16 +172,47 @@ paths:
           schema: { type: string, format: uuid },
         }
     delete:
-      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
       responses:
         "200":
           {
-            description: Room removed and active transfer/cache object deletion scheduled,
+            description: User-owned room removed and active transfer/cache object deletion scheduled,
+          }
+        "404": { description: Active room not found for the authenticated user }
+        "409": { description: Idempotency key reused for another mutation }
+  /v1/agent/rooms/{roomId}:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    delete:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      responses:
+        "200":
+          {
+            description: Room bound to the authenticated desktop device removed; an identical key replays the final result,
           }
         "404":
           {
             description: Active room not found for the authenticated desktop device,
           }
+        "409": { description: Idempotency key reused for another mutation }
   /v1/rooms/{roomId}/commands:
     parameters:
       - {
@@ -803,6 +858,8 @@ paths:
         "200":
           { description: Character profile, affinity, and Rive asset status }
     patch:
+      deprecated: true
+      description: Legacy preference mutation retained for backward compatibility; v1.4 clients do not call it.
       requestBody:
         required: true
         content:
@@ -1024,10 +1081,32 @@ components:
     CreateFileBrowseRequest:
       type: object
       additionalProperties: false
-      required: [relativeDirectory, cursor]
+      required: [relativeDirectory]
       properties:
-        relativeDirectory: { type: string }
-        cursor: { type: [string, "null"], maxLength: 512 }
+        relativeDirectory:
+          type: string
+          maxLength: 1024
+          pattern: '^(?:$|(?!(?:[A-Za-z]:|[\\/]))(?!.*[\\/]$)(?!.*[\\/]{2})(?!.*(?:^|[\\/])\.{1,2}(?:[\\/]|$))[^\u0000]+)$'
+          not:
+            anyOf:
+              - { pattern: "^[A-Za-z]:" }
+              - { pattern: "^/" }
+              - { pattern: '^\\' }
+              - { pattern: '(^|[\\/])\.\.($|[\\/])' }
+        cursor: { type: [string, "null"], maxLength: 512, default: null }
+        query:
+          {
+            type: [string, "null"],
+            minLength: 2,
+            maxLength: 100,
+            default: null,
+          }
+        searchScope:
+          {
+            type: string,
+            enum: [CURRENT_DIRECTORY, MANAGED_ROOT],
+            default: CURRENT_DIRECTORY,
+          }
     CompleteFileBrowse:
       type: object
       additionalProperties: false
@@ -1238,6 +1317,56 @@ components:
         sequence: { type: integer, minimum: 0 }
         occurredAt: { type: string, format: date-time }
         payload: { type: object }
+    CharacterState:
+      type: string
+      enum:
+        [
+          IDLE,
+          CONNECTING,
+          ANALYZING,
+          WAITING_APPROVAL,
+          WORKING,
+          SUCCESS,
+          ERROR,
+          USER_WORKING,
+          OFFLINE,
+        ]
+    CharacterEvent:
+      type: object
+      additionalProperties: false
+      required: [eventId, roomId, kind, occurredAt]
+      properties:
+        eventId: { type: string, format: uuid }
+        roomId: { type: [string, "null"], format: uuid }
+        kind: { $ref: "#/components/schemas/CharacterState" }
+        progress: { type: number, minimum: 0, maximum: 1 }
+        occurredAt: { type: string, format: date-time }
+    DevicePairedEventPayload:
+      type: object
+      additionalProperties: false
+      required: [deviceId, status]
+      properties:
+        deviceId: { type: string, format: uuid }
+        status: { type: string, const: ACTIVE }
+    DeviceRevokedEventPayload:
+      type: object
+      additionalProperties: false
+      required: [deviceId, status]
+      properties:
+        deviceId: { type: string, format: uuid }
+        status: { type: string, const: REVOKED }
+    RoomRemovedEventPayload:
+      type: object
+      additionalProperties: false
+      required: [roomId, status]
+      properties:
+        roomId: { type: string, format: uuid }
+        status: { type: string, const: REMOVED }
+    ConnectionLifecycleEventPayload:
+      oneOf:
+        - { $ref: "#/components/schemas/DevicePairedEventPayload" }
+        - { $ref: "#/components/schemas/DeviceRevokedEventPayload" }
+        - { $ref: "#/components/schemas/RoomRemovedEventPayload" }
     RuleDefinition:
       type: object
       additionalProperties: false
@@ -1317,9 +1446,19 @@ components:
       properties:
         score: { type: integer, minimum: 0, maximum: 100 }
         calculatedAt: { type: string, format: date-time }
+        formulaVersion:
+          {
+            type: string,
+            const: mousekeeper-cleanliness-v1,
+            default: mousekeeper-cleanliness-v1,
+          }
         metrics:
           type: object
           additionalProperties: false
+          description: managedFileCount and unorganizedFileCount must each be less than or equal to totalFileCount.
+          x-mousekeeper-invariants:
+            - managedFileCount <= totalFileCount
+            - unorganizedFileCount <= totalFileCount
           required:
             [totalFileCount, managedFileCount, unorganizedFileCount, deductions]
           properties:

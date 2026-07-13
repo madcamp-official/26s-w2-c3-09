@@ -15,8 +15,11 @@ export const presenceSchema = z.enum([
   "DEGRADED",
   "OFFLINE",
 ]);
+export const MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION =
+  "mousekeeper-cleanliness-v1" as const;
 export const characterStateSchema = z.enum([
   "IDLE",
+  "CONNECTING",
   "ANALYZING",
   "WAITING_APPROVAL",
   "WORKING",
@@ -183,6 +186,9 @@ export const createRoomSnapshotSchema = z
     score: z.number().int().min(0).max(100),
     metrics: roomSnapshotMetricsSchema,
     calculatedAt: z.iso.datetime(),
+    formulaVersion: z
+      .literal(MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION)
+      .default(MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION),
   })
   .strict();
 
@@ -310,6 +316,40 @@ export const createFileBrowseRequestSchema = z
   .object({
     relativeDirectory: relativePathSchema.or(z.literal("")),
     cursor: z.string().max(512).nullable().default(null),
+    query: z
+      .string()
+      .trim()
+      .max(200)
+      .refine((value) => {
+        const codePointLength = Array.from(value).length;
+        return codePointLength >= 2 && codePointLength <= 100;
+      }, "File search query must contain 2 to 100 characters")
+      .nullable()
+      .default(null),
+    searchScope: z
+      .enum(["CURRENT_DIRECTORY", "MANAGED_ROOT"])
+      .default("CURRENT_DIRECTORY"),
+  })
+  .strict();
+
+export const devicePairedEventPayloadSchema = z
+  .object({
+    deviceId: uuidSchema,
+    status: z.literal("ACTIVE"),
+  })
+  .strict();
+
+export const deviceRevokedEventPayloadSchema = z
+  .object({
+    deviceId: uuidSchema,
+    status: z.literal("REVOKED"),
+  })
+  .strict();
+
+export const roomRemovedEventPayloadSchema = z
+  .object({
+    roomId: uuidSchema,
+    status: z.literal("REMOVED"),
   })
   .strict();
 export const fileBrowseEntrySchema = z

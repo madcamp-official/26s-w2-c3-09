@@ -30,25 +30,56 @@ export class CommandsService {
     key: string,
     body: z.infer<typeof createCommandSchema>,
   ) {
-    const room = (
-      await this.db
-        .select()
-        .from(rooms)
-        .where(
-          and(
-            eq(rooms.id, roomId),
-            eq(rooms.userId, userId),
-            eq(rooms.status, 'ACTIVE'),
-          ),
-        )
-        .limit(1)
-    )[0];
-    if (!room)
-      throw new NotFoundException({
-        code: 'NOT_FOUND',
-        message: 'Room not found',
-      });
     return this.db.transaction(async (tx) => {
+      const candidate = (
+        await tx
+          .select()
+          .from(rooms)
+          .where(
+            and(
+              eq(rooms.id, roomId),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!candidate)
+        throw new NotFoundException({
+          code: 'NOT_FOUND',
+          message: 'Room not found',
+        });
+      const device = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, candidate.desktopDeviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
+      const room = (
+        await tx
+          .select()
+          .from(rooms)
+          .where(
+            and(
+              eq(rooms.id, roomId),
+              eq(rooms.desktopDeviceId, device.id),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
       const created = (
         await tx
           .insert(commands)
@@ -99,31 +130,38 @@ export class CommandsService {
   }
 
   async pending(userId: string, deviceId: string) {
-    const device = (
-      await this.db
-        .select()
-        .from(devices)
+    return this.db.transaction(async (tx) => {
+      const device = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, deviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!device) throw new ForbiddenException({ code: 'FORBIDDEN' });
+      const pending = await tx
+        .select({ command: commands })
+        .from(commands)
+        .innerJoin(
+          rooms,
+          and(eq(commands.roomId, rooms.id), eq(rooms.status, 'ACTIVE')),
+        )
         .where(
           and(
-            eq(devices.id, deviceId),
-            eq(devices.userId, userId),
-            eq(devices.status, 'ACTIVE'),
+            eq(commands.targetDeviceId, deviceId),
+            inArray(commands.status, ['QUEUED', 'DELIVERED', 'ANALYZING']),
           ),
         )
-        .limit(1)
-    )[0];
-    if (!device) throw new ForbiddenException({ code: 'FORBIDDEN' });
-    const pending = await this.db
-      .select()
-      .from(commands)
-      .where(
-        and(
-          eq(commands.targetDeviceId, deviceId),
-          inArray(commands.status, ['QUEUED', 'DELIVERED', 'ANALYZING']),
-        ),
-      )
-      .orderBy(asc(commands.createdAt));
-    return pending.map((command) => this.publicCommand(command));
+        .orderBy(asc(commands.createdAt));
+      return pending.map(({ command }) => this.publicCommand(command));
+    });
   }
 
   async listForRoom(userId: string, roomId: string) {
@@ -131,7 +169,13 @@ export class CommandsService {
       await this.db
         .select()
         .from(rooms)
-        .where(and(eq(rooms.id, roomId), eq(rooms.userId, userId)))
+        .where(
+          and(
+            eq(rooms.id, roomId),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
+        )
         .limit(1)
     )[0];
     if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
@@ -150,18 +194,36 @@ export class CommandsService {
     body: z.infer<typeof updateCommandStatusSchema>,
   ) {
     return this.db.transaction(async (tx) => {
+      const device = (
+        await tx
+          .select()
+          .from(devices)
+          .where(
+            and(
+              eq(devices.id, deviceId),
+              eq(devices.userId, userId),
+              eq(devices.status, 'ACTIVE'),
+            ),
+          )
+          .for('share')
+          .limit(1)
+      )[0];
+      if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
       const current = (
         await tx
-          .select({ command: commands, device: devices })
+          .select({ command: commands })
           .from(commands)
-          .innerJoin(devices, eq(commands.targetDeviceId, devices.id))
+          .innerJoin(
+            rooms,
+            and(eq(commands.roomId, rooms.id), eq(rooms.status, 'ACTIVE')),
+          )
           .where(
             and(
               eq(commands.id, commandId),
               eq(commands.targetDeviceId, deviceId),
-              eq(devices.userId, userId),
             ),
           )
+          .for('update')
           .limit(1)
       )[0];
       if (!current) throw new NotFoundException({ code: 'NOT_FOUND' });

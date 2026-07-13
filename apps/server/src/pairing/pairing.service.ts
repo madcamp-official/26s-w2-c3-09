@@ -4,7 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { createPairingSessionSchema } from '@mousekeeper/contracts';
+import {
+  createPairingSessionSchema,
+  devicePairedEventPayloadSchema,
+} from '@mousekeeper/contracts';
 import { devices, pairingSessions, type Database } from '@mousekeeper/database';
 import { createHmac, randomBytes, randomInt } from 'node:crypto';
 import { and, eq, gt, isNull } from 'drizzle-orm';
@@ -98,7 +101,10 @@ export class PairingService {
         eventType: 'device.paired',
         aggregateType: 'device',
         aggregateId: device.id,
-        payload: { platform: device.platform },
+        payload: devicePairedEventPayloadSchema.parse({
+          deviceId: device.id,
+          status: 'ACTIVE',
+        }),
       });
       return device;
     });

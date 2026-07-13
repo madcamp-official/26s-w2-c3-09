@@ -6,6 +6,7 @@ import {
   cacheReservationDeletionJobs,
   cachedFiles,
   cacheUploadReservations,
+  connectionMutationReceipts,
   createDatabase,
   devices,
   fileTransfers,
@@ -17,11 +18,17 @@ import {
 } from '@mousekeeper/database';
 import { eq, inArray } from 'drizzle-orm';
 import Redis from 'ioredis';
-import type { AuthPrincipal } from '../auth/auth-principal';
-import { RoomsController } from '../rooms/rooms.controller';
+import {
+  agentConnectionActor,
+  ConnectionLifecycleService,
+} from '../connections/connection-lifecycle.service';
 import { SyncService } from '../sync/sync.service';
 import { ObjectStorageService } from '../transfers/object-storage.service';
 import { SmartCacheService } from './smart-cache.service';
+
+jest.mock('../auth/auth.service', () => ({
+  AuthService: class AuthService {},
+}));
 
 jest.mock('../auth/firebase-auth.guard', () => ({
   FirebaseAuthGuard: class FirebaseAuthGuard {},
@@ -338,18 +345,27 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
         })
         .returning()
     )[0]!;
-    const principal: AuthPrincipal = {
-      userId,
-      deviceId,
-      authProviderUid: 'integration-device',
-      displayName: 'Integration Device',
-      authType: 'DEVICE',
-    };
-    const removed = await new RoomsController(
+    const lifecycle = new ConnectionLifecycleService(
       connection.db,
+      redis,
       new SyncService(),
-    ).remove(principal, roomId);
+      { publishNow: jest.fn() } as never,
+      { disconnectDevice: jest.fn() } as never,
+    );
+    const removalKey = randomUUID();
+    const removed = await lifecycle.removeRoom(
+      agentConnectionActor(userId, deviceId),
+      roomId,
+      removalKey,
+    );
     expect(removed.status).toBe('REMOVED');
+    await expect(
+      lifecycle.removeRoom(
+        agentConnectionActor(userId, deviceId),
+        roomId,
+        removalKey,
+      ),
+    ).resolves.toEqual(removed);
     expect(
       (
         await connection.db
@@ -410,6 +426,17 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
           .where(eq(syncEvents.userId, userId))
       ).filter((event) => event.eventType === 'smart-cache.updated').length,
     ).toBeGreaterThanOrEqual(5);
+    expect(
+      (
+        await connection.db
+          .select()
+          .from(syncEvents)
+          .where(eq(syncEvents.userId, userId))
+      ).filter(
+        (event) =>
+          event.eventType === 'room.removed' && event.aggregateId === roomId,
+      ),
+    ).toHaveLength(1);
   });
 
   afterAll(async () => {
@@ -440,6 +467,9 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
     await connection.db
       .delete(auditEvents)
       .where(eq(auditEvents.userId, userId));
+    await connection.db
+      .delete(connectionMutationReceipts)
+      .where(eq(connectionMutationReceipts.userId, userId));
     await connection.db.delete(syncEvents).where(eq(syncEvents.userId, userId));
     const transfers = await connection.db
       .select({ id: fileTransfers.id })

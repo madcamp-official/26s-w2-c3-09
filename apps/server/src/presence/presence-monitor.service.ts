@@ -11,6 +11,8 @@ import { DATABASE } from '../database/database.module';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { REDIS } from './redis.module';
 
+const PRESENCE_MONITOR_INTERVAL_MS = 1_000;
+
 @Injectable()
 export class PresenceMonitorService
   implements OnApplicationBootstrap, OnApplicationShutdown
@@ -25,7 +27,10 @@ export class PresenceMonitorService
   ) {}
 
   onApplicationBootstrap() {
-    this.timer = setInterval(() => void this.expire(), 5_000);
+    this.timer = setInterval(
+      () => void this.expire(),
+      PRESENCE_MONITOR_INTERVAL_MS,
+    );
   }
 
   onApplicationShutdown() {
@@ -44,7 +49,11 @@ export class PresenceMonitorService
       );
       for (const deviceId of expired) {
         if (await this.redis.exists(`presence:${deviceId}`)) {
-          await this.redis.zadd('presence:known', Date.now() + 5_000, deviceId);
+          await this.redis.zadd(
+            'presence:known',
+            Date.now() + PRESENCE_MONITOR_INTERVAL_MS,
+            deviceId,
+          );
           continue;
         }
         const device = (

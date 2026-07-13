@@ -39,6 +39,9 @@ export class RealtimeGateway implements OnGatewayConnection {
       await client.join(`user:${principal.userId}`);
       if (principal.deviceId) {
         await client.join(`device:${principal.deviceId}`);
+        // Close the narrow race where revocation commits after the first token
+        // lookup but before this socket joins the device room.
+        await this.auth.authenticateDevice(token.slice(10));
       }
       client.data.principal = principal;
     } catch {
@@ -53,5 +56,14 @@ export class RealtimeGateway implements OnGatewayConnection {
     payload: unknown;
   }) {
     this.server.to(`user:${event.userId}`).emit(event.eventType, event.payload);
+  }
+
+  isReady() {
+    return Boolean(this.server);
+  }
+
+  disconnectDevice(deviceId: string) {
+    if (!this.server) return;
+    this.server.in(`device:${deviceId}`).disconnectSockets(true);
   }
 }
