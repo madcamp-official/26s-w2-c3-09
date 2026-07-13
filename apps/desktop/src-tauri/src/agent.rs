@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::cleanliness::CleanlinessSnapshot;
 use crate::command_processor::AgentProposalSubmission;
+use crate::smart_cache_crypto::SmartCacheEncryptionMetadata;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -252,6 +253,7 @@ pub struct AgentCachedFile {
     pub size_bytes: u64,
     pub sha256: String,
     pub freshness_status: String,
+    pub encryption_metadata: Option<SmartCacheEncryptionMetadata>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -1257,6 +1259,7 @@ impl AgentRuntime {
         sha256: String,
         usage_score: i64,
         manual_pin: bool,
+        encryption_metadata: SmartCacheEncryptionMetadata,
     ) -> Result<AgentCachedFile, AgentError> {
         validate_opaque_value("smart cache reservation id", &reservation_id, 200)?;
         validate_opaque_value(
@@ -1270,6 +1273,7 @@ impl AgentRuntime {
             ));
         }
         validate_sha256(&sha256)?;
+        validate_smart_cache_encryption_metadata(&encryption_metadata)?;
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
             .send_json::<CachedFileResponse>(
@@ -1284,6 +1288,7 @@ impl AgentRuntime {
                         "sha256": sha256,
                         "usageScore": usage_score,
                         "manualPin": manual_pin,
+                        "encryptionMetadata": encryption_metadata,
                     })),
             )
             .await
@@ -1730,6 +1735,8 @@ struct CachedFileResponse {
     size_bytes: u64,
     sha256: String,
     freshness_status: String,
+    #[serde(default)]
+    encryption_metadata: Option<SmartCacheEncryptionMetadata>,
 }
 
 #[derive(Deserialize)]
@@ -2170,6 +2177,9 @@ fn validate_cached_file_response(
     validate_relative_path("cached file path", &response.source_relative_path)?;
     validate_sha256(&response.source_version_hash)?;
     validate_sha256(&response.sha256)?;
+    if let Some(metadata) = &response.encryption_metadata {
+        validate_smart_cache_encryption_metadata(metadata)?;
+    }
     if response.id.is_empty()
         || response.size_bytes == 0
         || !matches!(
@@ -2188,7 +2198,34 @@ fn validate_cached_file_response(
         size_bytes: response.size_bytes,
         sha256: response.sha256,
         freshness_status: response.freshness_status,
+        encryption_metadata: response.encryption_metadata,
     })
+}
+
+fn validate_smart_cache_encryption_metadata(
+    metadata: &SmartCacheEncryptionMetadata,
+) -> Result<(), AgentError> {
+    if metadata.algorithm != crate::smart_cache_crypto::SMART_CACHE_ENCRYPTION_ALGORITHM
+        || metadata.format != crate::smart_cache_crypto::SMART_CACHE_ENCRYPTION_FORMAT
+        || metadata.key_id.trim().len() < 16
+        || metadata.key_id.len() > 128
+        || metadata.nonce_hex.len() != 24
+        || !metadata
+            .nonce_hex
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        || metadata.plaintext_size_bytes == 0
+        || metadata.plaintext_sha256.len() != 64
+        || !metadata
+            .plaintext_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(invalid_response_error(
+            "smart cache encryption metadata failed response validation",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_cleanliness_snapshot(snapshot: &CleanlinessSnapshot) -> Result<(), AgentError> {

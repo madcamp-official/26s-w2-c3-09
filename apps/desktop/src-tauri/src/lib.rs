@@ -10,6 +10,7 @@ pub mod file_browse_processor;
 pub mod file_transfer_processor;
 pub mod outbox_processor;
 pub mod overlay;
+pub mod smart_cache_crypto;
 pub mod smart_cache_processor;
 pub mod storage;
 #[cfg(feature = "tauri-commands")]

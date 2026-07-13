@@ -626,7 +626,9 @@ export class SmartCacheService {
           result.sizeBytes !== body.sizeBytes ||
           result.sha256 !== body.sha256 ||
           result.usageScore !== body.usageScore ||
-          result.manualPin !== body.manualPin
+          result.manualPin !== body.manualPin ||
+          canonicalJson(result.encryptionMetadata) !==
+            canonicalJson(body.encryptionMetadata)
         )
           throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
         return this.publicFile(result);
@@ -666,6 +668,7 @@ export class SmartCacheService {
             objectKey: reservation.objectKey,
             sizeBytes: body.sizeBytes,
             sha256: body.sha256,
+            encryptionMetadata: body.encryptionMetadata,
             lastVerifiedAt: new Date(),
           })
           .onConflictDoUpdate({
@@ -677,7 +680,11 @@ export class SmartCacheService {
             set: {
               availabilityStatus: 'AVAILABLE',
               freshnessStatus: 'VERIFIED_CURRENT',
+              sizeBytes: body.sizeBytes,
               sha256: body.sha256,
+              usageScore: body.usageScore,
+              manualPin: body.manualPin,
+              encryptionMetadata: body.encryptionMetadata,
               lastVerifiedAt: new Date(),
             },
           })
@@ -910,6 +917,7 @@ export class SmartCacheService {
         downloadUrl: await this.storage.downloadUrl(owned.objectKey, 60),
         sizeBytes: owned.sizeBytes,
         sha256: owned.sha256,
+        encryptionMetadata: owned.encryptionMetadata,
         freshnessStatus: owned.freshnessStatus,
         lastVerifiedAt: owned.lastVerifiedAt,
       };
@@ -978,7 +986,9 @@ export class SmartCacheService {
       cached.sizeBytes !== body.sizeBytes ||
       cached.sha256 !== body.sha256 ||
       cached.usageScore !== body.usageScore ||
-      cached.manualPin !== body.manualPin
+      cached.manualPin !== body.manualPin ||
+      canonicalJson(cached.encryptionMetadata) !==
+        canonicalJson(body.encryptionMetadata)
     )
       throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
     return cached;

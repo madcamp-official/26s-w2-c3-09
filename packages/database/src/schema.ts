@@ -798,6 +798,7 @@ export const cachedFiles = pgTable(
     objectKey: text("object_key").notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
     sha256: varchar("sha256", { length: 64 }),
+    encryptionMetadata: jsonb("encryption_metadata"),
     availabilityStatus: varchar("availability_status", { length: 30 })
       .notNull()
       .default("AVAILABLE"),

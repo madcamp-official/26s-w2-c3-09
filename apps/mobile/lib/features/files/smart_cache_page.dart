@@ -3,6 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/files/verified_download.dart';
 import '../../core/network/api_client.dart';
 
+void ensureSmartCacheDownloadDecryptable(Map<String, dynamic> target) {
+  final metadata = target['encryptionMetadata'];
+  if (metadata == null) return;
+  if (metadata is Map && metadata.isNotEmpty) {
+    throw StateError('UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC');
+  }
+  throw const FormatException('INVALID_SMART_CACHE_ENCRYPTION_METADATA');
+}
+
 Map<String, dynamic> parseSmartCachePolicyInput({
   required String quotaMegabytes,
   required String maxFileMegabytes,
@@ -241,6 +250,7 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
     try {
       final api = ref.read(apiClientProvider);
       final target = await api.get('/v1/cached-files/$id/download');
+      ensureSmartCacheDownloadDecryptable(target);
       final saved = await VerifiedDownload.save(
         api: api,
         url: target['downloadUrl'] as String,

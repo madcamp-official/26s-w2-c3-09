@@ -504,6 +504,28 @@ pub(crate) async fn put_upload_file(
     Ok(())
 }
 
+pub(crate) async fn put_upload_bytes(upload_url: &str, bytes: Vec<u8>) -> Result<(), String> {
+    let size_bytes = bytes.len();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(UPLOAD_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|error| format!("cannot configure upload client: {error}"))?;
+    let response = client
+        .put(upload_url)
+        .header("Content-Length", size_bytes.to_string())
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|error| format!("cannot upload encrypted smart cache object: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "upload target rejected encrypted smart cache object with HTTP {}",
+            response.status()
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_source_unchanged(
     source: &ValidatedTransferSource,
 ) -> Result<(), TransferUploadExecutionError> {

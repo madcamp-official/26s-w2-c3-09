@@ -16,6 +16,7 @@ import {
   roomRemovedEventPayloadSchema,
   MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION,
   chatMessagesQuerySchema,
+  completeCacheUploadSchema,
   createChatMessageResponseSchema,
   commandDraftSummarySchema,
   createChatSessionSchema,
@@ -48,6 +49,42 @@ describe("push notification token contract", () => {
       registerPushNotificationTokenSchema.safeParse({
         token: "provider-token-with-enough-entropy",
         platform: "WINDOWS",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("smart cache contracts", () => {
+  it("requires encrypted completion metadata without key material", () => {
+    const completion = {
+      sizeBytes: 132,
+      sha256: "a".repeat(64),
+      usageScore: 10,
+      manualPin: false,
+      encryptionMetadata: {
+        algorithm: "AES-256-GCM",
+        format: "MKS1_NONCE_CIPHERTEXT_TAG",
+        keyId: "key-20260714-abcdef",
+        nonceHex: "b".repeat(24),
+        plaintextSizeBytes: 100,
+        plaintextSha256: "c".repeat(64),
+      },
+    };
+
+    expect(completeCacheUploadSchema.parse(completion)).toEqual(completion);
+    expect(
+      completeCacheUploadSchema.safeParse({
+        ...completion,
+        encryptionMetadata: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      completeCacheUploadSchema.safeParse({
+        ...completion,
+        encryptionMetadata: {
+          ...completion.encryptionMetadata,
+          key: "raw-secret",
+        },
       }).success,
     ).toBe(false);
   });

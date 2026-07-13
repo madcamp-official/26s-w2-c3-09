@@ -132,7 +132,7 @@
 
 ### 3.2 P1 및 운영 누락
 
-- [~] **스마트 캐시 암호화:** 서버 E2E는 AES-256-GCM 암호문 lifecycle을 검증하지만 실제 Desktop `smart_cache_processor`는 원본 파일을 그대로 signed PUT한다. 기능 flag를 켜기 전에 client-side encryption과 key 보관/폐기가 반드시 필요하다.
+- [~] **스마트 캐시 암호화:** Desktop `smart_cache_processor`는 업로드 전 AES-256-GCM envelope(`MKS1_NONCE_CIPHERTEXT_TAG`)를 만들고 OS 보안 저장소의 smart-cache key를 사용해 signed PUT에는 암호문만 보낸다. 서버는 암호문 size/checksum과 encryption metadata를 DB에 저장·반환한다. 모바일 복호화 key sync와 tag 검증은 아직 없어 다운로드는 `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`로 fail-closed 처리한다.
 - [~] **스마트 캐시 최신성:** source version 전후 검증은 있으나 watcher 변경을 STALE event로 우선 outbox에 넣는 완전한 경로가 확인되지 않았다.
 - [ ] **Rive:** `.riv`, artboard/state machine/input 명세와 실제 interaction이 없다.
 - [ ] **Android release signing:** keystore 4개 환경 변수가 없으며 release build는 fail-fast한다.
@@ -235,8 +235,8 @@
 
 ### 7.2 캐릭터 interaction 전에 반드시 닫아야 할 Critical Checklist
 
-- [ ] Desktop smart-cache upload에 AES-256-GCM 등 client-side authenticated encryption을 적용하고 key를 OS 보안 저장소에 보관한다.
-- [ ] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞추고 mobile 복호화·tag 검증을 연결한다.
+- [x] Desktop smart-cache upload에 AES-256-GCM client-side authenticated encryption을 적용하고 key를 OS 보안 저장소에 보관한다.
+- [~] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞췄고 서버가 저장·반환한다. Mobile 복호화 key sync와 AES-GCM tag 검증은 아직 `UNCONFIGURED` 상태다.
 - [x] Indexed file identity를 proposal/precondition/transfer sourceVersion에서 size·mtime과 함께 비교하도록 연결했다.
 - [x] scan/write/transfer 동시성 제한을 명시하고 테스트한다. Desktop `WorkLimiter`가 scan, write, transfer gate를 분리해 수동 Tauri command와 background runtime의 중복 작업을 `BUSY`로 차단한다.
 - [~] 승인된 CREATE_DIR/CREATE_FILE의 journal-before-write/no-overwrite/undo 정책은 Desktop batch 회귀로 고정했고, 실제 3자 E2E 고정은 남았다.
@@ -250,7 +250,7 @@
 
 ### 우선순위 1 — 캐릭터 interaction 전 backend/infra 보완
 
-1. 스마트 캐시를 기본 `false`로 유지한 채 실제 Desktop encryption/key lifecycle을 먼저 완성한다.
+1. 스마트 캐시를 기본 `false`로 유지한 채 Mobile 복호화 key sync, AES-GCM tag 검증, 안전한 로컬 plaintext 저장 경로를 완성한다.
 2. Indexed file ID 기반 proposal/precondition/transfer 안전 회귀는 유지하고, CREATE_DIR/CREATE_FILE 안전 operation은 추가된 Desktop batch 회귀를 기반으로 release E2E까지 확장한다.
 3. 외부 DB/S3 integration suite를 CI의 secret-protected opt-in job으로 실행한다.
 4. Firebase debug/release SHA, release keystore, Sentry DSN을 secret manager와 provider console에 등록한다.

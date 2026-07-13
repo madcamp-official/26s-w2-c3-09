@@ -1776,12 +1776,34 @@ components:
     CompleteCacheUpload:
       type: object
       additionalProperties: false
-      required: [sizeBytes, sha256, usageScore, manualPin]
+      required:
+        [sizeBytes, sha256, usageScore, manualPin, encryptionMetadata]
       properties:
         sizeBytes: { type: integer, minimum: 1 }
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
         usageScore: { type: integer }
         manualPin: { type: boolean }
+        encryptionMetadata:
+          { $ref: "#/components/schemas/SmartCacheEncryptionMetadata" }
+    SmartCacheEncryptionMetadata:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          algorithm,
+          format,
+          keyId,
+          nonceHex,
+          plaintextSizeBytes,
+          plaintextSha256,
+        ]
+      properties:
+        algorithm: { type: string, enum: [AES-256-GCM] }
+        format: { type: string, enum: [MKS1_NONCE_CIPHERTEXT_TAG] }
+        keyId: { type: string, minLength: 16, maxLength: 128 }
+        nonceHex: { type: string, pattern: "^[a-f0-9]{24}$" }
+        plaintextSizeBytes: { type: integer, minimum: 1 }
+        plaintextSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
     UpdateCharacter:
       type: object
       additionalProperties: false

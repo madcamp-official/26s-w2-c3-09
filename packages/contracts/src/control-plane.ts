@@ -912,12 +912,23 @@ export const cacheCandidateBatchSchema = z
     candidates: z.array(cacheCandidateSchema).min(1).max(200),
   })
   .strict();
+export const smartCacheEncryptionMetadataSchema = z
+  .object({
+    algorithm: z.literal("AES-256-GCM"),
+    format: z.literal("MKS1_NONCE_CIPHERTEXT_TAG"),
+    keyId: z.string().trim().min(16).max(128),
+    nonceHex: z.string().regex(/^[a-f0-9]{24}$/),
+    plaintextSizeBytes: z.number().int().positive(),
+    plaintextSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
 export const completeCacheUploadSchema = z
   .object({
     sizeBytes: z.number().int().positive(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),
     usageScore: z.number().int(),
     manualPin: z.boolean(),
+    encryptionMetadata: smartCacheEncryptionMetadataSchema,
   })
   .strict();
 

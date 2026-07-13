@@ -20,6 +20,7 @@
 - Desktop file transfer sourceVersion now uses the same OS-backed file identity instead of the older `hm:` hash fallback, and revalidates identity/size/mtime before hashing, after hashing, and after streaming so source swaps are reported as `SOURCE_CHANGED`.
 - Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
 - Desktop scan, write, and transfer work now share explicit per-kind gates across manual Tauri commands and background runtime passes; overlapping same-kind work fails fast with `BUSY` instead of racing file scans, journaled writes, or object uploads.
+- Smart-cache uploads now use Desktop-side AES-256-GCM before signed PUT; the server stores ciphertext size/checksum plus encryption metadata, and mobile fails closed with `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC` until key sync/decryption is implemented.
 - Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.
 - OpenAI Responses provider is now configurable behind `AI_PROVIDER=openai`, `AI_API_KEY`, and `AI_MODEL`; model output is parsed as structured JSON and revalidated against MouseKeeper command/rule Zod contracts before any draft enters product logic. Missing or rejected credentials still return explicit `AI_PROVIDER_UNCONFIGURED`.
 - Desktop command processing now accepts server `RENAME`, `MOVE`, `TRASH`, directory `CREATE`, and empty-file `CREATE` commands as proposal generation only: the agent validates the managed-root binding, source paths, filenames/destinations, parent directory safety, symlink/reparse safety, and destination conflicts, then submits `MOVE`, quarantine, `CREATE_DIR`, or `CREATE_FILE` proposal items without touching files before user approval.
@@ -131,7 +132,7 @@ Tauri Desktop
 - Android release signing, updater signing과 rename 이후 Windows installer 재검증
 - 실제 Rive animation/interaction과 schema-validated 자연어 command provider
 - Release-grade three-party E2E automation for delegated create operations and identity-checked transfer regressions
-- Desktop smart-cache client-side encryption과 key lifecycle
+- Mobile smart-cache decryption key sync, tag verification, and local plaintext handoff
 - Android ↔ server ↔ Desktop 전체 P0 release E2E 자동화
 
 서버 URL 또는 pairing이 없으면 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. pairing 뒤에도 heartbeat나 인증 요청이 성공하기 전에는 `offline`이며, device token은 React 계층으로 전달되지 않는다.
@@ -162,7 +163,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI·cursor pagination, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
 | 6 오프라인·재접속 | 양쪽 outbox·cursor replay, pairing gate pixel-fill loading 구현 | 강제 종료·서버 재시작 E2E |
 | 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill | rename migration, signed release, Sentry DSN |
-| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle | Desktop client encryption과 key lifecycle |
+| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle, Desktop AES-256-GCM ciphertext upload, server encryption metadata | Mobile key sync/decryption/tag verification |
 
 ### v1.4 — 청결도·연결 해제·모바일 파일 접근
 
@@ -211,7 +212,7 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 ## 다음 구현 순서
 
 1. Android USB를 다시 연결해 새 package 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
-2. Desktop smart-cache 업로더에 authenticated encryption과 OS 보안 저장소 key lifecycle을 구현한다.
+2. Mobile smart-cache 복호화 key sync, AES-GCM tag verification, 안전한 로컬 plaintext 저장 경로를 구현한다.
 3. Indexed file ID 기반 proposal/precondition/transfer 회귀를 유지하고, 추가된 CREATE_DIR/CREATE_FILE Desktop batch journal/no-overwrite/undo 회귀를 실제 3자 release E2E로 확장한다.
 4. command/proposal/execute/undo와 browse/transfer를 한 managed root·실기기에서 왕복 검증한다.
 5. 새 EC2 unit/path와 Firebase package로 rename migration을 실행하고 rollback을 확인한다.

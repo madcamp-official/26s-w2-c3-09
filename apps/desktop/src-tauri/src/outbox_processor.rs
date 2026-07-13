@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::agent::AgentRuntime;
 use crate::cleanliness::CleanlinessSnapshot;
 use crate::command_processor::AgentProposalSubmission;
+use crate::smart_cache_crypto::SmartCacheEncryptionMetadata;
 use crate::storage::outbox::OutboxStore;
 
 const OUTBOX_FLUSH_BATCH: i64 = 50;
@@ -63,6 +64,7 @@ struct SmartCacheCompletionPayload {
     sha256: String,
     usage_score: i64,
     manual_pin: bool,
+    encryption_metadata: SmartCacheEncryptionMetadata,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -141,6 +143,7 @@ pub fn enqueue_smart_cache_completion(
     sha256: &str,
     usage_score: i64,
     manual_pin: bool,
+    encryption_metadata: SmartCacheEncryptionMetadata,
 ) -> Result<(), String> {
     let payload = SmartCacheCompletionPayload {
         reservation_id: reservation_id.to_string(),
@@ -148,6 +151,7 @@ pub fn enqueue_smart_cache_completion(
         sha256: sha256.to_string(),
         usage_score,
         manual_pin,
+        encryption_metadata,
     };
     let payload_json = serde_json::to_string(&payload)
         .map_err(|error| format!("cannot encode smart cache completion: {error}"))?;
@@ -275,6 +279,7 @@ async fn dispatch(
                     payload.sha256,
                     payload.usage_score,
                     payload.manual_pin,
+                    payload.encryption_metadata,
                 )
                 .await
                 .map(|_| ())
@@ -415,8 +420,23 @@ mod tests {
     #[test]
     fn smart_cache_completion_is_queued_under_stable_completion_key() {
         let (_temp, store) = store();
-        enqueue_smart_cache_completion(&store, "reservation-1", 5, &"b".repeat(64), 42, true)
-            .expect("enqueue completion");
+        enqueue_smart_cache_completion(
+            &store,
+            "reservation-1",
+            37,
+            &"b".repeat(64),
+            42,
+            true,
+            crate::smart_cache_crypto::SmartCacheEncryptionMetadata {
+                algorithm: "AES-256-GCM".to_string(),
+                format: "MKS1_NONCE_CIPHERTEXT_TAG".to_string(),
+                key_id: "mks1-test-key-1234".to_string(),
+                nonce_hex: "c".repeat(24),
+                plaintext_size_bytes: 5,
+                plaintext_sha256: "d".repeat(64),
+            },
+        )
+        .expect("enqueue completion");
 
         let batch = store.pending_batch(10).expect("batch");
 
@@ -428,6 +448,8 @@ mod tests {
         );
         assert!(batch[0].payload_json.contains(r#""usageScore":42"#));
         assert!(batch[0].payload_json.contains(r#""manualPin":true"#));
+        assert!(batch[0].payload_json.contains(r#""encryptionMetadata":"#));
+        assert!(batch[0].payload_json.contains(r#""plaintextSizeBytes":5"#));
     }
 
     #[test]

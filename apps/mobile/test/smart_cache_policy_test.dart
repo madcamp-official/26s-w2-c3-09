@@ -30,4 +30,32 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('encrypted cached files fail closed until key sync exists', () {
+    expect(
+      () => ensureSmartCacheDownloadDecryptable({
+        'downloadUrl': 'https://storage.example/cache/object',
+        'sha256': List.filled(64, 'a').join(),
+        'encryptionMetadata': {
+          'algorithm': 'AES-256-GCM',
+          'format': 'MKS1_NONCE_CIPHERTEXT_TAG',
+          'keyId': 'mks1-test-key-1234',
+        },
+      }),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('UNCONFIGURED'),
+        ),
+      ),
+    );
+    expect(
+      () => ensureSmartCacheDownloadDecryptable({
+        'downloadUrl': 'https://storage.example/cache/object',
+        'sha256': List.filled(64, 'a').join(),
+      }),
+      returnsNormally,
+    );
+  });
 }
