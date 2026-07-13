@@ -468,6 +468,12 @@ export function AgentPanel() {
               {formatRuntimeTime(background.last_file_transfer_poll_unix_ms)}
             </small>
             <small>
+              smart cache {background.last_smart_cache_uploaded_count}/
+              {background.last_smart_cache_candidate_count} | failed{" "}
+              {background.last_smart_cache_failed_count} | poll{" "}
+              {formatRuntimeTime(background.last_smart_cache_poll_unix_ms)}
+            </small>
+            <small>
               outbox sent {background.last_outbox_sent_count} | failed{" "}
               {background.last_outbox_failed_count} | flush{" "}
               {formatRuntimeTime(background.last_outbox_flush_unix_ms)}

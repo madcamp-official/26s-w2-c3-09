@@ -680,6 +680,34 @@ impl AgentRuntime {
         })
     }
 
+    pub async fn list_rooms(&self) -> Result<Vec<AgentRoomSync>, AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<ServerRoom>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|rooms| validate_server_rooms(&credential.device_id, rooms))
+            .map(|rooms| {
+                rooms
+                    .into_iter()
+                    .map(|room| AgentRoomSync {
+                        room_id: room.id,
+                        root_id: room.root_alias,
+                        name: room.name,
+                        created: false,
+                    })
+                    .collect()
+            });
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     pub async fn replay_events(
         &self,
         after: u64,
@@ -1105,6 +1133,28 @@ impl AgentRuntime {
             )
             .await
             .and_then(validate_cached_file_response);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn cancel_smart_cache_reservation(
+        &self,
+        reservation_id: String,
+    ) -> Result<(), AgentError> {
+        validate_opaque_value("smart cache reservation id", &reservation_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_empty(
+                self.http
+                    .delete(format!(
+                        "{base_url}/v1/agent/cache-uploads/{reservation_id}"
+                    ))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await;
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),

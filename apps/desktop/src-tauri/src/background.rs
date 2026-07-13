@@ -19,13 +19,14 @@ const REALTIME_RECONNECT_SECONDS: u64 = 15;
 /// Each one only wakes the REST loop; the events themselves are never treated as the source of
 /// truth (that stays `/v1/sync/events` replay and command/decision polling).
 #[cfg(feature = "tauri-commands")]
-const REALTIME_WAKE_EVENTS: [&str; 6] = [
+const REALTIME_WAKE_EVENTS: [&str; 7] = [
     "command.available",
     "command.updated",
     "proposal.created",
     "decision.created",
     "file.browse.requested",
     "file.transfer.requested",
+    "smart-cache.updated",
 ];
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -52,6 +53,10 @@ pub struct BackgroundRuntimeStatus {
     pub last_file_transfer_count: usize,
     pub last_file_transfer_uploaded_count: usize,
     pub last_file_transfer_failed_count: usize,
+    pub last_smart_cache_poll_unix_ms: Option<i64>,
+    pub last_smart_cache_candidate_count: usize,
+    pub last_smart_cache_uploaded_count: usize,
+    pub last_smart_cache_failed_count: usize,
     pub last_outbox_flush_unix_ms: Option<i64>,
     pub last_outbox_sent_count: usize,
     pub last_outbox_failed_count: usize,
@@ -107,6 +112,10 @@ impl Default for BackgroundRuntime {
                 last_file_transfer_count: 0,
                 last_file_transfer_uploaded_count: 0,
                 last_file_transfer_failed_count: 0,
+                last_smart_cache_poll_unix_ms: None,
+                last_smart_cache_candidate_count: 0,
+                last_smart_cache_uploaded_count: 0,
+                last_smart_cache_failed_count: 0,
                 last_outbox_flush_unix_ms: None,
                 last_outbox_sent_count: 0,
                 last_outbox_failed_count: 0,
@@ -317,6 +326,7 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
     let sync_store = app.state::<crate::storage::agent_sync::AgentSyncStore>();
     let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
     let outbox = app.state::<crate::storage::outbox::OutboxStore>();
+    let smart_cache = app.state::<crate::storage::smart_cache::SmartCacheStore>();
 
     // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
     let mut activity = crate::overlay::OverlayActivity::default();
@@ -449,6 +459,40 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
                 if report.failed_count > 0 {
                     status.last_error_message =
                         Some(format!("{} file transfer(s) failed", report.failed_count));
+                }
+            });
+        }
+        Err(error) => {
+            activity.had_error = true;
+            update_status(status, |status| {
+                status.last_error_message = Some(error);
+            });
+        }
+    }
+
+    match crate::smart_cache_processor::process_smart_cache_for_enabled_rooms(
+        &agent,
+        &roots,
+        &smart_cache,
+        &outbox,
+        25,
+    )
+    .await
+    {
+        Ok(report) => {
+            if report.failed_count > 0 {
+                activity.had_error = true;
+            }
+            update_status(status, |status| {
+                status.last_smart_cache_poll_unix_ms = Some(unix_ms());
+                status.last_smart_cache_candidate_count = report.inspected_count;
+                status.last_smart_cache_uploaded_count = report.uploaded_count;
+                status.last_smart_cache_failed_count = report.failed_count;
+                if report.failed_count > 0 {
+                    status.last_error_message = Some(format!(
+                        "{} smart cache item(s) failed",
+                        report.failed_count
+                    ));
                 }
             });
         }

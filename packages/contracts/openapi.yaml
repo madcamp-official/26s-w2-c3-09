@@ -692,9 +692,10 @@ paths:
             { schema: { $ref: "#/components/schemas/CacheCandidateBatch" } }
       responses:
         "201":
-          {
-            description: Idempotent cache upload reservations and rejected count,
-          }
+          description: Idempotent cache upload reservations and rejected count
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheCandidateBatchResult" }
         "409":
           {
             description: Policy rejected,
@@ -1119,6 +1120,36 @@ components:
           minItems: 1
           maxItems: 200
           items: { $ref: "#/components/schemas/CacheCandidate" }
+    CacheUploadReservation:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          reservationId,
+          status,
+          sourceRelativePath,
+          sourceVersionHash,
+          sizeBytes,
+          expiresAt,
+        ]
+      properties:
+        reservationId: { type: string, format: uuid }
+        status: { type: string, enum: [RESERVED, COMPLETED] }
+        sourceRelativePath: { type: string, minLength: 1, maxLength: 1024 }
+        sourceVersionHash: { type: string, pattern: "^[a-f0-9]{64}$" }
+        sizeBytes: { type: integer, minimum: 1 }
+        uploadUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+    CacheCandidateBatchResult:
+      type: object
+      additionalProperties: false
+      required: [batchId, approved, rejectedCount]
+      properties:
+        batchId: { type: string, format: uuid }
+        approved:
+          type: array
+          items: { $ref: "#/components/schemas/CacheUploadReservation" }
+        rejectedCount: { type: integer, minimum: 0 }
     CompleteCacheUpload:
       type: object
       additionalProperties: false

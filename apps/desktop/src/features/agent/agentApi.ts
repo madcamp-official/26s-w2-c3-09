@@ -84,6 +84,10 @@ export type BackgroundRuntimeStatus = {
   last_file_transfer_count: number;
   last_file_transfer_uploaded_count: number;
   last_file_transfer_failed_count: number;
+  last_smart_cache_poll_unix_ms: number | null;
+  last_smart_cache_candidate_count: number;
+  last_smart_cache_uploaded_count: number;
+  last_smart_cache_failed_count: number;
   last_outbox_flush_unix_ms: number | null;
   last_outbox_sent_count: number;
   last_outbox_failed_count: number;
