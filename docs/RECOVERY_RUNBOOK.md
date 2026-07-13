@@ -15,6 +15,25 @@
 
 ## PostgreSQL 백업
 
+AWS EC2에서는 root만 읽을 수 있는 `/var/backups/housemouse`에 매일 custom-format backup을 만든다. systemd timer의 최근 실행과 다음 실행 시각은 다음처럼 확인한다.
+
+```bash
+sudo systemctl list-timers housemouse-postgres-backup.timer
+sudo systemctl status housemouse-postgres-backup.service --no-pager
+```
+
+수동 백업과 운영 DB를 변경하지 않는 임시 DB 복원 훈련은 다음 순서다. 복원 훈련은 필수 schema를 확인한 뒤 임시 DB를 항상 삭제한다.
+
+```bash
+sudo /usr/local/sbin/housemouse-backup-postgres
+sudo /usr/local/sbin/housemouse-restore-postgres-drill \
+  /var/backups/housemouse/housemouse-<UTC timestamp>.dump
+```
+
+이 백업은 EC2 EBS 장애까지 보호하는 off-instance backup이 아니다. 별도 암호화 백업 저장소와 권한이 확정되기 전에는 외부 업로드를 성공으로 가장하지 않는다.
+
+Windows 또는 별도 PostgreSQL client 환경에서는 기존 스크립트를 사용할 수 있다.
+
 운영자가 접근 통제된 터미널에서 `DATABASE_URL`을 환경 변수로 주입하고 다음을 실행한다.
 
 ```powershell

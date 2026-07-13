@@ -101,6 +101,15 @@ sudo systemctl enable --now housemouse-worker
 sudo systemctl status housemouse-worker --no-pager
 ```
 
+Bootstrap은 PostgreSQL 일일 backup timer도 설치한다. 배포 후 첫 backup과 격리된 임시 DB restore drill을 실행해 dump가 실제로 복원되는지 확인한다.
+
+```bash
+sudo systemctl enable --now housemouse-postgres-backup.timer
+sudo /usr/local/sbin/housemouse-backup-postgres
+sudo /usr/local/sbin/housemouse-restore-postgres-drill \
+  /var/backups/housemouse/housemouse-<UTC timestamp>.dump
+```
+
 실패하면 secret을 출력하지 말고 다음 로그의 오류 코드만 확인한다.
 
 ```bash

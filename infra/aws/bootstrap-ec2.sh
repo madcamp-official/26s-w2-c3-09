@@ -123,8 +123,14 @@ runuser -u housemouse -- /bin/bash -c "set -a; source '${CONFIG_DIR}/server.env'
 
 install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-server.service" /etc/systemd/system/housemouse-server.service
 install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-worker.service" /etc/systemd/system/housemouse-worker.service
+install -o root -g root -m 0755 "${SCRIPT_DIR}/backup-postgres.sh" /usr/local/sbin/housemouse-backup-postgres
+install -o root -g root -m 0755 "${SCRIPT_DIR}/restore-postgres-drill.sh" /usr/local/sbin/housemouse-restore-postgres-drill
+install -d -o root -g root -m 0700 /var/backups/housemouse
+install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-postgres-backup.service" /etc/systemd/system/housemouse-postgres-backup.service
+install -o root -g root -m 0644 "${SCRIPT_DIR}/systemd/housemouse-postgres-backup.timer" /etc/systemd/system/housemouse-postgres-backup.timer
 systemctl daemon-reload
 systemctl enable --now housemouse-server
+systemctl enable --now housemouse-postgres-backup.timer
 
 for _ in {1..30}; do
   if curl -fsS http://127.0.0.1:3000/ready >/dev/null; then
