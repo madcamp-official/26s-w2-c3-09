@@ -121,7 +121,7 @@
 ### 3.1 P0 핵심 누락
 
 - [~] **모바일 로그인:** `com.mousekeeper.app`용 Firebase JSON을 로컬 설치하고 Firebase 활성 debug build까지 통과했다. 실제 Google login과 release SHA 검증은 남았다.
-- [~] **파일 identity 연결:** SQLite `file_index`는 OS-backed nullable `file_id`를 저장하고, proposal/precondition은 같은 identity를 `source_file_id`/`sourceFileId`로 전달해 실행 직전 변경을 `SourceChanged`로 막는다. transfer sourceVersion은 아직 기존 안정 hash를 사용하므로 다음 연결 대상이다.
+- [x] **파일 identity 연결:** SQLite `file_index`는 OS-backed nullable `file_id`를 저장한다. proposal/precondition은 같은 identity를 `source_file_id`/`sourceFileId`로 전달해 실행 직전 변경을 `SourceChanged`로 막고, file transfer sourceVersion도 기존 `hm:` hash 대신 같은 OS-backed identity를 사용해 업로드 전후 원본 교체를 `SOURCE_CHANGED`로 차단한다.
 - [x] **watcher 재조정:** watcher event와 overflow full reindex가 있고, 30초 full reconcile pass가 active watched root의 SQLite browse/search index와 청결도 snapshot을 주기적으로 보정한다.
 - [~] **파일 실행 action:** MOVE, QUARANTINE, README_WRITE, CREATE_DIR, CREATE_FILE 경로는 구현됐다. CREATE 계열의 실제 3자 release E2E와 journal/undo 회귀 고정은 남았다.
 - [~] **온라인 파일 전달:** server 실제 S3 lifecycle E2E와 Desktop processor 단위 테스트는 있으나 Android↔Desktop↔server 한 기기 E2E 회귀가 현재 자동화되어 있지 않다.
@@ -207,7 +207,7 @@
 | Presence | 완료 | Redis TTL, OFFLINE event, UI 표시 |
 | 여러 관리 폴더 | 완료 | N개 room/root 모델, overlap만 제한 |
 | 명시적 관리 루트 | 완료 | native picker와 canonical root store |
-| 로컬 파일 인덱스 | 부분 완료 | SQLite index와 OS-backed nullable file_id 저장 완료; proposal/precondition source identity 연결 완료, transfer sourceVersion 연결 대기 |
+| 로컬 파일 인덱스 | 완료 | SQLite index와 OS-backed nullable file_id 저장, proposal/precondition source identity 검증, transfer sourceVersion identity 검증 |
 | watcher + 재조정 | 완료 | watcher/overflow reindex와 30초 active-root reconcile |
 | Rule DSL | 부분 완료 | extension/age/name 결정론 평가 완료, 확장 DSL은 서버 계약 추가 후 Desktop evaluator 통합 대기 |
 | 파일별 제안 | 완료 | reason/destination/collision UI |
@@ -237,7 +237,7 @@
 
 - [ ] Desktop smart-cache upload에 AES-256-GCM 등 client-side authenticated encryption을 적용하고 key를 OS 보안 저장소에 보관한다.
 - [ ] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞추고 mobile 복호화·tag 검증을 연결한다.
-- [~] Indexed file identity를 proposal/precondition에서 size·mtime과 함께 비교하도록 연결했다. transfer sourceVersion 비교는 아직 남아 있다.
+- [x] Indexed file identity를 proposal/precondition/transfer sourceVersion에서 size·mtime과 함께 비교하도록 연결했다.
 - [ ] scan/write/transfer 동시성 제한을 명시하고 테스트한다.
 - [ ] 승인된 CREATE_DIR/CREATE_FILE의 journal-before-write/no-overwrite/undo 정책을 실제 3자 E2E로 고정한다.
 - [ ] 자연어 command provider를 선택하고 출력 Zod validation, 사용자 draft 확인, `UNCONFIGURED` 경계를 구현한다.
@@ -251,7 +251,7 @@
 ### 우선순위 1 — 캐릭터 interaction 전 backend/infra 보완
 
 1. 스마트 캐시를 기본 `false`로 유지한 채 실제 Desktop encryption/key lifecycle을 먼저 완성한다.
-2. Indexed file ID를 transfer sourceVersion에 연결하고 CREATE_DIR/CREATE_FILE 안전 operation을 release E2E로 고정한다.
+2. Indexed file ID 기반 proposal/precondition/transfer 안전 회귀와 CREATE_DIR/CREATE_FILE 안전 operation을 release E2E로 고정한다.
 3. 외부 DB/S3 integration suite를 CI의 secret-protected opt-in job으로 실행한다.
 4. Firebase debug/release SHA, release keystore, Sentry DSN을 secret manager와 provider console에 등록한다.
 5. 새 systemd/path/IAM 이름으로 EC2를 migration하고 health/ready/worker/backup/restore를 재검증한다.
