@@ -5,6 +5,7 @@ import {
   createRoomSnapshotSchema,
   createRuleSchema,
   failFileTransferSchema,
+  homeSummaryResponseSchema,
   registerPushNotificationTokenSchema,
   updateCharacterSchema,
   updateRuleSchema,
@@ -298,5 +299,77 @@ describe("proposal contract", () => {
       items: [item, { ...item, itemOrder: 1 }],
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("home summary contract", () => {
+  const deviceId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a1";
+  const roomId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a2";
+  const characterId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a3";
+  const timestamp = "2026-07-13T01:02:03.000Z";
+
+  it("validates the aggregated mobile home response", () => {
+    const response = {
+      devices: [
+        {
+          id: deviceId,
+          platform: "WINDOWS",
+          deviceName: "Desktop",
+          status: "ACTIVE",
+          lastSeenAt: timestamp,
+          createdAt: timestamp,
+          presence: "ONLINE_IDLE",
+        },
+      ],
+      rooms: [
+        {
+          id: roomId,
+          desktopDeviceId: deviceId,
+          name: "Downloads",
+          rootAlias: "Downloads",
+          status: "ACTIVE",
+          createdAt: timestamp,
+          pendingProposalCount: 1,
+          latestExecutionStatus: "SUCCEEDED",
+          cleanlinessScore: 87,
+          cleanlinessFormulaVersion: "mousekeeper-cleanliness-v2",
+          cleanlinessCalculatedAt: timestamp,
+        },
+      ],
+      character: {
+        id: characterId,
+        appearance: {},
+        roomTheme: null,
+        affinityTotal: 2,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        unlockedItems: ["fur:brown"],
+        nextUnlockAffinity: 3,
+        riveAssetStatus: "UNCONFIGURED",
+      },
+    };
+
+    expect(homeSummaryResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("rejects private database fields in the public response", () => {
+    expect(
+      homeSummaryResponseSchema.safeParse({
+        devices: [],
+        rooms: [],
+        character: {
+          id: characterId,
+          userId: deviceId,
+          appearance: {},
+          roomTheme: null,
+          affinityTotal: 0,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          unlockedItems: [],
+          nextUnlockAffinity: 3,
+          riveAssetStatus: "UNCONFIGURED",
+        },
+      }).success,
+    ).toBe(false);
   });
 });

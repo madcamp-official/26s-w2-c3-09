@@ -5,24 +5,24 @@ import 'package:mousekeeper/features/home/home_page.dart';
 
 void main() {
   testWidgets(
-    'authoritative fallback runs every two seconds without overlap and stops on dispose',
+    'five-second safety reconcile refreshes only for actual changes',
     (tester) async {
-      expect(homeAuthoritativeReconcileInterval, const Duration(seconds: 2));
+      expect(homeAuthoritativeReconcileInterval, const Duration(seconds: 5));
 
-      final pending = <Completer<void>>[];
+      final pending = <Completer<bool>>[];
       var reconcileCalls = 0;
       var refreshCalls = 0;
       final loop = HomeAuthoritativeReconcileLoop(
         reconcile: () {
           reconcileCalls++;
-          final completer = Completer<void>();
+          final completer = Completer<bool>();
           pending.add(completer);
           return completer.future;
         },
-        onReconciled: () => refreshCalls++,
+        onChanged: () => refreshCalls++,
       )..start();
 
-      await tester.pump(const Duration(milliseconds: 1999));
+      await tester.pump(const Duration(milliseconds: 4999));
       expect(reconcileCalls, 0);
       await tester.pump(const Duration(milliseconds: 1));
       expect(reconcileCalls, 1);
@@ -31,17 +31,18 @@ void main() {
       await tester.pump(const Duration(seconds: 4));
       expect(reconcileCalls, 1);
 
-      pending.single.complete();
+      pending.single.complete(false);
       await tester.pump();
-      expect(refreshCalls, 1);
+      expect(refreshCalls, 0);
 
       await tester.pump(homeAuthoritativeReconcileInterval);
       expect(reconcileCalls, 2);
+      pending.last.complete(true);
+      await tester.pump();
+      expect(refreshCalls, 1);
 
       loop.dispose();
-      pending.last.complete();
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 4));
+      await tester.pump(const Duration(seconds: 10));
       expect(reconcileCalls, 2);
       expect(refreshCalls, 1);
     },

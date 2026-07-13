@@ -140,6 +140,60 @@ void main() {
   );
 
   test(
+    'late home summary enrichment cannot resurrect lifecycle rows',
+    () async {
+      final cache = DisplayCache(database, 'firebase-user-a');
+      await cache.replaceConnectionState(
+        devices: [
+          {'id': 'device-a', 'status': 'ACTIVE'},
+        ],
+        rooms: [
+          {'id': 'room-a', 'desktopDeviceId': 'device-a', 'status': 'ACTIVE'},
+        ],
+      );
+      await cache.removeDeviceCascade('device-a');
+
+      await cache.enrichConnectionState(
+        devices: [
+          {'id': 'device-a', 'status': 'ACTIVE', 'presence': 'ONLINE_IDLE'},
+        ],
+        rooms: [
+          {
+            'id': 'room-a',
+            'desktopDeviceId': 'device-a',
+            'status': 'ACTIVE',
+            'cleanlinessScore': 99,
+          },
+        ],
+      );
+
+      expect(await cache.devices(), isEmpty);
+      expect(await cache.rooms(), isEmpty);
+    },
+  );
+
+  test('home summary enrichment remains owner scoped', () async {
+    final userA = DisplayCache(database, 'firebase-user-a');
+    final userB = DisplayCache(database, 'firebase-user-b');
+    await userA.replaceDevices([
+      {'id': 'shared-device', 'status': 'ACTIVE'},
+    ]);
+    await userB.replaceDevices([
+      {'id': 'shared-device', 'status': 'ACTIVE'},
+    ]);
+
+    await userA.enrichConnectionState(
+      devices: [
+        {'id': 'shared-device', 'presence': 'ONLINE_EXECUTING'},
+      ],
+      rooms: const [],
+    );
+
+    expect((await userA.devices()).single['presence'], 'ONLINE_EXECUTING');
+    expect((await userB.devices()).single.containsKey('presence'), isFalse);
+  });
+
+  test(
     'room cascade removes only outbox mutations targeting that room',
     () async {
       final cache = DisplayCache(database, 'firebase-user-a');

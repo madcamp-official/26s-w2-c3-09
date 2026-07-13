@@ -58,6 +58,15 @@ paths:
           {
             description: Desktop claim state and device token after nonce verification,
           }
+  /v1/home/summary:
+    get:
+      description: Aggregated mobile home state without per-device or per-room fan-out requests.
+      responses:
+        "200":
+          description: Active devices and rooms enriched with current home state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HomeSummary" }
   /v1/devices:
     get:
       responses:
@@ -940,6 +949,113 @@ components:
       required: [code]
       properties:
         code: { type: string, pattern: "^[0-9]{6}$" }
+    HomeSummary:
+      type: object
+      additionalProperties: false
+      required: [devices, rooms, character]
+      properties:
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/HomeSummaryDevice" }
+        rooms:
+          type: array
+          items: { $ref: "#/components/schemas/HomeSummaryRoom" }
+        character: { $ref: "#/components/schemas/HomeSummaryCharacter" }
+    HomeSummaryDevice:
+      type: object
+      additionalProperties: false
+      required:
+        [id, platform, deviceName, status, lastSeenAt, createdAt, presence]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string, enum: [WINDOWS, MACOS, ANDROID, IOS] }
+        deviceName: { type: string, minLength: 1, maxLength: 120 }
+        status: { type: string, const: ACTIVE }
+        lastSeenAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+        presence:
+          {
+            type: string,
+            enum:
+              [
+                ONLINE_IDLE,
+                ONLINE_SCANNING,
+                ONLINE_EXECUTING,
+                DEGRADED,
+                OFFLINE,
+              ],
+          }
+    HomeSummaryRoom:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          desktopDeviceId,
+          name,
+          rootAlias,
+          status,
+          createdAt,
+          pendingProposalCount,
+          latestExecutionStatus,
+          cleanlinessScore,
+          cleanlinessFormulaVersion,
+          cleanlinessCalculatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        desktopDeviceId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        rootAlias: { type: string, minLength: 1, maxLength: 120 }
+        status: { type: string, const: ACTIVE }
+        createdAt: { type: string, format: date-time }
+        pendingProposalCount: { type: integer, minimum: 0 }
+        latestExecutionStatus:
+          {
+            type: [string, "null"],
+            enum:
+              [
+                EXECUTING,
+                SUCCEEDED,
+                PARTIALLY_SUCCEEDED,
+                FAILED,
+                STALE,
+                ROLLED_BACK,
+                null,
+              ],
+          }
+        cleanlinessScore: { type: [integer, "null"], minimum: 0, maximum: 100 }
+        cleanlinessFormulaVersion:
+          { type: [string, "null"], minLength: 1, maxLength: 80 }
+        cleanlinessCalculatedAt: { type: [string, "null"], format: date-time }
+    HomeSummaryCharacter:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          appearance,
+          roomTheme,
+          affinityTotal,
+          createdAt,
+          updatedAt,
+          unlockedItems,
+          nextUnlockAffinity,
+          riveAssetStatus,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        appearance: { type: object, additionalProperties: true }
+        roomTheme: { type: [string, "null"], maxLength: 80 }
+        affinityTotal: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        unlockedItems:
+          type: array
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 120 }
+        nextUnlockAffinity: { type: [integer, "null"], minimum: 0 }
+        riveAssetStatus: { type: string, enum: [CONFIGURED, UNCONFIGURED] }
     Heartbeat:
       type: object
       additionalProperties: false

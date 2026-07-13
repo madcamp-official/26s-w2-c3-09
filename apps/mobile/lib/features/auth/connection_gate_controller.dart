@@ -71,6 +71,69 @@ bool isActiveConnectionItem(Map<String, dynamic> value) {
   return status is String && status.toUpperCase() == 'ACTIVE';
 }
 
+bool connectionItemsEquivalent(
+  List<Map<String, dynamic>> left,
+  List<Map<String, dynamic>> right, {
+  Set<String>? stableKeys,
+}) {
+  if (left.length != right.length) return false;
+  final rightById = <String, Map<String, dynamic>>{
+    for (final item in right)
+      if (item['id'] is String) item['id'] as String: item,
+  };
+  if (rightById.length != right.length) return false;
+  for (final item in left) {
+    final id = item['id'];
+    final other = rightById[id];
+    if (id is! String || other == null) return false;
+    if (stableKeys == null) {
+      if (!_jsonEquivalent(item, other)) return false;
+      continue;
+    }
+    for (final key in stableKeys) {
+      if (!_jsonEquivalent(item[key], other[key])) return false;
+    }
+  }
+  return true;
+}
+
+const _stableDeviceConnectionKeys = <String>{
+  'id',
+  'status',
+  'deviceName',
+  'platform',
+};
+
+const _stableRoomConnectionKeys = <String>{
+  'id',
+  'status',
+  'desktopDeviceId',
+  'name',
+  'rootAlias',
+};
+
+bool _jsonEquivalent(Object? left, Object? right) {
+  if (identical(left, right)) return true;
+  if (left is Map && right is Map) {
+    if (left.length != right.length) return false;
+    for (final entry in left.entries) {
+      if (!right.containsKey(entry.key) ||
+          !_jsonEquivalent(entry.value, right[entry.key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (left is List && right is List) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!_jsonEquivalent(left[index], right[index])) return false;
+    }
+    return true;
+  }
+  return left == right;
+}
+
 String disconnectErrorMessage(Object error) {
   if (error is DioException) {
     final data = error.response?.data;
@@ -167,22 +230,19 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
     state = await AsyncValue.guard(_loadAuthoritativeFailClosed);
   }
 
-  Future<void> reconcile() async {
+  Future<bool> reconcile() async {
     if (state.asData?.value == null) {
       await retryLoad();
-      return;
+      return state.asData?.value != null;
     }
     final revision = _stateRevision;
     try {
       final refreshed = await _readAuthoritative();
-      if (revision != _stateRevision) return;
-      await _serializeMutation(() async {
-        if (revision != _stateRevision) return;
-        final applyingRevision = ++_stateRevision;
-        await _replaceAuthoritativeCache(refreshed);
-        if (applyingRevision != _stateRevision) return;
+      if (revision != _stateRevision) return false;
+      return await _serializeMutation(() async {
+        if (revision != _stateRevision) return false;
         final current = state.asData?.value;
-        if (current == null) return;
+        if (current == null) return false;
         final retainedOperations = <String, DisconnectOperation>{};
         for (final entry in current.operations.entries) {
           final operation = entry.value;
@@ -195,11 +255,30 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
                 );
           if (stillPresent) retainedOperations[entry.key] = operation;
         }
-        state = AsyncData(refreshed.copyWith(operations: retainedOperations));
+        final next = refreshed.copyWith(operations: retainedOperations);
+        final changed =
+            !connectionItemsEquivalent(
+              current.devices,
+              next.devices,
+              stableKeys: _stableDeviceConnectionKeys,
+            ) ||
+            !connectionItemsEquivalent(
+              current.rooms,
+              next.rooms,
+              stableKeys: _stableRoomConnectionKeys,
+            ) ||
+            current.operations.length != next.operations.length;
+        if (!changed) return false;
+        final applyingRevision = ++_stateRevision;
+        await _replaceAuthoritativeCache(refreshed);
+        if (applyingRevision != _stateRevision) return false;
+        state = AsyncData(next);
+        return true;
       });
     } catch (_) {
       // A background reconciliation must never replace a valid main screen
       // with stale cache or an unverified error state.
+      return false;
     }
   }
 

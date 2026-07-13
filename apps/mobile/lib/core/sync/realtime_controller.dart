@@ -35,6 +35,153 @@ final realtimeCharacterKindProvider =
       RealtimeCharacterKindController.new,
     );
 
+enum RealtimeHomeUpdateKind {
+  presence,
+  deviceRemoved,
+  roomRemoved,
+  executionStatus,
+  refreshSummary,
+}
+
+class RealtimeHomeUpdate {
+  const RealtimeHomeUpdate({
+    required this.kind,
+    required this.eventType,
+    this.deviceId,
+    this.roomId,
+    this.presence,
+    this.executionStatus,
+  });
+
+  final RealtimeHomeUpdateKind kind;
+  final String eventType;
+  final String? deviceId;
+  final String? roomId;
+  final String? presence;
+  final String? executionStatus;
+}
+
+final realtimeHomeUpdateProvider =
+    NotifierProvider<RealtimeHomeUpdateController, RealtimeHomeUpdate?>(
+      RealtimeHomeUpdateController.new,
+    );
+
+class RealtimeHomeUpdateController extends Notifier<RealtimeHomeUpdate?> {
+  @override
+  RealtimeHomeUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeHomeUpdate update) => state = update;
+}
+
+RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
+  if (data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final deviceId = switch (payload['deviceId'] ?? value['deviceId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+
+  if (event == 'presence.updated') {
+    final presence = payload['presence'];
+    if (deviceId == null ||
+        presence is! String ||
+        !_validPresences.contains(presence)) {
+      return null;
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.presence,
+      eventType: event,
+      deviceId: deviceId,
+      presence: presence,
+    );
+  }
+  if (event == 'device.revoked' && deviceId != null) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.deviceRemoved,
+      eventType: event,
+      deviceId: deviceId,
+    );
+  }
+  if (event == 'room.removed' && roomId != null) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.roomRemoved,
+      eventType: event,
+      roomId: roomId,
+    );
+  }
+  if (event == 'execution.updated') {
+    final status = payload['status'];
+    if (roomId != null && status is String && status.isNotEmpty) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.executionStatus,
+        eventType: event,
+        roomId: roomId,
+        executionStatus: status,
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (_summaryRefreshEvents.contains(event)) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (_homeIrrelevantEvents.contains(event)) return null;
+
+  // Unknown validated domain envelopes may gain a home projection later.
+  // One summary read is safer than silently displaying stale aggregate data.
+  if (value['eventId'] is String || value['eventType'] is String) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  return null;
+}
+
+const _validPresences = <String>{
+  'OFFLINE',
+  'ONLINE_IDLE',
+  'ONLINE_SCANNING',
+  'ONLINE_EXECUTING',
+  'DEGRADED',
+};
+
+const _summaryRefreshEvents = <String>{
+  'device.paired',
+  'proposal.created',
+  'decision.created',
+  'room.snapshot.updated',
+};
+
+const _homeIrrelevantEvents = <String>{
+  'character.event',
+  'chat.message.created',
+  'command.available',
+  'command.updated',
+  'file.browse.failed',
+  'file.transfer.requested',
+  'file.transfer.updated',
+  'rule.created',
+  'rule.updated',
+  'smart-cache.updated',
+};
+
 class RealtimeCharacterKindController extends Notifier<CharacterState?> {
   @override
   CharacterState? build() {
@@ -110,9 +257,10 @@ CharacterState? realtimeCharacterKindFor(String event, Object? data) {
     return parseCharacterState(value['kind']);
   }
   if (event != 'presence.updated') return null;
-  final payload = Map<String, dynamic>.from(
-    value['payload'] as Map? ?? const {},
-  );
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
   return switch (payload['presence']) {
     'OFFLINE' => CharacterState.offline,
     'ONLINE_IDLE' => CharacterState.idle,
@@ -238,7 +386,19 @@ class RealtimeController extends Notifier<int> {
     if (characterKind != null && _isActiveSocket(session, socket)) {
       ref.read(realtimeCharacterKindProvider.notifier).emit(characterKind);
     }
-    if (shouldRefresh && _isActiveSocket(session, socket)) state++;
+    final homeUpdate = realtimeHomeUpdateFor(event, data);
+    if (shouldRefresh &&
+        homeUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
+    }
+    // Presence has a complete, device-scoped payload and is patched directly
+    // by HomeController. It must not fan out through generic invalidation.
+    if (shouldRefresh &&
+        event != 'presence.updated' &&
+        _isActiveSocket(session, socket)) {
+      state++;
+    }
   }
 
   Future<void> _replay(RealtimeAccountSession session) async {
@@ -269,6 +429,10 @@ class RealtimeController extends Notifier<int> {
           if (eventType is String) {
             await _applyConnectionLifecycle(session, eventType, event);
             if (!_isCurrent(session)) return;
+            final homeUpdate = realtimeHomeUpdateFor(eventType, event);
+            if (homeUpdate != null) {
+              ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
+            }
           }
           final sequence = event['sequence'];
           if (sequence is int && sequence > cursor) cursor = sequence;

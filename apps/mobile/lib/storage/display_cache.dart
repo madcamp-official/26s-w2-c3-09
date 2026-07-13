@@ -74,6 +74,59 @@ class DisplayCache {
     });
   }
 
+  /// Adds home-only fields to rows that the authoritative pairing gate has
+  /// already cached. Missing rows are never inserted, so a late summary
+  /// response cannot resurrect a revoked device or removed room.
+  Future<void> enrichConnectionState({
+    required List<Map<String, dynamic>> devices,
+    required List<Map<String, dynamic>> rooms,
+  }) async {
+    final ownerUid = _ownerUid;
+    await _database.transaction(() async {
+      final now = DateTime.now();
+      for (final value in devices) {
+        final id = value['id'];
+        if (id is! String) continue;
+        final existing =
+            await (_database.select(_database.cachedDevices)..where(
+                  (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+                ))
+                .getSingleOrNull();
+        if (existing == null) continue;
+        final merged = {..._decode(existing.payloadJson), ...value};
+        await (_database.update(_database.cachedDevices)..where(
+              (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+            ))
+            .write(
+              CachedDevicesCompanion(
+                payloadJson: Value(jsonEncode(merged)),
+                updatedAt: Value(now),
+              ),
+            );
+      }
+      for (final value in rooms) {
+        final id = value['id'];
+        if (id is! String) continue;
+        final existing =
+            await (_database.select(_database.cachedRooms)..where(
+                  (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+                ))
+                .getSingleOrNull();
+        if (existing == null) continue;
+        final merged = {..._decode(existing.payloadJson), ...value};
+        await (_database.update(_database.cachedRooms)..where(
+              (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+            ))
+            .write(
+              CachedRoomsCompanion(
+                payloadJson: Value(jsonEncode(merged)),
+                updatedAt: Value(now),
+              ),
+            );
+      }
+    });
+  }
+
   Future<void> removeRoomCascade(String roomId) {
     return _database.transaction(() => _deleteRoomRows(_ownerUid, roomId));
   }

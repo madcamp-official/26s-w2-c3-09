@@ -126,6 +126,62 @@ void main() {
   );
 
   test(
+    'reconcile reports and caches only an actual connection change',
+    () async {
+      api.devices = [
+        {
+          'id': 'device-a',
+          'deviceName': 'Desk',
+          'platform': 'WINDOWS',
+          'status': 'ACTIVE',
+          'lastSeenAt': '2026-07-13T10:00:00.000Z',
+        },
+      ];
+      startGate();
+      await container.read(connectionGateControllerProvider.future);
+      final controller = container.read(
+        connectionGateControllerProvider.notifier,
+      );
+
+      expect(await controller.reconcile(), isFalse);
+      expect(cache.connectionReplacementCount, 1);
+
+      api.devices = [
+        {
+          'id': 'device-a',
+          'deviceName': 'Desk',
+          'platform': 'WINDOWS',
+          'status': 'ACTIVE',
+          'lastSeenAt': '2026-07-13T10:00:05.000Z',
+          'presence': 'ONLINE_IDLE',
+        },
+      ];
+      expect(await controller.reconcile(), isFalse);
+      expect(cache.connectionReplacementCount, 1);
+
+      api.devices = [
+        {
+          'id': 'device-a',
+          'deviceName': 'Renamed desk',
+          'platform': 'WINDOWS',
+          'status': 'ACTIVE',
+          'lastSeenAt': '2026-07-13T10:00:10.000Z',
+        },
+      ];
+      expect(await controller.reconcile(), isTrue);
+      expect(cache.connectionReplacementCount, 2);
+      expect(
+        container
+            .read(connectionGateControllerProvider)
+            .requireValue
+            .devices
+            .single['deviceName'],
+        'Renamed desk',
+      );
+    },
+  );
+
+  test(
     'pairing claim creates main state only after authoritative confirmation',
     () async {
       startGate();
@@ -302,6 +358,9 @@ void main() {
     final controller = container.read(
       connectionGateControllerProvider.notifier,
     );
+    api.devices = [
+      {'id': 'device-a', 'deviceName': 'Updated', 'status': 'ACTIVE'},
+    ];
     cache.blockNextConnectionReplacement();
 
     final reconciling = controller.reconcile();
@@ -368,6 +427,7 @@ class _ControllableDisplayCache extends DisplayCache {
 
   Completer<void>? _replacementStarted;
   Completer<void>? _replacementRelease;
+  int connectionReplacementCount = 0;
 
   Future<void> get connectionReplacementStarted =>
       _replacementStarted?.future ?? Future<void>.value();
@@ -384,6 +444,7 @@ class _ControllableDisplayCache extends DisplayCache {
     required List<Map<String, dynamic>> devices,
     required List<Map<String, dynamic>> rooms,
   }) async {
+    connectionReplacementCount++;
     final started = _replacementStarted;
     final release = _replacementRelease;
     if (started != null && release != null) {

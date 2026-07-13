@@ -312,6 +312,67 @@ export const heartbeatSchema = z
   })
   .strict();
 
+export const executionStatusSchema = z.enum([
+  "EXECUTING",
+  "SUCCEEDED",
+  "PARTIALLY_SUCCEEDED",
+  "FAILED",
+  "STALE",
+  "ROLLED_BACK",
+]);
+
+export const homeSummaryDeviceSchema = z
+  .object({
+    id: uuidSchema,
+    platform: platformSchema,
+    deviceName: z.string().min(1).max(120),
+    status: z.literal("ACTIVE"),
+    lastSeenAt: z.iso.datetime().nullable(),
+    createdAt: z.iso.datetime(),
+    presence: presenceSchema,
+  })
+  .strict();
+
+export const homeSummaryRoomSchema = z
+  .object({
+    id: uuidSchema,
+    desktopDeviceId: uuidSchema,
+    name: z.string().min(1).max(120),
+    rootAlias: z.string().min(1).max(120),
+    status: z.literal("ACTIVE"),
+    createdAt: z.iso.datetime(),
+    pendingProposalCount: z.number().int().nonnegative(),
+    latestExecutionStatus: executionStatusSchema.nullable(),
+    cleanlinessScore: z.number().int().min(0).max(100).nullable(),
+    cleanlinessFormulaVersion: z.string().min(1).max(80).nullable(),
+    cleanlinessCalculatedAt: z.iso.datetime().nullable(),
+  })
+  .strict();
+
+export const homeSummaryCharacterSchema = z
+  .object({
+    id: uuidSchema,
+    appearance: z.record(z.string(), z.unknown()),
+    roomTheme: z.string().max(80).nullable(),
+    affinityTotal: z.number().int().nonnegative(),
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+    unlockedItems: z.array(z.string().min(1).max(120)).max(100),
+    nextUnlockAffinity: z.number().int().nonnegative().nullable(),
+    riveAssetStatus: z.enum(["CONFIGURED", "UNCONFIGURED"]),
+  })
+  .strict();
+
+export const homeSummaryResponseSchema = z
+  .object({
+    devices: z.array(homeSummaryDeviceSchema),
+    rooms: z.array(homeSummaryRoomSchema),
+    character: homeSummaryCharacterSchema,
+  })
+  .strict();
+
+export type HomeSummaryResponse = z.infer<typeof homeSummaryResponseSchema>;
+
 export const createFileBrowseRequestSchema = z
   .object({
     relativeDirectory: relativePathSchema.or(z.literal("")),

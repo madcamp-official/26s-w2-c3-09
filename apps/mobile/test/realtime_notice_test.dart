@@ -48,5 +48,52 @@ void main() {
       }),
       CharacterState.offline,
     );
+    expect(
+      realtimeCharacterKindFor('presence.updated', {
+        'deviceId': 'device-a',
+        'presence': 'ONLINE_EXECUTING',
+        'ttlSeconds': 15,
+      }),
+      CharacterState.working,
+    );
+  });
+
+  test('raw presence payload becomes a device-scoped home patch', () {
+    final update = realtimeHomeUpdateFor('presence.updated', {
+      'deviceId': 'device-a',
+      'presence': 'ONLINE_SCANNING',
+      'ttlSeconds': 15,
+    });
+
+    expect(update?.kind, RealtimeHomeUpdateKind.presence);
+    expect(update?.deviceId, 'device-a');
+    expect(update?.presence, 'ONLINE_SCANNING');
+    expect(
+      realtimeHomeUpdateFor('presence.updated', {
+        'deviceId': 'device-a',
+        'presence': 'INVENTED_STATE',
+      }),
+      isNull,
+    );
+  });
+
+  test('domain events use a targeted patch or one summary fallback', () {
+    final execution = realtimeHomeUpdateFor('execution.updated', {
+      'eventId': 'execution-event',
+      'eventType': 'execution.updated',
+      'roomId': 'room-a',
+      'payload': {'status': 'SUCCEEDED'},
+    });
+    final snapshot = realtimeHomeUpdateFor('room.snapshot.updated', {
+      'eventId': 'snapshot-event',
+      'eventType': 'room.snapshot.updated',
+      'roomId': 'room-a',
+      'payload': {'snapshotId': 'snapshot-a'},
+    });
+
+    expect(execution?.kind, RealtimeHomeUpdateKind.executionStatus);
+    expect(execution?.roomId, 'room-a');
+    expect(execution?.executionStatus, 'SUCCEEDED');
+    expect(snapshot?.kind, RealtimeHomeUpdateKind.refreshSummary);
   });
 }

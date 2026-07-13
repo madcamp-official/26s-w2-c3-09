@@ -28,20 +28,20 @@ List<Map<String, dynamic>> mergeAuthoritativeConnectionItems({
       .toList(growable: false);
 }
 
-/// A lost WebSocket disconnect event must be repaired quickly by an
-/// authoritative REST read. Two seconds keeps the fallback inside the v1.4
-/// ten-second revocation window while avoiding overlapping network requests.
-const homeAuthoritativeReconcileInterval = Duration(seconds: 2);
+/// A lost WebSocket lifecycle event is repaired by an authoritative REST
+/// check. Presence itself is delivered as a targeted realtime patch, so this
+/// five-second safety loop never needs to poll the full home projection.
+const homeAuthoritativeReconcileInterval = Duration(seconds: 5);
 
 class HomeAuthoritativeReconcileLoop {
   HomeAuthoritativeReconcileLoop({
     required this.reconcile,
-    required this.onReconciled,
+    required this.onChanged,
     this.interval = homeAuthoritativeReconcileInterval,
   });
 
-  final Future<void> Function() reconcile;
-  final void Function() onReconciled;
+  final Future<bool> Function() reconcile;
+  final void Function() onChanged;
   final Duration interval;
 
   Timer? _timer;
@@ -57,10 +57,10 @@ class HomeAuthoritativeReconcileLoop {
     if (_disposed || _inFlight) return;
     _inFlight = true;
     try {
-      await reconcile();
-      if (!_disposed) onReconciled();
+      final changed = await reconcile();
+      if (changed && !_disposed) onChanged();
     } catch (_) {
-      // This is a background fail-closed repair path. The next two-second
+      // This is a background fail-closed repair path. The next five-second
       // tick retries without replacing the last verified connection state.
     } finally {
       _inFlight = false;
@@ -91,7 +91,11 @@ class _HomePageState extends ConsumerState<HomePage> {
     _reconcileLoop = HomeAuthoritativeReconcileLoop(
       reconcile: () =>
           ref.read(connectionGateControllerProvider.notifier).reconcile(),
-      onReconciled: () => ref.invalidate(homeControllerProvider),
+      onChanged: () => unawaited(
+        ref
+            .read(homeControllerProvider.notifier)
+            .reload(preserveCurrentOnError: true),
+      ),
     )..start();
   }
 
@@ -104,9 +108,6 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(realtimeRevisionProvider, (previous, next) {
-      if (previous != null) ref.invalidate(homeControllerProvider);
-    });
     final state = ref.watch(homeControllerProvider);
     final pushNotifications = ref.watch(pushNotificationsProvider);
     final realtimeCharacterKind = ref.watch(realtimeCharacterKindProvider);
