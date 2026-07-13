@@ -108,11 +108,31 @@ class RealtimeFileTransferUpdate {
   final String? failureCode;
 }
 
+class RealtimeFileBrowseUpdate {
+  const RealtimeFileBrowseUpdate({
+    required this.requestId,
+    required this.status,
+    this.roomId,
+    this.failureCode,
+  });
+
+  final String requestId;
+  final String status;
+  final String? roomId;
+  final String? failureCode;
+}
+
 final realtimeFileTransferUpdateProvider =
     NotifierProvider<
       RealtimeFileTransferUpdateController,
       RealtimeFileTransferUpdate?
     >(RealtimeFileTransferUpdateController.new);
+
+final realtimeFileBrowseUpdateProvider =
+    NotifierProvider<
+      RealtimeFileBrowseUpdateController,
+      RealtimeFileBrowseUpdate?
+    >(RealtimeFileBrowseUpdateController.new);
 
 class RealtimeHomeUpdateController extends Notifier<RealtimeHomeUpdate?> {
   @override
@@ -133,6 +153,17 @@ class RealtimeFileTransferUpdateController
   }
 
   void emit(RealtimeFileTransferUpdate update) => state = update;
+}
+
+class RealtimeFileBrowseUpdateController
+    extends Notifier<RealtimeFileBrowseUpdate?> {
+  @override
+  RealtimeFileBrowseUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeFileBrowseUpdate update) => state = update;
 }
 
 RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
@@ -354,8 +385,12 @@ bool realtimeUpdateSuppressesGenericRevision(
   String event,
   RealtimeHomeUpdate? update, [
   RealtimeFileTransferUpdate? fileTransferUpdate,
+  RealtimeFileBrowseUpdate? fileBrowseUpdate,
 ]) {
   if (fileTransferUpdate != null) return true;
+  if (fileBrowseUpdate != null || event.startsWith('file.browse.')) {
+    return true;
+  }
   if (event == 'presence.updated') return true;
   return switch (update?.kind) {
     RealtimeHomeUpdateKind.presence ||
@@ -405,6 +440,43 @@ RealtimeFileTransferUpdate? realtimeFileTransferUpdateFor(
   );
 }
 
+RealtimeFileBrowseUpdate? realtimeFileBrowseUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (!_fileBrowseTerminalEvents.contains(event) || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final requestId = switch (payload['requestId'] ?? value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final status = switch (payload['status']) {
+    final String status when _validFileBrowseStatuses.contains(status) =>
+      status,
+    _ when event == 'file.browse.ready' => 'READY',
+    _ when event == 'file.browse.failed' => 'FAILED',
+    _ => null,
+  };
+  final failureCode = payload['failureCode'];
+  if (requestId == null || status == null) return null;
+  return RealtimeFileBrowseUpdate(
+    requestId: requestId,
+    roomId: roomId,
+    status: status,
+    failureCode: failureCode is String && failureCode.isNotEmpty
+        ? failureCode
+        : null,
+  );
+}
+
 const _validPresences = <String>{
   'OFFLINE',
   'ONLINE_IDLE',
@@ -423,6 +495,12 @@ const _validFileTransferStatuses = <String>{
   'EXPIRED',
 };
 
+const _validFileBrowseStatuses = <String>{'READY', 'FAILED'};
+const _fileBrowseTerminalEvents = <String>{
+  'file.browse.ready',
+  'file.browse.failed',
+};
+
 const _summaryRefreshEvents = <String>{'device.paired'};
 
 const _homeIrrelevantEvents = <String>{
@@ -430,6 +508,8 @@ const _homeIrrelevantEvents = <String>{
   'chat.message.created',
   'command.available',
   'command.updated',
+  'file.browse.requested',
+  'file.browse.ready',
   'file.browse.failed',
   'file.transfer.requested',
   'file.transfer.updated',
@@ -650,6 +730,14 @@ class RealtimeController extends Notifier<int> {
           .read(realtimeFileTransferUpdateProvider.notifier)
           .emit(fileTransferUpdate);
     }
+    final fileBrowseUpdate = realtimeFileBrowseUpdateFor(event, data);
+    if (shouldRefresh &&
+        fileBrowseUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeFileBrowseUpdateProvider.notifier)
+          .emit(fileBrowseUpdate);
+    }
     final homeUpdate = realtimeHomeUpdateFor(event, data);
     if (shouldRefresh &&
         homeUpdate != null &&
@@ -663,6 +751,7 @@ class RealtimeController extends Notifier<int> {
           event,
           homeUpdate,
           fileTransferUpdate,
+          fileBrowseUpdate,
         ) &&
         _isActiveSocket(session, socket)) {
       state++;
@@ -707,6 +796,15 @@ class RealtimeController extends Notifier<int> {
                   .read(realtimeFileTransferUpdateProvider.notifier)
                   .emit(fileTransferUpdate);
             }
+            final fileBrowseUpdate = realtimeFileBrowseUpdateFor(
+              eventType,
+              event,
+            );
+            if (fileBrowseUpdate != null) {
+              ref
+                  .read(realtimeFileBrowseUpdateProvider.notifier)
+                  .emit(fileBrowseUpdate);
+            }
             final homeUpdate = realtimeHomeUpdateFor(eventType, event);
             if (homeUpdate != null) {
               ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
@@ -715,6 +813,7 @@ class RealtimeController extends Notifier<int> {
               eventType,
               homeUpdate,
               fileTransferUpdate,
+              fileBrowseUpdate,
             )) {
               requiresGenericRevision = true;
             }

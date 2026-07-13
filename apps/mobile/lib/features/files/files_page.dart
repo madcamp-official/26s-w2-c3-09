@@ -13,6 +13,7 @@ const fileSearchScopeDirectory = 'CURRENT_DIRECTORY';
 const fileSearchScopeManagedRoot = 'MANAGED_ROOT';
 const fileSearchQueryMinLength = 2;
 const fileSearchQueryMaxLength = 100;
+const fileBrowseStatusFallbackInterval = Duration(seconds: 5);
 
 int fileSearchQueryLength(String value) => value.trim().runes.length;
 
@@ -157,6 +158,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   Object? _error;
   bool _browseLoading = false;
   bool _transferLoading = false;
+  String? _activeBrowseRequestId;
+  RealtimeFileBrowseUpdate? _lastBrowseUpdate;
+  Completer<RealtimeFileBrowseUpdate?>? _browseUpdateWaiter;
   String? _activeTransferId;
   String? _activeTransferStatus;
   double? _downloadProgress;
@@ -191,7 +195,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     _requestVersion++;
     _searchDebounce?.cancel();
     _downloadCancelToken?.cancel('Files page disposed');
-    _transferUpdateWaiter?.complete(null);
+    _completeBrowseWaiter();
+    _completeTransferWaiter();
     final transferId = _activeTransferId;
     if (transferId != null) {
       unawaited(
@@ -207,6 +212,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
 
   Future<void> _browse({String? cursor, bool append = false}) async {
     final requestVersion = ++_requestVersion;
+    _completeBrowseWaiter();
     final query = _searchActive ? _searchQuery.trim() : null;
     final relativeDirectory = _relativeDirectory;
     final searchScope = _searchScope;
@@ -229,10 +235,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         body['searchScope'] = searchScope;
       }
       final created = await _browseGateway.createRequest(widget.roomId, body);
-      final completed = await _pollBrowse(
-        created['id'] as String,
-        requestVersion,
-      );
+      final requestId = created['id'] as String;
+      if (requestVersion != _requestVersion) return;
+      _activeBrowseRequestId = requestId;
+      final completed = await _waitForBrowseCompletion(created, requestVersion);
       if (requestVersion != _requestVersion) return;
       if (completed['status'] != 'READY') {
         throw StateError(
@@ -275,29 +281,78 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       }
     } finally {
       if (mounted && requestVersion == _requestVersion) {
+        _activeBrowseRequestId = null;
+        _lastBrowseUpdate = null;
         setState(() => _browseLoading = false);
       }
     }
   }
 
-  Future<Map<String, dynamic>> _pollBrowse(
-    String requestId,
+  Future<Map<String, dynamic>> _waitForBrowseCompletion(
+    Map<String, dynamic> initial,
     int requestVersion,
   ) async {
+    var value = initial;
+    if (value['status'] == 'READY' || value['status'] == 'FAILED') {
+      return value;
+    }
+    final requestId = value['id'] as String;
     for (var attempt = 0; attempt < 31; attempt++) {
       if (requestVersion != _requestVersion) {
         throw const _StaleBrowseResponse();
       }
-      final value = await _browseGateway.getRequest(requestId);
+      final realtimeUpdate = await _waitForBrowseUpdate(
+        requestId,
+        requestVersion,
+      );
+      if (requestVersion != _requestVersion) {
+        throw const _StaleBrowseResponse();
+      }
+      value = await _browseGateway.getRequest(requestId);
       if (requestVersion != _requestVersion) {
         throw const _StaleBrowseResponse();
       }
       if (value['status'] == 'READY' || value['status'] == 'FAILED') {
         return value;
       }
-      await Future<void>.delayed(const Duration(seconds: 2));
+      if (realtimeUpdate?.status == 'FAILED') {
+        throw StateError(realtimeUpdate?.failureCode ?? 'BROWSE_FAILED');
+      }
     }
     throw TimeoutException('TIMED_OUT');
+  }
+
+  Future<RealtimeFileBrowseUpdate?> _waitForBrowseUpdate(
+    String requestId,
+    int requestVersion,
+  ) async {
+    final latest = _lastBrowseUpdate;
+    if (latest != null && latest.requestId == requestId) {
+      _lastBrowseUpdate = null;
+      return latest;
+    }
+    final completer = Completer<RealtimeFileBrowseUpdate?>();
+    _browseUpdateWaiter = completer;
+    final timer = Timer(fileBrowseStatusFallbackInterval, () {
+      if (!completer.isCompleted) completer.complete(null);
+    });
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      if (identical(_browseUpdateWaiter, completer)) {
+        _browseUpdateWaiter = null;
+      }
+      if (requestVersion != _requestVersion) {
+        throw const _StaleBrowseResponse();
+      }
+    }
+  }
+
+  void _completeBrowseWaiter() {
+    final waiter = _browseUpdateWaiter;
+    if (waiter != null && !waiter.isCompleted) waiter.complete(null);
+    _browseUpdateWaiter = null;
   }
 
   Future<void> _openDirectory(String relativePath) async {
@@ -319,6 +374,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
     _requestVersion++;
+    _completeBrowseWaiter();
     final query = value.trim();
     setState(() {
       _searchQuery = query;
@@ -342,6 +398,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     if (value == null || value == _searchScope) return;
     _searchDebounce?.cancel();
     _requestVersion++;
+    _completeBrowseWaiter();
     setState(() {
       _searchScope = value;
       _entries.clear();
@@ -497,8 +554,27 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
   }
 
+  void _completeTransferWaiter() {
+    final waiter = _transferUpdateWaiter;
+    if (waiter != null && !waiter.isCompleted) waiter.complete(null);
+    _transferUpdateWaiter = null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen(realtimeFileBrowseUpdateProvider, (previous, next) {
+      if (next == null ||
+          identical(previous, next) ||
+          next.requestId != _activeBrowseRequestId ||
+          !mounted) {
+        return;
+      }
+      _lastBrowseUpdate = next;
+      final waiter = _browseUpdateWaiter;
+      if (waiter != null && !waiter.isCompleted) {
+        waiter.complete(next);
+      }
+    });
     ref.listen(realtimeFileTransferUpdateProvider, (previous, next) {
       if (next == null ||
           identical(previous, next) ||

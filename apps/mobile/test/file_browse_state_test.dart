@@ -4,6 +4,10 @@ import 'package:mousekeeper/core/sync/realtime_controller.dart';
 import 'package:mousekeeper/features/files/files_page.dart';
 
 void main() {
+  test('file browse status waits on websocket before slow REST fallback', () {
+    expect(fileBrowseStatusFallbackInterval, const Duration(seconds: 5));
+  });
+
   test('다음 페이지 실패 전에는 기존 READY page를 지우지 않는다', () {
     final existing = <Map<String, dynamic>>[
       {'relativePath': 'first.pdf'},

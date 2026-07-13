@@ -137,6 +137,43 @@ void main() {
     );
   });
 
+  test(
+    'file browse terminal events become request-scoped realtime patches',
+    () {
+      final ready = realtimeFileBrowseUpdateFor('file.browse.ready', {
+        'eventId': 'browse-event',
+        'eventType': 'file.browse.ready',
+        'aggregateId': 'browse-a',
+        'roomId': 'room-a',
+        'payload': {
+          'requestId': 'browse-a',
+          'roomId': 'room-a',
+          'status': 'READY',
+        },
+      });
+      final failed = realtimeFileBrowseUpdateFor('file.browse.failed', {
+        'eventId': 'browse-event',
+        'eventType': 'file.browse.failed',
+        'aggregateId': 'browse-b',
+        'payload': {'requestId': 'browse-b', 'failureCode': 'TIMED_OUT'},
+      });
+
+      expect(ready?.requestId, 'browse-a');
+      expect(ready?.roomId, 'room-a');
+      expect(ready?.status, 'READY');
+      expect(failed?.status, 'FAILED');
+      expect(failed?.failureCode, 'TIMED_OUT');
+      expect(
+        realtimeHomeUpdateFor('file.browse.ready', {
+          'eventId': 'browse-event',
+          'eventType': 'file.browse.ready',
+          'aggregateId': 'browse-a',
+        }),
+        isNull,
+      );
+    },
+  );
+
   test('complete realtime patches suppress generic page revision fan-out', () {
     final presence = realtimeHomeUpdateFor('presence.updated', {
       'deviceId': 'device-a',
@@ -214,6 +251,9 @@ void main() {
         'payload': {'transferId': 'transfer-a', 'status': 'READY'},
       },
     );
+    final fileBrowse = realtimeFileBrowseUpdateFor('file.browse.ready', {
+      'payload': {'requestId': 'browse-a', 'status': 'READY'},
+    });
 
     for (final entry in <(String, RealtimeHomeUpdate?)>[
       ('presence.updated', presence),
@@ -237,6 +277,19 @@ void main() {
         null,
         fileTransfer,
       ),
+      true,
+    );
+    expect(
+      realtimeUpdateSuppressesGenericRevision(
+        'file.browse.ready',
+        null,
+        null,
+        fileBrowse,
+      ),
+      true,
+    );
+    expect(
+      realtimeUpdateSuppressesGenericRevision('file.browse.failed', null),
       true,
     );
   });
