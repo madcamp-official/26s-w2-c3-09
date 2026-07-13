@@ -172,6 +172,25 @@ HomeData? reduceHomeDataForRealtimeUpdate({
       return rooms.length == current.rooms.length
           ? current
           : current.copyWith(rooms: rooms);
+    case RealtimeHomeUpdateKind.proposalCreated:
+      final roomId = update.roomId;
+      final pendingProposalCount = update.pendingProposalCount;
+      if (roomId == null || !activeRoomIds.contains(roomId)) {
+        return current;
+      }
+      if (pendingProposalCount == null) return null;
+      var changed = false;
+      final rooms = current.rooms
+          .map((room) {
+            if (room['id'] != roomId ||
+                room['pendingProposalCount'] == pendingProposalCount) {
+              return room;
+            }
+            changed = true;
+            return {...room, 'pendingProposalCount': pendingProposalCount};
+          })
+          .toList(growable: false);
+      return changed ? current.copyWith(rooms: rooms) : current;
     case RealtimeHomeUpdateKind.commandStatus:
       return current;
     case RealtimeHomeUpdateKind.executionStatus:

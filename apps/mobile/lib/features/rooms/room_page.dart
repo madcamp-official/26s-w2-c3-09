@@ -33,10 +33,11 @@ class _RoomContent {
 
   _RoomContent copyWith({
     List<Map<String, dynamic>>? commands,
+    List<Map<String, dynamic>>? proposals,
     List<Map<String, dynamic>>? executions,
   }) => _RoomContent(
     commands: commands ?? this.commands,
-    proposals: proposals,
+    proposals: proposals ?? this.proposals,
     executions: executions ?? this.executions,
     activity: activity,
     snapshot: snapshot,
@@ -73,6 +74,58 @@ List<Map<String, dynamic>> patchCommandItemsForRealtimeUpdate({
     {'id': commandId, 'status': status},
     ...commands,
   ]);
+}
+
+List<Map<String, dynamic>> patchProposalItemsForRealtimeUpdate({
+  required List<Map<String, dynamic>> proposals,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  if (update.kind != RealtimeHomeUpdateKind.proposalCreated ||
+      update.roomId != roomId ||
+      update.proposalId == null ||
+      update.proposalStatus == null) {
+    return proposals;
+  }
+  final proposalId = update.proposalId!;
+  final status = update.proposalStatus!;
+  Map<String, dynamic> patch(Map<String, dynamic> proposal) {
+    final next = {...proposal, 'status': status};
+    if (update.commandId != null) next['commandId'] = update.commandId!;
+    if (update.proposalSummary != null) {
+      next['summary'] = update.proposalSummary!;
+    }
+    if (update.proposalItemCount != null) {
+      next['itemCount'] = update.proposalItemCount!;
+    }
+    return next;
+  }
+
+  var changed = false;
+  var matched = false;
+  final next = proposals
+      .map((proposal) {
+        if (proposal['id'] != proposalId) return proposal;
+        matched = true;
+        final patched = patch(proposal);
+        if (_mapShallowEquals(proposal, patched)) return proposal;
+        changed = true;
+        return patched;
+      })
+      .toList(growable: true);
+  if (matched) return changed ? List.unmodifiable(next) : proposals;
+  return List.unmodifiable([
+    patch({'id': proposalId, 'roomId': roomId}),
+    ...proposals,
+  ]);
+}
+
+bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
+  if (left.length != right.length) return false;
+  for (final key in left.keys) {
+    if (!right.containsKey(key) || left[key] != right[key]) return false;
+  }
+  return true;
 }
 
 List<Map<String, dynamic>> patchExecutionItemsForRealtimeUpdate({
@@ -214,17 +267,24 @@ class _RoomPageState extends ConsumerState<RoomPage> {
       update: update,
       roomId: roomId,
     );
+    final proposals = patchProposalItemsForRealtimeUpdate(
+      proposals: current.proposals,
+      update: update,
+      roomId: roomId,
+    );
     final executions = patchExecutionItemsForRealtimeUpdate(
       executions: current.executions,
       update: update,
       roomId: roomId,
     );
     if (identical(commands, current.commands) &&
+        identical(proposals, current.proposals) &&
         identical(executions, current.executions)) {
       return false;
     }
     final patched = current.copyWith(
       commands: commands,
+      proposals: proposals,
       executions: executions,
     );
     _latestContent = patched;
@@ -232,6 +292,9 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     final cache = ref.read(displayCacheProvider);
     if (!identical(commands, current.commands)) {
       unawaited(cache.replaceCommands(roomId, commands));
+    }
+    if (!identical(proposals, current.proposals)) {
+      unawaited(cache.replaceProposals(roomId, proposals));
     }
     if (!identical(executions, current.executions)) {
       unawaited(cache.replaceExecutions(roomId, executions));

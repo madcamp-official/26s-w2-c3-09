@@ -80,8 +80,23 @@ void main() {
       )!;
       expect(execution.rooms.single['latestExecutionStatus'], 'FAILED');
 
-      final removed = reduceHomeDataForRealtimeUpdate(
+      final proposal = reduceHomeDataForRealtimeUpdate(
         current: execution,
+        update: const RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.proposalCreated,
+          eventType: 'proposal.created',
+          roomId: 'room-a',
+          proposalId: 'proposal-a',
+          proposalStatus: 'OPEN',
+          pendingProposalCount: 4,
+        ),
+        activeDeviceIds: const {'device-a', 'device-b'},
+        activeRoomIds: const {'room-a'},
+      )!;
+      expect(proposal.rooms.single['pendingProposalCount'], 4);
+
+      final removed = reduceHomeDataForRealtimeUpdate(
+        current: proposal,
         update: const RealtimeHomeUpdate(
           kind: RealtimeHomeUpdateKind.deviceRemoved,
           eventType: 'device.revoked',
@@ -108,6 +123,21 @@ void main() {
       ),
       isNull,
     );
+    expect(
+      reduceHomeDataForRealtimeUpdate(
+        current: _homeData(),
+        update: const RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.proposalCreated,
+          eventType: 'proposal.created',
+          roomId: 'room-a',
+          proposalId: 'proposal-a',
+          proposalStatus: 'OPEN',
+        ),
+        activeDeviceIds: const {'device-a', 'device-b'},
+        activeRoomIds: const {'room-a'},
+      ),
+      isNull,
+    );
   });
 }
 
@@ -120,6 +150,7 @@ HomeData _homeData() => const HomeData(
     {
       'id': 'room-a',
       'desktopDeviceId': 'device-a',
+      'pendingProposalCount': 1,
       'latestExecutionStatus': 'SUCCEEDED',
     },
   ],

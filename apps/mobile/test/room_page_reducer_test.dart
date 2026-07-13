@@ -139,4 +139,66 @@ void main() {
       },
     ]);
   });
+
+  test('proposal realtime update patches only the matching proposal row', () {
+    final original = [
+      {
+        'id': 'proposal-a',
+        'status': 'OPEN',
+        'summary': {'title': 'old'},
+      },
+      {'id': 'proposal-b', 'status': 'OPEN'},
+    ];
+
+    final patched = patchProposalItemsForRealtimeUpdate(
+      proposals: original,
+      roomId: 'room-a',
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.proposalCreated,
+        eventType: 'proposal.created',
+        roomId: 'room-a',
+        proposalId: 'proposal-a',
+        commandId: 'command-a',
+        proposalStatus: 'OPEN',
+        proposalSummary: {'title': 'new'},
+        proposalItemCount: 2,
+        pendingProposalCount: 2,
+      ),
+    );
+
+    expect(identical(patched, original), isFalse);
+    expect((patched[0]['summary'] as Map)['title'], 'new');
+    expect(patched[0]['commandId'], 'command-a');
+    expect(patched[0]['itemCount'], 2);
+    expect(identical(patched[1], original[1]), isTrue);
+  });
+
+  test('proposal realtime update upserts a partial proposal when unseen', () {
+    final patched = patchProposalItemsForRealtimeUpdate(
+      proposals: const [],
+      roomId: 'room-a',
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.proposalCreated,
+        eventType: 'proposal.created',
+        roomId: 'room-a',
+        proposalId: 'proposal-a',
+        commandId: 'command-a',
+        proposalStatus: 'OPEN',
+        proposalSummary: {'title': '정리 제안'},
+        proposalItemCount: 3,
+        pendingProposalCount: 1,
+      ),
+    );
+
+    expect(patched, [
+      {
+        'id': 'proposal-a',
+        'roomId': 'room-a',
+        'status': 'OPEN',
+        'commandId': 'command-a',
+        'summary': {'title': '정리 제안'},
+        'itemCount': 3,
+      },
+    ]);
+  });
 }

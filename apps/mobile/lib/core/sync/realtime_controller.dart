@@ -39,6 +39,7 @@ enum RealtimeHomeUpdateKind {
   presence,
   deviceRemoved,
   roomRemoved,
+  proposalCreated,
   commandStatus,
   executionStatus,
   refreshSummary,
@@ -50,8 +51,13 @@ class RealtimeHomeUpdate {
     required this.eventType,
     this.deviceId,
     this.roomId,
+    this.proposalId,
     this.commandId,
     this.executionId,
+    this.proposalStatus,
+    this.proposalSummary,
+    this.proposalItemCount,
+    this.pendingProposalCount,
     this.presence,
     this.commandStatus,
     this.executionStatus,
@@ -61,8 +67,13 @@ class RealtimeHomeUpdate {
   final String eventType;
   final String? deviceId;
   final String? roomId;
+  final String? proposalId;
   final String? commandId;
   final String? executionId;
+  final String? proposalStatus;
+  final Map<String, dynamic>? proposalSummary;
+  final int? proposalItemCount;
+  final int? pendingProposalCount;
   final String? presence;
   final String? commandStatus;
   final String? executionStatus;
@@ -104,6 +115,12 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
     final String id when id.isNotEmpty => id,
     _ => null,
   };
+  final proposalId = switch (payload['proposalId'] ??
+      value['proposalId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
   final executionId = switch (payload['executionId'] ??
       value['executionId'] ??
       value['aggregateId']) {
@@ -137,6 +154,35 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
       kind: RealtimeHomeUpdateKind.roomRemoved,
       eventType: event,
       roomId: roomId,
+    );
+  }
+  if (event == 'proposal.created') {
+    final status = payload['status'];
+    final summary = payload['summary'];
+    final itemCount = payload['itemCount'];
+    final pendingProposalCount = payload['pendingProposalCount'];
+    if (roomId != null &&
+        proposalId != null &&
+        status is String &&
+        status.isNotEmpty &&
+        pendingProposalCount is int) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.proposalCreated,
+        eventType: event,
+        roomId: roomId,
+        proposalId: proposalId,
+        commandId: commandId,
+        proposalStatus: status,
+        proposalSummary: summary is Map
+            ? Map<String, dynamic>.from(summary)
+            : null,
+        proposalItemCount: itemCount is int ? itemCount : null,
+        pendingProposalCount: pendingProposalCount,
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
     );
   }
   if (event == 'command.updated') {
@@ -200,7 +246,6 @@ const _validPresences = <String>{
 
 const _summaryRefreshEvents = <String>{
   'device.paired',
-  'proposal.created',
   'decision.created',
   'room.snapshot.updated',
 };

@@ -136,4 +136,42 @@ void main() {
     expect(command?.roomId, 'room-a');
     expect(command?.commandStatus, 'ANALYZING');
   });
+
+  test('proposal created becomes a room-scoped proposal patch', () {
+    final proposal = realtimeHomeUpdateFor('proposal.created', {
+      'eventId': 'proposal-event',
+      'eventType': 'proposal.created',
+      'aggregateId': 'proposal-a',
+      'roomId': 'room-a',
+      'payload': {
+        'proposalId': 'proposal-a',
+        'roomId': 'room-a',
+        'commandId': 'command-a',
+        'status': 'OPEN',
+        'summary': {'title': '정리 제안'},
+        'itemCount': 2,
+        'pendingProposalCount': 3,
+      },
+    });
+
+    expect(proposal?.kind, RealtimeHomeUpdateKind.proposalCreated);
+    expect(proposal?.proposalId, 'proposal-a');
+    expect(proposal?.roomId, 'room-a');
+    expect(proposal?.commandId, 'command-a');
+    expect(proposal?.proposalStatus, 'OPEN');
+    expect(proposal?.proposalSummary?['title'], '정리 제안');
+    expect(proposal?.proposalItemCount, 2);
+    expect(proposal?.pendingProposalCount, 3);
+  });
+
+  test('incomplete proposal created events request one summary fallback', () {
+    final proposal = realtimeHomeUpdateFor('proposal.created', {
+      'eventId': 'proposal-event',
+      'eventType': 'proposal.created',
+      'aggregateId': 'proposal-a',
+      'payload': {'commandId': 'command-a'},
+    });
+
+    expect(proposal?.kind, RealtimeHomeUpdateKind.refreshSummary);
+  });
 }
