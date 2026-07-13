@@ -584,6 +584,37 @@ export const affinityEvents = pgTable(
     ),
   ],
 );
+
+export const chatSessions = pgTable(
+  "chat_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    title: varchar("title", { length: 120 }).notNull(),
+    summary: text("summary"),
+    status: varchar("status", { length: 30 }).notNull().default("ACTIVE"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("chat_sessions_user_room_status_updated_idx").on(
+      t.userId,
+      t.roomId,
+      t.status,
+      t.updatedAt,
+    ),
+  ],
+);
 export const chatMessages = pgTable(
   "chat_messages",
   {
@@ -591,14 +622,55 @@ export const chatMessages = pgTable(
     roomId: uuid("room_id")
       .notNull()
       .references(() => rooms.id),
+    sessionId: uuid("session_id").references(() => chatSessions.id),
     senderType: varchar("sender_type", { length: 30 }).notNull(),
+    messageType: varchar("message_type", { length: 30 })
+      .notNull()
+      .default("TEXT"),
     content: text("content").notNull(),
+    structuredPayload: jsonb("structured_payload"),
     commandId: uuid("command_id").references(() => commands.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("chat_room_time_idx").on(t.roomId, t.createdAt)],
+  (t) => [
+    index("chat_room_time_idx").on(t.roomId, t.createdAt),
+    index("chat_session_time_idx").on(t.sessionId, t.createdAt, t.id),
+  ],
+);
+
+export const commandDrafts = pgTable(
+  "command_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => chatSessions.id),
+    sourceMessageId: uuid("source_message_id")
+      .notNull()
+      .references(() => chatMessages.id),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    intent: varchar("intent", { length: 40 }).notNull(),
+    arguments: jsonb("arguments").notNull(),
+    confirmationSummary: text("confirmation_summary").notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("DRAFT"),
+    commandId: uuid("command_id").references(() => commands.id),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("command_drafts_session_status_idx").on(t.sessionId, t.status),
+    index("command_drafts_room_status_idx").on(t.roomId, t.status),
+    index("command_drafts_user_status_idx").on(t.createdByUserId, t.status),
+  ],
 );
 
 export const smartCachePolicies = pgTable("smart_cache_policies", {
