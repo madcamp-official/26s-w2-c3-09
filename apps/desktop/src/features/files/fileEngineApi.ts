@@ -89,6 +89,23 @@ export type ProposalReport = {
   proposals: Proposal[];
 };
 
+export type CleanlinessDeduction = {
+  reasonCode: string;
+  count: number;
+  points: number;
+};
+
+export type CleanlinessSnapshot = {
+  score: number;
+  metrics: {
+    totalFileCount: number;
+    managedFileCount: number;
+    unorganizedFileCount: number;
+    deductions: CleanlinessDeduction[];
+  };
+  calculatedAt: string;
+};
+
 export type AutoApprovalPolicy = {
   root_id: string;
   enabled: boolean;
@@ -248,6 +265,10 @@ export function searchManagedRoot(rootId: string, query: string) {
 
 export function proposeFileChanges(rootId: string) {
   return invokeCommand<ProposalReport>("propose_file_changes", { rootId });
+}
+
+export function calculateCleanlinessSnapshot(rootId: string) {
+  return invokeCommand<CleanlinessSnapshot>("calculate_cleanliness_snapshot", { rootId });
 }
 
 /**

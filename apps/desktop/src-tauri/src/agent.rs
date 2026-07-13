@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::cleanliness::CleanlinessSnapshot;
 use crate::command_processor::AgentProposalSubmission;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -241,6 +242,16 @@ pub struct AgentCachedFile {
     pub size_bytes: u64,
     pub sha256: String,
     pub freshness_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRoomSnapshot {
+    pub snapshot_id: String,
+    pub room_id: String,
+    pub score: u8,
+    pub metrics: Value,
+    pub calculated_at: String,
 }
 
 /// Connection parameters for the realtime Socket.IO client. Intentionally not `Serialize`: the
@@ -1095,6 +1106,30 @@ impl AgentRuntime {
         result
     }
 
+    pub async fn submit_room_snapshot(
+        &self,
+        room_id: String,
+        snapshot: CleanlinessSnapshot,
+    ) -> Result<AgentRoomSnapshot, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        validate_cleanliness_snapshot(&snapshot)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<RoomSnapshotResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms/{room_id}/snapshots"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&snapshot),
+            )
+            .await
+            .and_then(|response| validate_room_snapshot_response(&room_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     pub async fn complete_smart_cache_upload(
         &self,
         reservation_id: String,
@@ -1564,6 +1599,16 @@ struct CachedFileResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RoomSnapshotResponse {
+    id: String,
+    room_id: String,
+    score: u8,
+    metrics: Value,
+    calculated_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExecutionResponse {
     id: String,
     status: String,
@@ -2001,6 +2046,51 @@ fn validate_cached_file_response(
         size_bytes: response.size_bytes,
         sha256: response.sha256,
         freshness_status: response.freshness_status,
+    })
+}
+
+fn validate_cleanliness_snapshot(snapshot: &CleanlinessSnapshot) -> Result<(), AgentError> {
+    let metrics = &snapshot.metrics;
+    if snapshot.score > 100
+        || snapshot.calculated_at.trim().is_empty()
+        || metrics.managed_file_count > metrics.total_file_count
+        || metrics.unorganized_file_count > metrics.total_file_count
+        || metrics.managed_file_count + metrics.unorganized_file_count > metrics.total_file_count
+    {
+        return Err(validation_error("cleanliness snapshot failed validation"));
+    }
+
+    for deduction in &metrics.deductions {
+        if deduction.reason_code.trim().is_empty() || deduction.points > 100 {
+            return Err(validation_error(
+                "cleanliness snapshot deduction failed validation",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_room_snapshot_response(
+    expected_room_id: &str,
+    response: RoomSnapshotResponse,
+) -> Result<AgentRoomSnapshot, AgentError> {
+    if response.id.is_empty()
+        || response.room_id != expected_room_id
+        || response.score > 100
+        || !response.metrics.is_object()
+        || response.calculated_at.trim().is_empty()
+    {
+        return Err(invalid_response_error(
+            "room snapshot failed response validation",
+        ));
+    }
+    Ok(AgentRoomSnapshot {
+        snapshot_id: response.id,
+        room_id: response.room_id,
+        score: response.score,
+        metrics: response.metrics,
+        calculated_at: response.calculated_at,
     })
 }
 
@@ -2722,6 +2812,51 @@ mod tests {
         server.join().expect("server thread");
 
         assert_eq!(execution.status, "SUCCEEDED");
+    }
+
+    #[tokio::test]
+    async fn room_snapshot_uses_the_cleanliness_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/rooms/room-1/snapshots",
+            r#"{"id":"snapshot-1","roomId":"room-1","score":88,"metrics":{"totalFileCount":10,"managedFileCount":8,"unorganizedFileCount":2,"deductions":[]},"calculatedAt":"2026-07-13T00:00:00.000Z"}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/rooms/room-1/snapshots HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+                assert!(request.contains(r#""score":88"#));
+                assert!(request.contains(r#""totalFileCount":10"#));
+                assert!(request.contains(r#""calculatedAt":"2026-07-13T00:00:00.000Z""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+        let snapshot = crate::cleanliness::CleanlinessSnapshot {
+            score: 88,
+            metrics: crate::cleanliness::CleanlinessMetrics {
+                total_file_count: 10,
+                managed_file_count: 8,
+                unorganized_file_count: 2,
+                deductions: Vec::new(),
+            },
+            calculated_at: "2026-07-13T00:00:00.000Z".to_string(),
+        };
+
+        let saved = runtime
+            .submit_room_snapshot("room-1".to_string(), snapshot)
+            .await
+            .expect("room snapshot");
+        server.join().expect("server thread");
+
+        assert_eq!(saved.snapshot_id, "snapshot-1");
+        assert_eq!(saved.room_id, "room-1");
+        assert_eq!(saved.score, 88);
     }
 
     #[tokio::test]

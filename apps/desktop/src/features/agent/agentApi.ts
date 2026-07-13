@@ -59,6 +59,37 @@ export type AgentRoomSync = {
   created: boolean;
 };
 
+export type CleanlinessSnapshot = {
+  score: number;
+  metrics: {
+    totalFileCount: number;
+    managedFileCount: number;
+    unorganizedFileCount: number;
+    deductions: Array<{
+      reasonCode: string;
+      count: number;
+      points: number;
+    }>;
+  };
+  calculatedAt: string;
+};
+
+export type AgentRoomSnapshot = {
+  snapshot_id: string;
+  room_id: string;
+  score: number;
+  metrics: unknown;
+  calculated_at: string;
+};
+
+export type CleanlinessSnapshotSyncReport = {
+  root_id: string;
+  room_id: string;
+  room_created: boolean;
+  snapshot: CleanlinessSnapshot;
+  server_snapshot: AgentRoomSnapshot;
+};
+
 export type BackgroundRuntimeState = "stopped" | "running" | "suspended";
 
 export type BackgroundRuntimeStatus = {
@@ -268,6 +299,12 @@ export function flushAgentOutbox() {
 
 export function ensureAgentRoom(rootId: string, displayName: string) {
   return invokeAgentCommand<AgentRoomSync>("ensure_agent_room", { rootId, displayName });
+}
+
+export function submitCleanlinessSnapshot(rootId: string) {
+  return invokeAgentCommand<CleanlinessSnapshotSyncReport>("submit_cleanliness_snapshot", {
+    rootId
+  });
 }
 
 export function replayAgentEvents() {

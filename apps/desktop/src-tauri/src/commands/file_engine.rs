@@ -22,6 +22,9 @@ use file_engine_cli::undo::{
     undo_operation as undo_file_operation, undo_root as undo_file_root, UndoReport,
 };
 
+use crate::cleanliness::{
+    calculate_cleanliness_snapshot as calculate_cleanliness_snapshot_for_root, CleanlinessSnapshot,
+};
 use crate::storage::auto_approval::{
     AutoApprovalPolicyPatch, AutoApprovalPolicyRecord, AutoApprovalStore,
 };
@@ -187,6 +190,25 @@ pub fn propose_file_changes(
 ) -> Result<ProposalReport, String> {
     let root = resolve_root_id(store, &root_id)?;
     propose_file_changes_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn calculate_cleanliness_snapshot(
+    root_id: String,
+    store: tauri::State<'_, ManagedRootStore>,
+) -> Result<CleanlinessSnapshot, String> {
+    let root = resolve_root_id(&store, &root_id)?;
+    calculate_cleanliness_snapshot_impl(root)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn calculate_cleanliness_snapshot(
+    root_id: String,
+    store: &ManagedRootStore,
+) -> Result<CleanlinessSnapshot, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    calculate_cleanliness_snapshot_impl(root)
 }
 
 /// Local validation of an AI/rule-draft (plan item 12). Strictly parses and validates a candidate
@@ -632,6 +654,10 @@ fn search_managed_root_impl(root: String, query: String) -> Result<FileIndexRepo
 
 fn propose_file_changes_impl(root: String) -> Result<ProposalReport, String> {
     propose_for_root(root).map_err(command_error)
+}
+
+fn calculate_cleanliness_snapshot_impl(root: String) -> Result<CleanlinessSnapshot, String> {
+    calculate_cleanliness_snapshot_for_root(root)
 }
 
 fn precheck_file_changes_impl(

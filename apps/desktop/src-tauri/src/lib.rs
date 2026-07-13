@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod background;
+pub mod cleanliness;
 pub mod command_processor;
 pub mod commands;
 pub mod execution_processor;
@@ -116,6 +117,7 @@ pub fn run() {
             commands::file_engine::reindex_managed_root,
             commands::file_engine::search_managed_root,
             commands::file_engine::propose_file_changes,
+            commands::file_engine::calculate_cleanliness_snapshot,
             commands::file_engine::validate_rule_draft,
             commands::file_engine::get_auto_approval_policy,
             commands::file_engine::update_auto_approval_policy,
@@ -140,6 +142,7 @@ pub fn run() {
             commands::agent::process_agent_file_transfers,
             commands::agent::flush_agent_outbox,
             commands::agent::ensure_agent_room,
+            commands::agent::submit_cleanliness_snapshot,
             commands::agent::replay_agent_events,
             commands::agent::update_agent_command_status,
             commands::agent::forget_agent_device,
