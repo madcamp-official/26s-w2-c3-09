@@ -22,13 +22,22 @@ type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 const config = loadWorkerConfig();
 const connection = createDatabase(config.DATABASE_URL);
 const storage = new S3Client({
-  endpoint: config.OBJECT_STORAGE_ENDPOINT,
   region: config.OBJECT_STORAGE_REGION,
-  forcePathStyle: true,
-  credentials: {
-    accessKeyId: config.OBJECT_STORAGE_ACCESS_KEY_ID,
-    secretAccessKey: config.OBJECT_STORAGE_SECRET_ACCESS_KEY,
-  },
+  ...(config.OBJECT_STORAGE_ENDPOINT
+    ? {
+        endpoint: config.OBJECT_STORAGE_ENDPOINT,
+        forcePathStyle: true,
+      }
+    : {}),
+  ...(config.OBJECT_STORAGE_ACCESS_KEY_ID &&
+  config.OBJECT_STORAGE_SECRET_ACCESS_KEY
+    ? {
+        credentials: {
+          accessKeyId: config.OBJECT_STORAGE_ACCESS_KEY_ID,
+          secretAccessKey: config.OBJECT_STORAGE_SECRET_ACCESS_KEY,
+        },
+      }
+    : {}),
 });
 
 async function deleteObject(key: string) {
