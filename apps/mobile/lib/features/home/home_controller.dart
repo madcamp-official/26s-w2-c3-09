@@ -172,6 +172,8 @@ HomeData? reduceHomeDataForRealtimeUpdate({
       return rooms.length == current.rooms.length
           ? current
           : current.copyWith(rooms: rooms);
+    case RealtimeHomeUpdateKind.commandStatus:
+      return current;
     case RealtimeHomeUpdateKind.executionStatus:
       final roomId = update.roomId;
       final status = update.executionStatus;

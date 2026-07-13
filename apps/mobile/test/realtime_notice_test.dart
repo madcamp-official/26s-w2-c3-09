@@ -117,4 +117,23 @@ void main() {
     expect(execution?.roomId, 'room-a');
     expect(execution?.executionStatus, 'FAILED');
   });
+
+  test('command updated becomes a room-scoped command status patch', () {
+    final command = realtimeHomeUpdateFor('command.updated', {
+      'eventId': 'command-event',
+      'eventType': 'command.updated',
+      'aggregateId': 'command-a',
+      'roomId': 'room-a',
+      'payload': {
+        'commandId': 'command-a',
+        'roomId': 'room-a',
+        'status': 'ANALYZING',
+      },
+    });
+
+    expect(command?.kind, RealtimeHomeUpdateKind.commandStatus);
+    expect(command?.commandId, 'command-a');
+    expect(command?.roomId, 'room-a');
+    expect(command?.commandStatus, 'ANALYZING');
+  });
 }

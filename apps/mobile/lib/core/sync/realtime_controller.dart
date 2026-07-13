@@ -39,6 +39,7 @@ enum RealtimeHomeUpdateKind {
   presence,
   deviceRemoved,
   roomRemoved,
+  commandStatus,
   executionStatus,
   refreshSummary,
 }
@@ -49,8 +50,10 @@ class RealtimeHomeUpdate {
     required this.eventType,
     this.deviceId,
     this.roomId,
+    this.commandId,
     this.executionId,
     this.presence,
+    this.commandStatus,
     this.executionStatus,
   });
 
@@ -58,8 +61,10 @@ class RealtimeHomeUpdate {
   final String eventType;
   final String? deviceId;
   final String? roomId;
+  final String? commandId;
   final String? executionId;
   final String? presence;
+  final String? commandStatus;
   final String? executionStatus;
 }
 
@@ -90,6 +95,12 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
     _ => null,
   };
   final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final commandId = switch (payload['commandId'] ??
+      value['commandId'] ??
+      value['aggregateId']) {
     final String id when id.isNotEmpty => id,
     _ => null,
   };
@@ -127,6 +138,22 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
       eventType: event,
       roomId: roomId,
     );
+  }
+  if (event == 'command.updated') {
+    final status = payload['status'];
+    if (roomId != null &&
+        commandId != null &&
+        status is String &&
+        status.isNotEmpty) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.commandStatus,
+        eventType: event,
+        roomId: roomId,
+        commandId: commandId,
+        commandStatus: status,
+      );
+    }
+    return null;
   }
   if (event == 'execution.updated') {
     final status = payload['status'];

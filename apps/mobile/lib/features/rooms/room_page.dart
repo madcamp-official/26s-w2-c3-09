@@ -31,15 +31,48 @@ class _RoomContent {
   final Map<String, dynamic>? snapshot;
   final bool isOffline;
 
-  _RoomContent copyWith({List<Map<String, dynamic>>? executions}) =>
-      _RoomContent(
-        commands: commands,
-        proposals: proposals,
-        executions: executions ?? this.executions,
-        activity: activity,
-        snapshot: snapshot,
-        isOffline: isOffline,
-      );
+  _RoomContent copyWith({
+    List<Map<String, dynamic>>? commands,
+    List<Map<String, dynamic>>? executions,
+  }) => _RoomContent(
+    commands: commands ?? this.commands,
+    proposals: proposals,
+    executions: executions ?? this.executions,
+    activity: activity,
+    snapshot: snapshot,
+    isOffline: isOffline,
+  );
+}
+
+List<Map<String, dynamic>> patchCommandItemsForRealtimeUpdate({
+  required List<Map<String, dynamic>> commands,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  if (update.kind != RealtimeHomeUpdateKind.commandStatus ||
+      update.roomId != roomId ||
+      update.commandId == null ||
+      update.commandStatus == null) {
+    return commands;
+  }
+  final commandId = update.commandId!;
+  final status = update.commandStatus!;
+  var changed = false;
+  var matched = false;
+  final next = commands
+      .map((command) {
+        if (command['id'] != commandId) return command;
+        matched = true;
+        if (command['status'] == status) return command;
+        changed = true;
+        return {...command, 'status': status};
+      })
+      .toList(growable: true);
+  if (matched) return changed ? List.unmodifiable(next) : commands;
+  return List.unmodifiable([
+    {'id': commandId, 'status': status},
+    ...commands,
+  ]);
 }
 
 List<Map<String, dynamic>> patchExecutionItemsForRealtimeUpdate({
@@ -176,18 +209,33 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     final current = _latestContent;
     if (current == null) return false;
     final roomId = widget.room['id'] as String;
+    final commands = patchCommandItemsForRealtimeUpdate(
+      commands: current.commands,
+      update: update,
+      roomId: roomId,
+    );
     final executions = patchExecutionItemsForRealtimeUpdate(
       executions: current.executions,
       update: update,
       roomId: roomId,
     );
-    if (identical(executions, current.executions)) return false;
-    final patched = current.copyWith(executions: executions);
+    if (identical(commands, current.commands) &&
+        identical(executions, current.executions)) {
+      return false;
+    }
+    final patched = current.copyWith(
+      commands: commands,
+      executions: executions,
+    );
     _latestContent = patched;
     _content = Future.value(patched);
-    unawaited(
-      ref.read(displayCacheProvider).replaceExecutions(roomId, executions),
-    );
+    final cache = ref.read(displayCacheProvider);
+    if (!identical(commands, current.commands)) {
+      unawaited(cache.replaceCommands(roomId, commands));
+    }
+    if (!identical(executions, current.executions)) {
+      unawaited(cache.replaceExecutions(roomId, executions));
+    }
     setState(() {});
     return true;
   }

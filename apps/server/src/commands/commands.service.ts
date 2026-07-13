@@ -254,7 +254,11 @@ export class CommandsService {
         eventType: 'command.updated',
         aggregateType: 'command',
         aggregateId: updated.id,
-        payload: { status: updated.status },
+        payload: commandUpdatedPayload({
+          commandId: updated.id,
+          roomId: updated.roomId,
+          status: updated.status,
+        }),
       });
       return this.publicCommand(updated);
     });
@@ -264,4 +268,16 @@ export class CommandsService {
     const { createdByUserId: _, idempotencyKey: __, ...safe } = command;
     return safe;
   }
+}
+
+export function commandUpdatedPayload(input: {
+  commandId: string;
+  roomId: string;
+  status: string;
+}) {
+  return {
+    commandId: input.commandId,
+    roomId: input.roomId,
+    status: input.status,
+  };
 }
