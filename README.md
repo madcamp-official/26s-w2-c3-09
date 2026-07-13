@@ -1,5 +1,12 @@
 # MOUSEKEEPER (26s-w2-c3-09)
 
+## Recent implementation notes (2026-07-13)
+
+- Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but it no longer turns that loop into a full `/v1/home/summary` refresh.
+- Realtime Home updates remain item-scoped where payloads are complete: `presence.updated` patches only the affected device, lifecycle events remove only affected devices/rooms, and execution status patches only the affected room.
+- Desktop background runtime keeps heartbeat at 5 seconds, splits scheduled REST reconciliation into 15-second fast control-plane passes and 30-second heavy file-transfer/smart-cache passes, while Socket.IO wakeups still trigger an immediate full reconcile.
+- Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
+
 > 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md), 현재 완료/누락 판정은 [구현 이력 및 MVP 감사](HISTORY.md)를 기준으로 합니다.
 >
 > 현재 감사 기준: `B` (`origin/main` 기반, `2026-07-13`), A/B v1.4 통합 코드 포함

@@ -12,7 +12,9 @@ use tokio::time::{interval, Duration};
 #[cfg(feature = "tauri-commands")]
 const BACKGROUND_TICK_SECONDS: u64 = 5;
 #[cfg(feature = "tauri-commands")]
-const BACKGROUND_RECONCILE_EVERY_TICKS: u64 = 3;
+const BACKGROUND_FAST_RECONCILE_EVERY_TICKS: u64 = 3;
+#[cfg(feature = "tauri-commands")]
+const BACKGROUND_FULL_RECONCILE_EVERY_TICKS: u64 = 6;
 #[cfg(feature = "tauri-commands")]
 const AUTO_CLEANUP_INTERVAL_MS: i64 = 15 * 1000;
 /// Delay before retrying the realtime Socket.IO connection after a failed initial connect. The
@@ -282,7 +284,7 @@ async fn run_background_loop(
     stop_signal: watch::Sender<bool>,
 ) {
     if matches!(
-        run_background_tick(&app, &status, BackgroundTickMode::HeartbeatAndReconcile).await,
+        run_background_tick(&app, &status, BackgroundTickMode::HeartbeatAndFullReconcile,).await,
         BackgroundTickOutcome::Stop
     ) {
         let _ = stop_signal.send(true);
@@ -315,7 +317,7 @@ async fn run_background_loop(
                     status.last_realtime_signal_unix_ms = Some(unix_ms());
                 });
                 if matches!(
-                    run_background_tick(&app, &status, BackgroundTickMode::ReconcileOnly).await,
+                    run_background_tick(&app, &status, BackgroundTickMode::FullReconcileOnly).await,
                     BackgroundTickOutcome::Stop
                 ) {
                     let _ = stop_signal.send(true);
@@ -398,25 +400,38 @@ enum BackgroundTickOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BackgroundTickMode {
     HeartbeatOnly,
-    ReconcileOnly,
-    HeartbeatAndReconcile,
+    FullReconcileOnly,
+    HeartbeatAndFastReconcile,
+    HeartbeatAndFullReconcile,
 }
 
 #[cfg(feature = "tauri-commands")]
 impl BackgroundTickMode {
     fn sends_heartbeat(self) -> bool {
-        !matches!(self, Self::ReconcileOnly)
+        matches!(
+            self,
+            Self::HeartbeatOnly | Self::HeartbeatAndFastReconcile | Self::HeartbeatAndFullReconcile
+        )
     }
 
     fn reconciles(self) -> bool {
         !matches!(self, Self::HeartbeatOnly)
     }
+
+    fn runs_heavy_rest(self) -> bool {
+        matches!(
+            self,
+            Self::FullReconcileOnly | Self::HeartbeatAndFullReconcile
+        )
+    }
 }
 
 #[cfg(feature = "tauri-commands")]
 fn scheduled_tick_mode(tick: u64) -> BackgroundTickMode {
-    if tick % BACKGROUND_RECONCILE_EVERY_TICKS == 0 {
-        BackgroundTickMode::HeartbeatAndReconcile
+    if tick % BACKGROUND_FULL_RECONCILE_EVERY_TICKS == 0 {
+        BackgroundTickMode::HeartbeatAndFullReconcile
+    } else if tick % BACKGROUND_FAST_RECONCILE_EVERY_TICKS == 0 {
+        BackgroundTickMode::HeartbeatAndFastReconcile
     } else {
         BackgroundTickMode::HeartbeatOnly
     }
@@ -675,6 +690,19 @@ async fn run_background_tick(
         return BackgroundTickOutcome::Stop;
     }
 
+    // Fast reconcile runs every 15 seconds and handles low-cost control-plane work.
+    // File transfer and smart-cache discovery can touch storage/object APIs, so scheduled
+    // polling keeps those on the 30-second full pass. Realtime wakeups still use a full pass
+    // when the server tells us new agent work exists.
+    if !mode.runs_heavy_rest() {
+        flush_background_outbox(&agent, &outbox, status).await;
+        if stop_if_agent_revoked(app, status, &agent) {
+            return BackgroundTickOutcome::Stop;
+        }
+        emit_overlay_activity(app, activity);
+        return BackgroundTickOutcome::Continue;
+    }
+
     match crate::file_transfer_processor::process_pending_file_transfers(&agent, &roots, &outbox)
         .await
     {
@@ -744,7 +772,24 @@ async fn run_background_tick(
     // Deliver everything the command and decision passes just queued (plus any backlog from a
     // previous tick when the network was down). This runs last so a result enqueued moments ago
     // is sent in the same tick when the network is healthy.
-    match crate::outbox_processor::flush_outbox(&agent, &outbox).await {
+    flush_background_outbox(&agent, &outbox, status).await;
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
+    }
+
+    // Turn this whole pass into one character state for the overlay. This is best-effort: if no
+    // overlay window is open it is silently skipped.
+    emit_overlay_activity(app, activity);
+    BackgroundTickOutcome::Continue
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn flush_background_outbox(
+    agent: &crate::agent::AgentRuntime,
+    outbox: &crate::storage::outbox::OutboxStore,
+    status: &Arc<Mutex<BackgroundRuntimeStatus>>,
+) {
+    match crate::outbox_processor::flush_outbox(agent, outbox).await {
         Ok(report) => update_status(status, |status| {
             status.last_outbox_flush_unix_ms = Some(unix_ms());
             status.last_outbox_sent_count = report.sent_count;
@@ -760,14 +805,6 @@ async fn run_background_tick(
             status.last_error_message = Some(error);
         }),
     }
-    if stop_if_agent_revoked(app, status, &agent) {
-        return BackgroundTickOutcome::Stop;
-    }
-
-    // Turn this whole pass into one character state for the overlay. This is best-effort: if no
-    // overlay window is open it is silently skipped.
-    emit_overlay_activity(app, activity);
-    BackgroundTickOutcome::Continue
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -904,13 +941,23 @@ mod tests {
 
     #[cfg(feature = "tauri-commands")]
     #[test]
-    fn scheduled_ticks_keep_heartbeats_frequent_and_reconcile_every_fifteen_seconds() {
+    fn scheduled_ticks_keep_heartbeats_frequent_and_split_rest_reconcile() {
         assert_eq!(scheduled_tick_mode(1), BackgroundTickMode::HeartbeatOnly);
         assert_eq!(scheduled_tick_mode(2), BackgroundTickMode::HeartbeatOnly);
         assert_eq!(
             scheduled_tick_mode(3),
-            BackgroundTickMode::HeartbeatAndReconcile
+            BackgroundTickMode::HeartbeatAndFastReconcile
         );
+        assert!(scheduled_tick_mode(3).sends_heartbeat());
+        assert!(scheduled_tick_mode(3).reconciles());
+        assert!(!scheduled_tick_mode(3).runs_heavy_rest());
+        assert_eq!(
+            scheduled_tick_mode(6),
+            BackgroundTickMode::HeartbeatAndFullReconcile
+        );
+        assert!(scheduled_tick_mode(6).sends_heartbeat());
+        assert!(scheduled_tick_mode(6).reconciles());
+        assert!(scheduled_tick_mode(6).runs_heavy_rest());
     }
 
     #[test]

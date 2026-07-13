@@ -91,11 +91,10 @@ class _HomePageState extends ConsumerState<HomePage> {
     _reconcileLoop = HomeAuthoritativeReconcileLoop(
       reconcile: () =>
           ref.read(connectionGateControllerProvider.notifier).reconcile(),
-      onChanged: () => unawaited(
-        ref
-            .read(homeControllerProvider.notifier)
-            .reload(preserveCurrentOnError: true),
-      ),
+      // The five-second loop repairs only device/room liveness. Home summary
+      // data is refreshed by explicit user action or targeted realtime events,
+      // so a safety check cannot accidentally become a full home poll.
+      onChanged: () {},
     )..start();
   }
 
