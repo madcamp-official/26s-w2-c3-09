@@ -375,7 +375,10 @@ mod tests {
 
         let error =
             build_local_proposal_report(dir.path(), &[item]).expect_err("create must be refused");
-        assert!(error.contains("is not allowed"), "unexpected error: {error}");
+        assert!(
+            error.contains("is not allowed"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

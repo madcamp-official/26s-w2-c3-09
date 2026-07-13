@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { ensureAgentRoom } from "../agent/agentApi";
+import { ensureAgentRoom, submitCleanlinessSnapshot } from "../agent/agentApi";
 import {
   analyzeRoot,
   AutoApprovalPolicy,
   autoApproveFileChanges,
   BrowseEntry,
   browseRootTree,
+  calculateCleanlinessSnapshot,
+  CleanlinessSnapshot,
   DecisionEntry,
   executeFileChanges,
   ExecuteReport,
@@ -74,6 +76,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   const [resultLines, setResultLines] = useState<string[]>([]);
   const [roomSyncStates, setRoomSyncStates] = useState<Record<string, RoomSyncState>>({});
   const [precheckSnapshot, setPrecheckSnapshot] = useState<PrecheckSnapshot | null>(null);
+  const [cleanlinessSnapshot, setCleanlinessSnapshot] = useState<CleanlinessSnapshot | null>(null);
 
   const selectedRootIdRef = useRef(selectedRootId);
   const browsePathRef = useRef(browsePath);
@@ -387,6 +390,43 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     }
   }
 
+  async function calculateSelectedCleanliness() {
+    if (!selectedRootId) return;
+
+    setError(null);
+    setStatus("Calculating cleanliness");
+    try {
+      const snapshot = await calculateCleanlinessSnapshot(selectedRootId);
+      setCleanlinessSnapshot(snapshot);
+      setResultLines(formatCleanlinessLines(snapshot));
+      setStatus(`Cleanliness ${snapshot.score}/100`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Cleanliness calculation failed");
+    }
+  }
+
+  async function syncSelectedCleanliness() {
+    if (!selectedRootId) return;
+
+    setError(null);
+    setStatus("Syncing cleanliness");
+    try {
+      const report = await submitCleanlinessSnapshot(selectedRootId);
+      setCleanlinessSnapshot(report.snapshot);
+      setRoomSyncStates((current) => ({ ...current, [report.root_id]: "synced" }));
+      setResultLines([
+        ...formatCleanlinessLines(report.snapshot),
+        `room | ${report.room_id}${report.room_created ? " (created)" : ""}`,
+        `snapshot | ${report.server_snapshot.snapshot_id}`
+      ]);
+      setStatus(`Cleanliness synced ${report.snapshot.score}/100`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("Cleanliness sync failed");
+    }
+  }
+
   async function precheckSelectedRoot() {
     if (!selectedRootId || !proposal) return;
 
@@ -666,6 +706,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     setBrowsePath("");
     setSearchQuery("");
     setSearchResults(null);
+    setCleanlinessSnapshot(null);
   }
 
   function setDecision(item: Proposal, decision: DecisionState[string]) {
@@ -859,6 +900,20 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
             </button>
             <button
               type="button"
+              onClick={() => void calculateSelectedCleanliness()}
+              disabled={!selectedRootId}
+            >
+              Cleanliness
+            </button>
+            <button
+              type="button"
+              onClick={() => void syncSelectedCleanliness()}
+              disabled={!selectedRootId}
+            >
+              Sync cleanliness
+            </button>
+            <button
+              type="button"
               onClick={precheckSelectedRoot}
               disabled={!selectedRootId || !proposal}
             >
@@ -904,6 +959,13 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
             <p className="path-text">
               {readyProposalCount} ready, {approvedCount} approved, precheck{" "}
               {activePrecheckReady ? "ready" : activePrecheck ? "blocked" : "required"}
+            </p>
+          ) : null}
+          {cleanlinessSnapshot ? (
+            <p className="path-text">
+              Cleanliness {cleanlinessSnapshot.score}/100 |{" "}
+              {cleanlinessSnapshot.metrics.unorganizedFileCount} unorganized of{" "}
+              {cleanlinessSnapshot.metrics.totalFileCount}
             </p>
           ) : null}
           <p className="mode-note">
@@ -1140,6 +1202,18 @@ function formatBrowseSize(sizeBytes: number | null) {
 
 function formatProposal(item: Proposal) {
   return `${item.status} | ${item.from} -> ${item.to} | ${item.reason}`;
+}
+
+function formatCleanlinessLines(snapshot: CleanlinessSnapshot) {
+  return [
+    `score | ${snapshot.score}/100`,
+    `files | total ${snapshot.metrics.totalFileCount}, managed ${snapshot.metrics.managedFileCount}, unorganized ${snapshot.metrics.unorganizedFileCount}`,
+    `calculated | ${snapshot.calculatedAt}`,
+    ...snapshot.metrics.deductions.map(
+      (deduction) =>
+        `deduction | ${deduction.reasonCode} | count ${deduction.count} | -${deduction.points}`
+    )
+  ];
 }
 
 function formatExecuteLines(report: ExecuteReport) {

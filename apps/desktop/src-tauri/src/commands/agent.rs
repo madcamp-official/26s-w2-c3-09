@@ -1,11 +1,15 @@
 use crate::agent::{
-    AgentCommand, AgentConnectionStatus, AgentRoomSync, AgentRuntime, HeartbeatResult,
-    PairingSession, PairingStatus, SyncEvent,
+    AgentCommand, AgentConnectionStatus, AgentRoomSnapshot, AgentRoomSync, AgentRuntime,
+    HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
 };
+use crate::cleanliness::{calculate_cleanliness_snapshot, CleanlinessSnapshot};
 use crate::command_processor::{process_pending_commands, CommandProcessingReport};
 use crate::execution_processor::{process_pending_decisions, DecisionProcessingReport};
 use crate::file_browse_processor::{
     process_pending_file_browse_requests, FileBrowseProcessingReport,
+};
+use crate::file_transfer_processor::{
+    process_pending_file_transfers, FileTransferProcessingReport,
 };
 use crate::storage::agent_sync::AgentSyncStore;
 use crate::storage::managed_roots::ManagedRootStore;
@@ -16,6 +20,15 @@ pub struct SyncReplay {
     pub previous_cursor: u64,
     pub next_cursor: u64,
     pub events: Vec<SyncEvent>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct CleanlinessSnapshotSyncReport {
+    pub root_id: String,
+    pub room_id: String,
+    pub room_created: bool,
+    pub snapshot: CleanlinessSnapshot,
+    pub server_snapshot: AgentRoomSnapshot,
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -180,6 +193,25 @@ pub async fn process_agent_file_browse_requests(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub async fn process_agent_file_transfers(
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+    outbox: tauri::State<'_, OutboxStore>,
+) -> Result<FileTransferProcessingReport, String> {
+    process_pending_file_transfers(&runtime, &roots, &outbox).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn process_agent_file_transfers(
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+) -> Result<FileTransferProcessingReport, String> {
+    process_pending_file_transfers(runtime, roots, outbox).await
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub async fn flush_agent_outbox(
     runtime: tauri::State<'_, AgentRuntime>,
     outbox: tauri::State<'_, OutboxStore>,
@@ -218,6 +250,57 @@ pub async fn ensure_agent_room(
         .ensure_room_for_root(root_id, display_name)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn submit_cleanliness_snapshot(
+    root_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+) -> Result<CleanlinessSnapshotSyncReport, String> {
+    submit_cleanliness_snapshot_impl(root_id, &runtime, &roots).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn submit_cleanliness_snapshot(
+    root_id: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<CleanlinessSnapshotSyncReport, String> {
+    submit_cleanliness_snapshot_impl(root_id, runtime, roots).await
+}
+
+async fn submit_cleanliness_snapshot_impl(
+    root_id: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<CleanlinessSnapshotSyncReport, String> {
+    let managed_root = roots.get(&root_id)?;
+    if !managed_root.enabled {
+        return Err(format!("managed root is disabled: {root_id}"));
+    }
+
+    let snapshot = calculate_cleanliness_snapshot(&managed_root.root)?;
+    let room = runtime
+        .ensure_room_for_root(
+            managed_root.root_id.clone(),
+            managed_root.display_name.clone(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let server_snapshot = runtime
+        .submit_room_snapshot(room.room_id.clone(), snapshot.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    Ok(CleanlinessSnapshotSyncReport {
+        root_id: managed_root.root_id,
+        room_id: room.room_id,
+        room_created: room.created,
+        snapshot,
+        server_snapshot,
+    })
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -318,7 +401,11 @@ async fn forget_agent_device_impl(
     Ok(status)
 }
 
-#[cfg(test)]
+// These tests exercise the `not(feature = "tauri-commands")` variants above, which take a plain
+// `&AgentRuntime` so they are callable without a live Tauri `State`. The `tauri-commands` variants
+// need a running app to construct their `State` argument and are not unit-testable this way, so
+// this module only compiles for the CLI/no-tauri-commands build.
+#[cfg(all(test, not(feature = "tauri-commands")))]
 mod tests {
     use crate::agent::{AgentConnectionState, AgentRuntime};
 

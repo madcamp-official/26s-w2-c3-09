@@ -6,7 +6,7 @@ declare global {
   }
 }
 
-export type AgentConnectionState = "unconfigured" | "offline" | "connecting" | "online";
+export type AgentConnectionState = "unconfigured" | "offline" | "connecting" | "online" | "revoked";
 
 export type AgentErrorCode =
   | "UNCONFIGURED"
@@ -59,6 +59,37 @@ export type AgentRoomSync = {
   created: boolean;
 };
 
+export type CleanlinessSnapshot = {
+  score: number;
+  metrics: {
+    totalFileCount: number;
+    managedFileCount: number;
+    unorganizedFileCount: number;
+    deductions: Array<{
+      reasonCode: string;
+      count: number;
+      points: number;
+    }>;
+  };
+  calculatedAt: string;
+};
+
+export type AgentRoomSnapshot = {
+  snapshot_id: string;
+  room_id: string;
+  score: number;
+  metrics: unknown;
+  calculated_at: string;
+};
+
+export type CleanlinessSnapshotSyncReport = {
+  root_id: string;
+  room_id: string;
+  room_created: boolean;
+  snapshot: CleanlinessSnapshot;
+  server_snapshot: AgentRoomSnapshot;
+};
+
 export type BackgroundRuntimeState = "stopped" | "running" | "suspended";
 
 export type BackgroundRuntimeStatus = {
@@ -80,6 +111,14 @@ export type BackgroundRuntimeStatus = {
   last_file_browse_count: number;
   last_file_browse_completed_count: number;
   last_file_browse_failed_count: number;
+  last_file_transfer_poll_unix_ms: number | null;
+  last_file_transfer_count: number;
+  last_file_transfer_uploaded_count: number;
+  last_file_transfer_failed_count: number;
+  last_smart_cache_poll_unix_ms: number | null;
+  last_smart_cache_candidate_count: number;
+  last_smart_cache_uploaded_count: number;
+  last_smart_cache_failed_count: number;
   last_outbox_flush_unix_ms: number | null;
   last_outbox_sent_count: number;
   last_outbox_failed_count: number;
@@ -149,6 +188,36 @@ export type FileBrowseProcessingReport = {
   results: FileBrowseProcessingResult[];
 };
 
+export type FileTransferProcessingStatus = "completed" | "failed" | "skipped";
+
+export type FileTransferProcessingResult = {
+  transfer_id: string;
+  status: FileTransferProcessingStatus;
+  size_bytes: number | null;
+  sha256: string | null;
+  failure_code: string | null;
+  failure_reported: boolean;
+  message: string | null;
+};
+
+export type FileTransferProcessingReport = {
+  inspected_count: number;
+  uploaded_count: number;
+  failed_count: number;
+  skipped_count: number;
+  results: FileTransferProcessingResult[];
+};
+
+export type SmartCacheProcessingReport = {
+  inspected_count: number;
+  submitted_count: number;
+  approved_count: number;
+  uploaded_count: number;
+  failed_count: number;
+  skipped_count: number;
+  message: string | null;
+};
+
 export type SyncEvent = {
   event_id: string;
   event_type: string;
@@ -213,12 +282,29 @@ export function processAgentFileBrowseRequests() {
   return invokeAgentCommand<FileBrowseProcessingReport>("process_agent_file_browse_requests");
 }
 
+export function processAgentFileTransfers() {
+  return invokeAgentCommand<FileTransferProcessingReport>("process_agent_file_transfers");
+}
+
+export function processSmartCacheForRoom(roomId: string, limit = 25) {
+  return invokeAgentCommand<SmartCacheProcessingReport>("process_smart_cache_for_room", {
+    roomId,
+    limit
+  });
+}
+
 export function flushAgentOutbox() {
   return invokeAgentCommand<OutboxFlushReport>("flush_agent_outbox");
 }
 
 export function ensureAgentRoom(rootId: string, displayName: string) {
   return invokeAgentCommand<AgentRoomSync>("ensure_agent_room", { rootId, displayName });
+}
+
+export function submitCleanlinessSnapshot(rootId: string) {
+  return invokeAgentCommand<CleanlinessSnapshotSyncReport>("submit_cleanliness_snapshot", {
+    rootId
+  });
 }
 
 export function replayAgentEvents() {

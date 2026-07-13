@@ -15,16 +15,20 @@ const BACKGROUND_TICK_SECONDS: u64 = 15;
 /// REST background loop keeps working the whole time, so this only affects push responsiveness.
 #[cfg(feature = "tauri-commands")]
 const REALTIME_RECONNECT_SECONDS: u64 = 15;
+#[cfg(feature = "tauri-commands")]
+const DEVICE_REVOKED_REASON: &str = "desktop device pairing was revoked; pair the desktop again";
 /// Socket.IO event names that mean "there is new agent work or a state change worth a REST pass".
 /// Each one only wakes the REST loop; the events themselves are never treated as the source of
 /// truth (that stays `/v1/sync/events` replay and command/decision polling).
 #[cfg(feature = "tauri-commands")]
-const REALTIME_WAKE_EVENTS: [&str; 5] = [
+const REALTIME_WAKE_EVENTS: [&str; 7] = [
     "command.available",
     "command.updated",
     "proposal.created",
     "decision.created",
     "file.browse.requested",
+    "file.transfer.requested",
+    "smart-cache.updated",
 ];
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -47,6 +51,14 @@ pub struct BackgroundRuntimeStatus {
     pub last_file_browse_count: usize,
     pub last_file_browse_completed_count: usize,
     pub last_file_browse_failed_count: usize,
+    pub last_file_transfer_poll_unix_ms: Option<i64>,
+    pub last_file_transfer_count: usize,
+    pub last_file_transfer_uploaded_count: usize,
+    pub last_file_transfer_failed_count: usize,
+    pub last_smart_cache_poll_unix_ms: Option<i64>,
+    pub last_smart_cache_candidate_count: usize,
+    pub last_smart_cache_uploaded_count: usize,
+    pub last_smart_cache_failed_count: usize,
     pub last_outbox_flush_unix_ms: Option<i64>,
     pub last_outbox_sent_count: usize,
     pub last_outbox_failed_count: usize,
@@ -98,6 +110,14 @@ impl Default for BackgroundRuntime {
                 last_file_browse_count: 0,
                 last_file_browse_completed_count: 0,
                 last_file_browse_failed_count: 0,
+                last_file_transfer_poll_unix_ms: None,
+                last_file_transfer_count: 0,
+                last_file_transfer_uploaded_count: 0,
+                last_file_transfer_failed_count: 0,
+                last_smart_cache_poll_unix_ms: None,
+                last_smart_cache_candidate_count: 0,
+                last_smart_cache_uploaded_count: 0,
+                last_smart_cache_failed_count: 0,
                 last_outbox_flush_unix_ms: None,
                 last_outbox_sent_count: 0,
                 last_outbox_failed_count: 0,
@@ -121,13 +141,19 @@ impl BackgroundRuntime {
     pub fn start(&self, app: tauri::AppHandle) -> Result<BackgroundRuntimeStatus, String> {
         use tauri::Manager;
 
-        if app
+        let agent_status = app
             .state::<crate::agent::AgentRuntime>()
-            .connection_status()
-            .device_id
-            .is_none()
-        {
-            return self.start_suspended("desktop device pairing is required");
+            .connection_status();
+        if agent_status.device_id.is_none() {
+            let reason = if matches!(
+                agent_status.state,
+                crate::agent::AgentConnectionState::Revoked
+            ) {
+                DEVICE_REVOKED_REASON
+            } else {
+                "desktop device pairing is required"
+            };
+            return self.start_suspended(reason);
         }
 
         {
@@ -135,6 +161,22 @@ impl BackgroundRuntime {
                 .task
                 .lock()
                 .map_err(|_| "background task lock poisoned".to_string())?;
+            let should_clear_revoked_task = self
+                .status
+                .lock()
+                .map(|status| {
+                    status.state == BackgroundRuntimeState::Suspended
+                        && status.last_error_message.as_deref() == Some(DEVICE_REVOKED_REASON)
+                })
+                .unwrap_or(false);
+            if should_clear_revoked_task {
+                if let Some(background_task) = task.take() {
+                    background_task.handle.abort();
+                    if let Some(realtime_handle) = background_task.realtime_handle {
+                        realtime_handle.abort();
+                    }
+                }
+            }
             if task.is_some() {
                 return self.status();
             }
@@ -158,8 +200,14 @@ impl BackgroundRuntime {
                     ))
                 });
 
-            let handle =
-                tauri::async_runtime::spawn(run_background_loop(app, status, stop_rx, wake));
+            let stop_for_loop = stop.clone();
+            let handle = tauri::async_runtime::spawn(run_background_loop(
+                app,
+                status,
+                stop_rx,
+                wake,
+                stop_for_loop,
+            ));
             *task = Some(BackgroundTask {
                 stop,
                 handle,
@@ -218,14 +266,29 @@ async fn run_background_loop(
     status: Arc<Mutex<BackgroundRuntimeStatus>>,
     mut stop: watch::Receiver<bool>,
     wake: Arc<Notify>,
+    stop_signal: watch::Sender<bool>,
 ) {
-    run_background_tick(&app, &status).await;
+    if matches!(
+        run_background_tick(&app, &status).await,
+        BackgroundTickOutcome::Stop
+    ) {
+        let _ = stop_signal.send(true);
+        return;
+    }
 
     let mut ticker = interval(Duration::from_secs(BACKGROUND_TICK_SECONDS));
     ticker.tick().await;
     loop {
         tokio::select! {
-            _ = ticker.tick() => run_background_tick(&app, &status).await,
+            _ = ticker.tick() => {
+                if matches!(
+                    run_background_tick(&app, &status).await,
+                    BackgroundTickOutcome::Stop
+                ) {
+                    let _ = stop_signal.send(true);
+                    break;
+                }
+            }
             // A realtime notification arrived: run the same REST pass immediately instead of
             // waiting for the next interval. The event is only a signal; the tick below is what
             // actually reconciles state over REST.
@@ -233,7 +296,13 @@ async fn run_background_loop(
                 update_status(&status, |status| {
                     status.last_realtime_signal_unix_ms = Some(unix_ms());
                 });
-                run_background_tick(&app, &status).await;
+                if matches!(
+                    run_background_tick(&app, &status).await,
+                    BackgroundTickOutcome::Stop
+                ) {
+                    let _ = stop_signal.send(true);
+                    break;
+                }
             }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
@@ -301,13 +370,24 @@ async fn run_realtime_client(
 }
 
 #[cfg(feature = "tauri-commands")]
-async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<BackgroundRuntimeStatus>>) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackgroundTickOutcome {
+    Continue,
+    Stop,
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn run_background_tick(
+    app: &tauri::AppHandle,
+    status: &Arc<Mutex<BackgroundRuntimeStatus>>,
+) -> BackgroundTickOutcome {
     use tauri::Manager;
 
     let agent = app.state::<crate::agent::AgentRuntime>();
     let sync_store = app.state::<crate::storage::agent_sync::AgentSyncStore>();
     let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
     let outbox = app.state::<crate::storage::outbox::OutboxStore>();
+    let smart_cache = app.state::<crate::storage::smart_cache::SmartCacheStore>();
 
     // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
     let mut activity = crate::overlay::OverlayActivity::default();
@@ -319,9 +399,15 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             status.last_error_message = None;
         }),
         Err(error) => {
-            update_status(status, |status| {
-                status.last_error_message = Some(error.to_string());
-            });
+            let is_terminal_pairing_failure = error.is_terminal_pairing_failure();
+            let error_message = error.to_string();
+            if is_terminal_pairing_failure {
+                mark_suspended(status, DEVICE_REVOKED_REASON);
+            } else {
+                update_status(status, |status| {
+                    status.last_error_message = Some(error_message);
+                });
+            }
             // Heartbeat failure means we are offline; tell the overlay so the character can reflect
             // it, then stop this pass.
             emit_overlay_activity(
@@ -331,7 +417,11 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
                     ..crate::overlay::OverlayActivity::default()
                 },
             );
-            return;
+            return if is_terminal_pairing_failure {
+                BackgroundTickOutcome::Stop
+            } else {
+                BackgroundTickOutcome::Continue
+            };
         }
     }
 
@@ -343,6 +433,9 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             Err(error) => update_status(status, |status| {
                 status.last_error_message = Some(error);
             }),
+        }
+        if stop_if_agent_revoked(app, status, &agent) {
+            return BackgroundTickOutcome::Stop;
         }
     }
 
@@ -373,6 +466,9 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             });
         }
     }
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
+    }
 
     match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox).await {
         Ok(report) => {
@@ -397,6 +493,9 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
                 status.last_error_message = Some(error);
             });
         }
+    }
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
     }
 
     match crate::file_browse_processor::process_pending_file_browse_requests(&agent, &roots).await {
@@ -424,6 +523,75 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             });
         }
     }
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
+    }
+
+    match crate::file_transfer_processor::process_pending_file_transfers(&agent, &roots, &outbox)
+        .await
+    {
+        Ok(report) => {
+            if report.failed_count > 0 {
+                activity.had_error = true;
+            }
+            update_status(status, |status| {
+                status.last_file_transfer_poll_unix_ms = Some(unix_ms());
+                status.last_file_transfer_count = report.inspected_count;
+                status.last_file_transfer_uploaded_count = report.uploaded_count;
+                status.last_file_transfer_failed_count = report.failed_count;
+                if report.failed_count > 0 {
+                    status.last_error_message =
+                        Some(format!("{} file transfer(s) failed", report.failed_count));
+                }
+            });
+        }
+        Err(error) => {
+            activity.had_error = true;
+            update_status(status, |status| {
+                status.last_error_message = Some(error);
+            });
+        }
+    }
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
+    }
+
+    match crate::smart_cache_processor::process_smart_cache_for_enabled_rooms(
+        &agent,
+        &roots,
+        &smart_cache,
+        &outbox,
+        25,
+    )
+    .await
+    {
+        Ok(report) => {
+            if report.failed_count > 0 {
+                activity.had_error = true;
+            }
+            update_status(status, |status| {
+                status.last_smart_cache_poll_unix_ms = Some(unix_ms());
+                status.last_smart_cache_candidate_count = report.inspected_count;
+                status.last_smart_cache_uploaded_count = report.uploaded_count;
+                status.last_smart_cache_failed_count = report.failed_count;
+                if report.failed_count > 0 {
+                    status.last_error_message = Some(format!(
+                        "{} smart cache item(s) failed",
+                        report.failed_count
+                    ));
+                }
+            });
+        }
+        Err(error) => {
+            activity.had_error = true;
+            update_status(status, |status| {
+                status.last_error_message = Some(error);
+            });
+        }
+    }
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
+    }
 
     // Deliver everything the command and decision passes just queued (plus any backlog from a
     // previous tick when the network was down). This runs last so a result enqueued moments ago
@@ -444,10 +612,14 @@ async fn run_background_tick(app: &tauri::AppHandle, status: &Arc<Mutex<Backgrou
             status.last_error_message = Some(error);
         }),
     }
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
+    }
 
     // Turn this whole pass into one character state for the overlay. This is best-effort: if no
     // overlay window is open it is silently skipped.
     emit_overlay_activity(app, activity);
+    BackgroundTickOutcome::Continue
 }
 
 /// Emits the derived character state to the overlay window, if one is open. The overlay bridge is
@@ -459,6 +631,30 @@ fn emit_overlay_activity(app: &tauri::AppHandle, activity: crate::overlay::Overl
     let overlay = app.state::<crate::overlay::OverlayRuntime>();
     let event = crate::overlay::character_event_for(&activity);
     crate::commands::overlay::emit_character_event_if_open(app, &overlay, &event);
+}
+
+#[cfg(feature = "tauri-commands")]
+fn stop_if_agent_revoked(
+    app: &tauri::AppHandle,
+    status: &Arc<Mutex<BackgroundRuntimeStatus>>,
+    agent: &crate::agent::AgentRuntime,
+) -> bool {
+    if !matches!(
+        agent.connection_status().state,
+        crate::agent::AgentConnectionState::Revoked
+    ) {
+        return false;
+    }
+
+    mark_suspended(status, DEVICE_REVOKED_REASON);
+    emit_overlay_activity(
+        app,
+        crate::overlay::OverlayActivity {
+            had_error: true,
+            ..crate::overlay::OverlayActivity::default()
+        },
+    );
+    true
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -552,6 +748,10 @@ mod tests {
         assert_eq!(status.last_file_browse_count, 0);
         assert_eq!(status.last_file_browse_completed_count, 0);
         assert_eq!(status.last_file_browse_failed_count, 0);
+        assert!(status.last_file_transfer_poll_unix_ms.is_none());
+        assert_eq!(status.last_file_transfer_count, 0);
+        assert_eq!(status.last_file_transfer_uploaded_count, 0);
+        assert_eq!(status.last_file_transfer_failed_count, 0);
         assert!(status.last_outbox_flush_unix_ms.is_none());
         assert_eq!(status.last_outbox_sent_count, 0);
         assert_eq!(status.last_outbox_failed_count, 0);

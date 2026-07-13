@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "character-overlay",
+  "description": "Character overlay permissions without file management or autostart controls",
+  "windows": ["character-overlay"],
+  "permissions": ["core:default"]
+}

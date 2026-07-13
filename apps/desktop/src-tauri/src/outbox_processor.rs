@@ -19,6 +19,8 @@ const OUTBOX_FLUSH_BATCH: i64 = 50;
 const KIND_EXECUTION_RESULT: &str = "execution_result";
 const KIND_PROPOSAL: &str = "proposal";
 const KIND_COMMAND_STATUS: &str = "command_status";
+const KIND_FILE_TRANSFER_COMPLETION: &str = "file_transfer_completion";
+const KIND_SMART_CACHE_COMPLETION: &str = "smart_cache_completion";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OutboxFlushReport {
@@ -41,6 +43,24 @@ struct ExecutionResultPayload {
 struct CommandStatusPayload {
     command_id: String,
     status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferCompletionPayload {
+    transfer_id: String,
+    size_bytes: u64,
+    sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheCompletionPayload {
+    reservation_id: String,
+    size_bytes: u64,
+    sha256: String,
+    usage_score: i64,
+    manual_pin: bool,
 }
 
 /// Queues the terminal result of a claimed execution. Uses the execution id as both the dedup key
@@ -86,6 +106,44 @@ pub fn enqueue_command_status(
     // Key by command + status so an ANALYZING and a later FAILED for the same command stay distinct.
     let key = format!("{command_id}:{status}");
     outbox.enqueue(KIND_COMMAND_STATUS, &key, &payload_json)
+}
+
+pub fn enqueue_file_transfer_completion(
+    outbox: &OutboxStore,
+    transfer_id: &str,
+    size_bytes: u64,
+    sha256: &str,
+) -> Result<(), String> {
+    let payload = FileTransferCompletionPayload {
+        transfer_id: transfer_id.to_string(),
+        size_bytes,
+        sha256: sha256.to_string(),
+    };
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| format!("cannot encode file transfer completion: {error}"))?;
+    let key = file_transfer_completion_key(transfer_id);
+    outbox.enqueue(KIND_FILE_TRANSFER_COMPLETION, &key, &payload_json)
+}
+
+pub fn enqueue_smart_cache_completion(
+    outbox: &OutboxStore,
+    reservation_id: &str,
+    size_bytes: u64,
+    sha256: &str,
+    usage_score: i64,
+    manual_pin: bool,
+) -> Result<(), String> {
+    let payload = SmartCacheCompletionPayload {
+        reservation_id: reservation_id.to_string(),
+        size_bytes,
+        sha256: sha256.to_string(),
+        usage_score,
+        manual_pin,
+    };
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| format!("cannot encode smart cache completion: {error}"))?;
+    let key = smart_cache_completion_key(reservation_id);
+    outbox.enqueue(KIND_SMART_CACHE_COMPLETION, &key, &payload_json)
 }
 
 /// Delivers pending outbox rows to the server. Transient failures leave the row pending for the
@@ -156,6 +214,34 @@ async fn dispatch(
                 .map(|_| ())
                 .map_err(classify)
         }
+        KIND_FILE_TRANSFER_COMPLETION => {
+            let payload = decode::<FileTransferCompletionPayload>(&item.payload_json)?;
+            agent
+                .complete_file_transfer_upload(
+                    payload.transfer_id,
+                    item.idempotency_key.clone(),
+                    payload.size_bytes,
+                    payload.sha256,
+                )
+                .await
+                .map(|_| ())
+                .map_err(classify)
+        }
+        KIND_SMART_CACHE_COMPLETION => {
+            let payload = decode::<SmartCacheCompletionPayload>(&item.payload_json)?;
+            agent
+                .complete_smart_cache_upload(
+                    payload.reservation_id,
+                    item.idempotency_key.clone(),
+                    payload.size_bytes,
+                    payload.sha256,
+                    payload.usage_score,
+                    payload.manual_pin,
+                )
+                .await
+                .map(|_| ())
+                .map_err(classify)
+        }
         // A row with an unknown kind cannot be delivered by this build; dead-letter it rather than
         // retrying forever.
         other => Err(DispatchError::Terminal(format!("UNKNOWN_KIND:{other}"))),
@@ -176,14 +262,24 @@ fn classify(error: crate::agent::AgentError) -> DispatchError {
     }
 }
 
+pub fn file_transfer_completion_key(transfer_id: &str) -> String {
+    format!("{transfer_id}-complete")
+}
+
+pub fn smart_cache_completion_key(reservation_id: &str) -> String {
+    format!("{reservation_id}-complete")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
     use super::{
-        enqueue_command_status, enqueue_execution_result, enqueue_proposal, KIND_COMMAND_STATUS,
-        KIND_EXECUTION_RESULT, KIND_PROPOSAL,
+        enqueue_command_status, enqueue_execution_result, enqueue_file_transfer_completion,
+        enqueue_proposal, enqueue_smart_cache_completion, file_transfer_completion_key,
+        smart_cache_completion_key, KIND_COMMAND_STATUS, KIND_EXECUTION_RESULT,
+        KIND_FILE_TRANSFER_COMPLETION, KIND_PROPOSAL, KIND_SMART_CACHE_COMPLETION,
     };
     use crate::command_processor::{
         AgentProposalActionType, AgentProposalConflictState, AgentProposalItem,
@@ -258,5 +354,40 @@ mod tests {
         let batch = store.pending_batch(10).expect("batch");
         assert_eq!(batch.len(), 2);
         assert!(batch.iter().all(|item| item.kind == KIND_COMMAND_STATUS));
+    }
+
+    #[test]
+    fn file_transfer_completion_is_queued_under_stable_completion_key() {
+        let (_temp, store) = store();
+        enqueue_file_transfer_completion(&store, "transfer-1", 5, &"a".repeat(64))
+            .expect("enqueue completion");
+
+        let batch = store.pending_batch(10).expect("batch");
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].kind, KIND_FILE_TRANSFER_COMPLETION);
+        assert_eq!(
+            batch[0].idempotency_key,
+            file_transfer_completion_key("transfer-1")
+        );
+        assert!(batch[0].payload_json.contains(r#""sizeBytes":5"#));
+    }
+
+    #[test]
+    fn smart_cache_completion_is_queued_under_stable_completion_key() {
+        let (_temp, store) = store();
+        enqueue_smart_cache_completion(&store, "reservation-1", 5, &"b".repeat(64), 42, true)
+            .expect("enqueue completion");
+
+        let batch = store.pending_batch(10).expect("batch");
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].kind, KIND_SMART_CACHE_COMPLETION);
+        assert_eq!(
+            batch[0].idempotency_key,
+            smart_cache_completion_key("reservation-1")
+        );
+        assert!(batch[0].payload_json.contains(r#""usageScore":42"#));
+        assert!(batch[0].payload_json.contains(r#""manualPin":true"#));
     }
 }

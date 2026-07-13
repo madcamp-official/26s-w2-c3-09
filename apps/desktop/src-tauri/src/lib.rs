@@ -1,11 +1,14 @@
 pub mod agent;
 pub mod background;
+pub mod cleanliness;
 pub mod command_processor;
 pub mod commands;
 pub mod execution_processor;
 pub mod file_browse_processor;
+pub mod file_transfer_processor;
 pub mod outbox_processor;
 pub mod overlay;
+pub mod smart_cache_processor;
 pub mod storage;
 #[cfg(feature = "tauri-commands")]
 pub mod tray;
@@ -27,6 +30,7 @@ pub fn run() {
         .manage(storage::auto_approval::AutoApprovalStore::default())
         .manage(storage::managed_roots::ManagedRootStore::default())
         .manage(storage::outbox::OutboxStore::default())
+        .manage(storage::smart_cache::SmartCacheStore::default())
         .manage(storage::watchers::WatcherStore::default())
         .setup(|app| {
             use tauri::Manager;
@@ -69,6 +73,15 @@ pub fn run() {
             outbox
                 .load_from_db(outbox_path)
                 .map_err(|error| format!("cannot load desktop outbox: {error}"))?;
+            let smart_cache = app.state::<storage::smart_cache::SmartCacheStore>();
+            let smart_cache_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| format!("cannot resolve app data directory: {error}"))?
+                .join("smart-cache.db");
+            smart_cache
+                .load_from_db(smart_cache_path)
+                .map_err(|error| format!("cannot load smart cache metadata: {error}"))?;
             let watchers = app.state::<storage::watchers::WatcherStore>();
             let restore_results = watcher_lifecycle::restore_startup_watchers(
                 app.handle().clone(),
@@ -104,6 +117,7 @@ pub fn run() {
             commands::file_engine::reindex_managed_root,
             commands::file_engine::search_managed_root,
             commands::file_engine::propose_file_changes,
+            commands::file_engine::calculate_cleanliness_snapshot,
             commands::file_engine::validate_rule_draft,
             commands::file_engine::get_auto_approval_policy,
             commands::file_engine::update_auto_approval_policy,
@@ -125,8 +139,10 @@ pub fn run() {
             commands::agent::process_agent_commands,
             commands::agent::process_agent_decisions,
             commands::agent::process_agent_file_browse_requests,
+            commands::agent::process_agent_file_transfers,
             commands::agent::flush_agent_outbox,
             commands::agent::ensure_agent_room,
+            commands::agent::submit_cleanliness_snapshot,
             commands::agent::replay_agent_events,
             commands::agent::update_agent_command_status,
             commands::agent::forget_agent_device,
@@ -134,6 +150,10 @@ pub fn run() {
             commands::overlay::emit_character_event,
             commands::overlay::show_overlay,
             commands::overlay::hide_overlay,
+            commands::smart_cache::record_smart_cache_usage_event,
+            commands::smart_cache::update_smart_cache_file_preference,
+            commands::smart_cache::list_smart_cache_candidates,
+            commands::smart_cache::process_smart_cache_for_room,
             commands::watcher::start_watching_root,
             commands::watcher::stop_watching_root,
             commands::watcher::is_watching_root,

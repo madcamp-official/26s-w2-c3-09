@@ -449,6 +449,9 @@ export class SmartCacheService {
         approvedReservations.map(async (reservation) => ({
           reservationId: reservation.id,
           status: reservation.status,
+          sourceRelativePath: reservation.sourceRelativePath,
+          sourceVersionHash: reservation.sourceVersionHash,
+          sizeBytes: reservation.reservedBytes,
           ...(reservation.status === 'RESERVED'
             ? {
                 uploadUrl: await this.storage.uploadUrl(

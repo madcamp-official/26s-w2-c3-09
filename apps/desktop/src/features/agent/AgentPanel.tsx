@@ -18,6 +18,8 @@ import {
   processAgentCommands,
   processAgentDecisions,
   processAgentFileBrowseRequests,
+  processAgentFileTransfers,
+  processSmartCacheForRoom,
   flushAgentOutbox,
   pollAgentCommands,
   pollAgentPairing,
@@ -43,6 +45,7 @@ export function AgentPanel() {
   const [deviceName, setDeviceName] = useState("HouseMouse Desktop");
   const [pairing, setPairing] = useState<PairingSession | null>(null);
   const [commands, setCommands] = useState<AgentCommand[]>([]);
+  const [smartCacheRoomId, setSmartCacheRoomId] = useState("");
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
   const [replayMotion, setReplayMotion] = useState<HousemouseMotion | null>(null);
@@ -261,6 +264,42 @@ export function AgentPanel() {
     }
   }
 
+  async function processFileTransfersNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await processAgentFileTransfers();
+      setLastProcessedSummary(
+        `file transfer: ${report.uploaded_count} uploaded, ${report.failed_count} failed, ${report.skipped_count} skipped of ${report.inspected_count}`
+      );
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function processSmartCacheNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await processSmartCacheForRoom(smartCacheRoomId.trim());
+      setLastProcessedSummary(
+        `smart cache: ${report.uploaded_count} uploaded, ${report.approved_count} approved, ${report.failed_count} failed, ${report.skipped_count} skipped of ${report.inspected_count}${report.message ? ` (${report.message})` : ""}`
+      );
+      await refreshBackground();
+      await refreshConnection();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      await refreshConnection();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function flushOutboxNow() {
     setBusy(true);
     setError(null);
@@ -372,6 +411,18 @@ export function AgentPanel() {
           <button disabled={busy} onClick={() => void processFileBrowseNow()}>
             Process file browse
           </button>
+          <button disabled={busy} onClick={() => void processFileTransfersNow()}>
+            Process file transfers
+          </button>
+          <input
+            aria-label="Smart cache room id"
+            placeholder="Room id for smart cache"
+            value={smartCacheRoomId}
+            onChange={(event) => setSmartCacheRoomId(event.target.value)}
+          />
+          <button disabled={busy || !smartCacheRoomId.trim()} onClick={() => void processSmartCacheNow()}>
+            Process smart cache
+          </button>
           <button disabled={busy} onClick={() => void flushOutboxNow()}>
             Flush outbox
           </button>
@@ -426,6 +477,18 @@ export function AgentPanel() {
               {background.last_file_browse_count} | failed{" "}
               {background.last_file_browse_failed_count} | poll{" "}
               {formatRuntimeTime(background.last_file_browse_poll_unix_ms)}
+            </small>
+            <small>
+              file transfers {background.last_file_transfer_uploaded_count}/
+              {background.last_file_transfer_count} | failed{" "}
+              {background.last_file_transfer_failed_count} | poll{" "}
+              {formatRuntimeTime(background.last_file_transfer_poll_unix_ms)}
+            </small>
+            <small>
+              smart cache {background.last_smart_cache_uploaded_count}/
+              {background.last_smart_cache_candidate_count} | failed{" "}
+              {background.last_smart_cache_failed_count} | poll{" "}
+              {formatRuntimeTime(background.last_smart_cache_poll_unix_ms)}
             </small>
             <small>
               outbox sent {background.last_outbox_sent_count} | failed{" "}

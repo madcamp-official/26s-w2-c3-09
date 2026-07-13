@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::cleanliness::CleanlinessSnapshot;
 use crate::command_processor::AgentProposalSubmission;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,7 @@ pub enum AgentConnectionState {
     Offline,
     Connecting,
     Online,
+    Revoked,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -151,6 +153,105 @@ pub enum AgentFileBrowseFailureCode {
     TimedOut,
     CursorInvalidated,
     OutsideManagedRoot,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentFileTransfer {
+    pub transfer_id: String,
+    pub room_id: String,
+    pub source_relative_path: String,
+    pub status: String,
+    pub expires_at: String,
+    pub size_bytes: Option<u64>,
+    pub sha256: Option<String>,
+    pub failure_code: Option<AgentFileTransferFailureCode>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentFileTransferSourceVersion {
+    pub file_id: String,
+    pub size_bytes: u64,
+    pub modified_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentFileTransferUploadTarget {
+    pub transfer_id: String,
+    pub upload_url: String,
+    pub expires_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AgentFileTransferFailureCode {
+    SourceNotFound,
+    SourceChanged,
+    OutsideManagedRoot,
+    SizeLimitExceeded,
+    ChecksumMismatch,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCachePolicy {
+    pub room_id: String,
+    pub enabled: bool,
+    pub quota_bytes: u64,
+    pub max_file_bytes: u64,
+    pub excluded_patterns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheCandidate {
+    pub source_relative_path: String,
+    pub source_version: Value,
+    pub source_version_hash: String,
+    pub size_bytes: u64,
+    pub usage_score: i64,
+    pub manual_pin: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheReservation {
+    pub reservation_id: String,
+    pub status: String,
+    pub source_relative_path: String,
+    pub source_version_hash: String,
+    pub size_bytes: u64,
+    pub upload_url: Option<String>,
+    pub expires_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheCandidateBatchResult {
+    pub batch_id: String,
+    pub approved: Vec<AgentSmartCacheReservation>,
+    pub rejected_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCachedFile {
+    pub cached_file_id: String,
+    pub source_relative_path: String,
+    pub source_version_hash: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub freshness_status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentRoomSnapshot {
+    pub snapshot_id: String,
+    pub room_id: String,
+    pub score: u8,
+    pub metrics: Value,
+    pub calculated_at: String,
 }
 
 /// Connection parameters for the realtime Socket.IO client. Intentionally not `Serialize`: the
@@ -591,6 +692,34 @@ impl AgentRuntime {
         })
     }
 
+    pub async fn list_rooms(&self) -> Result<Vec<AgentRoomSync>, AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<ServerRoom>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|rooms| validate_server_rooms(&credential.device_id, rooms))
+            .map(|rooms| {
+                rooms
+                    .into_iter()
+                    .map(|room| AgentRoomSync {
+                        room_id: room.id,
+                        root_id: room.root_alias,
+                        name: room.name,
+                        created: false,
+                    })
+                    .collect()
+            });
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     pub async fn replay_events(
         &self,
         after: u64,
@@ -800,6 +929,275 @@ impl AgentRuntime {
         response
     }
 
+    pub async fn pending_file_transfers(&self) -> Result<Vec<AgentFileTransfer>, AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<FileTransferResponse>>(
+                self.http
+                    .get(format!(
+                        "{base_url}/v1/devices/{}/file-transfers/pending",
+                        credential.device_id
+                    ))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(validate_file_transfers);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn request_file_transfer_upload_target(
+        &self,
+        transfer_id: String,
+        source_version: AgentFileTransferSourceVersion,
+    ) -> Result<AgentFileTransferUploadTarget, AgentError> {
+        validate_opaque_value("file transfer id", &transfer_id, 200)?;
+        validate_source_version(&source_version)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<FileTransferUploadTargetResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-transfers/{transfer_id}/upload-target"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({ "sourceVersion": source_version })),
+            )
+            .await
+            .and_then(|response| validate_upload_target_response(&transfer_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn complete_file_transfer_upload(
+        &self,
+        transfer_id: String,
+        idempotency_key: String,
+        size_bytes: u64,
+        sha256: String,
+    ) -> Result<AgentFileTransfer, AgentError> {
+        validate_opaque_value("file transfer id", &transfer_id, 200)?;
+        validate_opaque_value(
+            "file transfer completion idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        if size_bytes == 0 {
+            return Err(validation_error(
+                "completed file transfer sizeBytes must be positive",
+            ));
+        }
+        validate_sha256(&sha256)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<FileTransferResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-transfers/{transfer_id}/complete-upload"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({ "sizeBytes": size_bytes, "sha256": sha256 })),
+            )
+            .await
+            .and_then(validate_file_transfer_response)
+            .and_then(|transfer| validate_transfer_id_match(&transfer_id, transfer));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn fail_file_transfer(
+        &self,
+        transfer_id: String,
+        failure_code: AgentFileTransferFailureCode,
+    ) -> Result<AgentFileTransfer, AgentError> {
+        validate_opaque_value("file transfer id", &transfer_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<FileTransferResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/file-transfers/{transfer_id}/failure"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({ "failureCode": failure_code })),
+            )
+            .await
+            .and_then(validate_file_transfer_response)
+            .and_then(|transfer| validate_transfer_id_match(&transfer_id, transfer));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn smart_cache_policy(
+        &self,
+        room_id: String,
+    ) -> Result<AgentSmartCachePolicy, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<SmartCachePolicyResponse>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/smart-cache-policy"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|response| validate_smart_cache_policy(&room_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn submit_smart_cache_candidates(
+        &self,
+        idempotency_key: String,
+        room_id: String,
+        candidates: Vec<AgentSmartCacheCandidate>,
+    ) -> Result<AgentSmartCacheCandidateBatchResult, AgentError> {
+        validate_opaque_value(
+            "smart cache candidate idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        validate_opaque_value("room id", &room_id, 200)?;
+        if candidates.is_empty() || candidates.len() > 200 {
+            return Err(validation_error(
+                "smart cache candidate batch must contain between 1 and 200 candidates",
+            ));
+        }
+        for candidate in &candidates {
+            validate_relative_path("smart cache source path", &candidate.source_relative_path)?;
+            validate_sha256(&candidate.source_version_hash)?;
+            if candidate.size_bytes == 0 {
+                return Err(validation_error(
+                    "smart cache candidate sizeBytes must be positive",
+                ));
+            }
+        }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<SmartCacheCandidateBatchResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/agent/cache-candidates"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({ "roomId": room_id, "candidates": candidates })),
+            )
+            .await
+            .and_then(validate_smart_cache_candidate_batch);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn submit_room_snapshot(
+        &self,
+        room_id: String,
+        snapshot: CleanlinessSnapshot,
+    ) -> Result<AgentRoomSnapshot, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        validate_cleanliness_snapshot(&snapshot)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<RoomSnapshotResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms/{room_id}/snapshots"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&snapshot),
+            )
+            .await
+            .and_then(|response| validate_room_snapshot_response(&room_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn complete_smart_cache_upload(
+        &self,
+        reservation_id: String,
+        idempotency_key: String,
+        size_bytes: u64,
+        sha256: String,
+        usage_score: i64,
+        manual_pin: bool,
+    ) -> Result<AgentCachedFile, AgentError> {
+        validate_opaque_value("smart cache reservation id", &reservation_id, 200)?;
+        validate_opaque_value(
+            "smart cache completion idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        if size_bytes == 0 {
+            return Err(validation_error(
+                "completed smart cache upload sizeBytes must be positive",
+            ));
+        }
+        validate_sha256(&sha256)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<CachedFileResponse>(
+                self.http
+                    .post(format!(
+                        "{base_url}/v1/agent/cache-uploads/{reservation_id}/complete"
+                    ))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({
+                        "sizeBytes": size_bytes,
+                        "sha256": sha256,
+                        "usageScore": usage_score,
+                        "manualPin": manual_pin,
+                    })),
+            )
+            .await
+            .and_then(validate_cached_file_response);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn cancel_smart_cache_reservation(
+        &self,
+        reservation_id: String,
+    ) -> Result<(), AgentError> {
+        validate_opaque_value("smart cache reservation id", &reservation_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_empty(
+                self.http
+                    .delete(format!(
+                        "{base_url}/v1/agent/cache-uploads/{reservation_id}"
+                    ))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await;
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     /// Claims an approved decision for local execution. Uses the decision id as the
     /// idempotency key so a retry after a crash or network failure cannot create a second
     /// execution for the same approval.
@@ -926,6 +1324,15 @@ impl AgentRuntime {
     }
 
     fn record_error(&self, error: AgentError, connection_state: AgentConnectionState) {
+        if error.is_terminal_pairing_failure() {
+            let _ = self.credentials.delete();
+            let mut state = self.state.lock().expect("agent state mutex poisoned");
+            state.credential = None;
+            state.state = AgentConnectionState::Revoked;
+            state.last_error = Some(error);
+            return;
+        }
+
         let mut state = self.state.lock().expect("agent state mutex poisoned");
         state.state = connection_state;
         state.last_error = Some(error);
@@ -1126,6 +1533,78 @@ struct FileBrowseRequestResponse {
     relative_directory: String,
     cursor: Option<String>,
     status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferResponse {
+    id: String,
+    room_id: String,
+    source_relative_path: String,
+    status: String,
+    expires_at: String,
+    size_bytes: Option<u64>,
+    sha256: Option<String>,
+    failure_code: Option<AgentFileTransferFailureCode>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileTransferUploadTargetResponse {
+    transfer_id: String,
+    upload_url: String,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmartCachePolicyResponse {
+    room_id: String,
+    enabled: bool,
+    quota_bytes: u64,
+    max_file_bytes: u64,
+    excluded_patterns: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheReservationResponse {
+    reservation_id: String,
+    status: String,
+    source_relative_path: String,
+    source_version_hash: String,
+    size_bytes: u64,
+    upload_url: Option<String>,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheCandidateBatchResponse {
+    batch_id: String,
+    approved: Vec<SmartCacheReservationResponse>,
+    rejected_count: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedFileResponse {
+    id: String,
+    source_relative_path: String,
+    source_version_hash: String,
+    size_bytes: u64,
+    sha256: String,
+    freshness_status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoomSnapshotResponse {
+    id: String,
+    room_id: String,
+    score: u8,
+    metrics: Value,
+    calculated_at: String,
 }
 
 #[derive(Deserialize)]
@@ -1383,6 +1862,285 @@ fn validate_file_browse_request(
     })
 }
 
+fn validate_file_transfers(
+    responses: Vec<FileTransferResponse>,
+) -> Result<Vec<AgentFileTransfer>, AgentError> {
+    responses
+        .into_iter()
+        .map(validate_file_transfer_response)
+        .collect()
+}
+
+fn validate_file_transfer_response(
+    response: FileTransferResponse,
+) -> Result<AgentFileTransfer, AgentError> {
+    if response.id.is_empty()
+        || response.room_id.is_empty()
+        || response.source_relative_path.is_empty()
+        || response.source_relative_path.len() > 1024
+        || response.expires_at.is_empty()
+        || !matches!(
+            response.status.as_str(),
+            "REQUESTED" | "UPLOADING" | "READY" | "FAILED" | "COMPLETED" | "CANCELLED" | "EXPIRED"
+        )
+        || response
+            .sha256
+            .as_ref()
+            .is_some_and(|sha256| !is_valid_sha256(sha256))
+    {
+        return Err(invalid_response_error(
+            "file transfer failed response validation",
+        ));
+    }
+    Ok(AgentFileTransfer {
+        transfer_id: response.id,
+        room_id: response.room_id,
+        source_relative_path: response.source_relative_path,
+        status: response.status,
+        expires_at: response.expires_at,
+        size_bytes: response.size_bytes,
+        sha256: response.sha256,
+        failure_code: response.failure_code,
+    })
+}
+
+fn validate_transfer_id_match(
+    expected_transfer_id: &str,
+    transfer: AgentFileTransfer,
+) -> Result<AgentFileTransfer, AgentError> {
+    if transfer.transfer_id != expected_transfer_id {
+        return Err(invalid_response_error(
+            "file transfer response did not match the requested transfer id",
+        ));
+    }
+    Ok(transfer)
+}
+
+fn validate_upload_target_response(
+    expected_transfer_id: &str,
+    response: FileTransferUploadTargetResponse,
+) -> Result<AgentFileTransferUploadTarget, AgentError> {
+    if response.transfer_id != expected_transfer_id || response.expires_at.is_empty() {
+        return Err(invalid_response_error(
+            "file transfer upload target failed response validation",
+        ));
+    }
+    let url = Url::parse(&response.upload_url)
+        .map_err(|_| invalid_response_error("file transfer upload target URL is invalid"))?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(invalid_response_error(
+            "file transfer upload target must be an http(s) URL",
+        ));
+    }
+    Ok(AgentFileTransferUploadTarget {
+        transfer_id: response.transfer_id,
+        upload_url: response.upload_url,
+        expires_at: response.expires_at,
+    })
+}
+
+fn validate_smart_cache_policy(
+    expected_room_id: &str,
+    response: SmartCachePolicyResponse,
+) -> Result<AgentSmartCachePolicy, AgentError> {
+    if response.room_id != expected_room_id
+        || response.quota_bytes == 0
+        || response.max_file_bytes == 0
+        || response.max_file_bytes > response.quota_bytes
+    {
+        return Err(invalid_response_error(
+            "smart cache policy failed response validation",
+        ));
+    }
+    Ok(AgentSmartCachePolicy {
+        room_id: response.room_id,
+        enabled: response.enabled,
+        quota_bytes: response.quota_bytes,
+        max_file_bytes: response.max_file_bytes,
+        excluded_patterns: response.excluded_patterns,
+    })
+}
+
+fn validate_smart_cache_candidate_batch(
+    response: SmartCacheCandidateBatchResponse,
+) -> Result<AgentSmartCacheCandidateBatchResult, AgentError> {
+    if response.batch_id.is_empty() {
+        return Err(invalid_response_error(
+            "smart cache candidate batch omitted batch id",
+        ));
+    }
+    let approved = response
+        .approved
+        .into_iter()
+        .map(validate_smart_cache_reservation)
+        .collect::<Result<Vec<_>, AgentError>>()?;
+    Ok(AgentSmartCacheCandidateBatchResult {
+        batch_id: response.batch_id,
+        approved,
+        rejected_count: response.rejected_count,
+    })
+}
+
+fn validate_smart_cache_reservation(
+    response: SmartCacheReservationResponse,
+) -> Result<AgentSmartCacheReservation, AgentError> {
+    validate_relative_path(
+        "smart cache reservation path",
+        &response.source_relative_path,
+    )?;
+    validate_sha256(&response.source_version_hash)?;
+    if response.reservation_id.is_empty()
+        || response.expires_at.is_empty()
+        || response.size_bytes == 0
+        || !matches!(response.status.as_str(), "RESERVED" | "COMPLETED")
+    {
+        return Err(invalid_response_error(
+            "smart cache reservation failed response validation",
+        ));
+    }
+    if response.status == "RESERVED" {
+        let upload_url = response
+            .upload_url
+            .as_ref()
+            .ok_or_else(|| invalid_response_error("smart cache reservation omitted upload URL"))?;
+        let url = Url::parse(upload_url)
+            .map_err(|_| invalid_response_error("smart cache upload URL is invalid"))?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(invalid_response_error(
+                "smart cache upload target must be an http(s) URL",
+            ));
+        }
+    }
+    Ok(AgentSmartCacheReservation {
+        reservation_id: response.reservation_id,
+        status: response.status,
+        source_relative_path: response.source_relative_path,
+        source_version_hash: response.source_version_hash,
+        size_bytes: response.size_bytes,
+        upload_url: response.upload_url,
+        expires_at: response.expires_at,
+    })
+}
+
+fn validate_cached_file_response(
+    response: CachedFileResponse,
+) -> Result<AgentCachedFile, AgentError> {
+    validate_relative_path("cached file path", &response.source_relative_path)?;
+    validate_sha256(&response.source_version_hash)?;
+    validate_sha256(&response.sha256)?;
+    if response.id.is_empty()
+        || response.size_bytes == 0
+        || !matches!(
+            response.freshness_status.as_str(),
+            "VERIFIED_CURRENT" | "UNVERIFIED_OFFLINE" | "STALE"
+        )
+    {
+        return Err(invalid_response_error(
+            "cached file failed response validation",
+        ));
+    }
+    Ok(AgentCachedFile {
+        cached_file_id: response.id,
+        source_relative_path: response.source_relative_path,
+        source_version_hash: response.source_version_hash,
+        size_bytes: response.size_bytes,
+        sha256: response.sha256,
+        freshness_status: response.freshness_status,
+    })
+}
+
+fn validate_cleanliness_snapshot(snapshot: &CleanlinessSnapshot) -> Result<(), AgentError> {
+    let metrics = &snapshot.metrics;
+    if snapshot.score > 100
+        || snapshot.calculated_at.trim().is_empty()
+        || metrics.managed_file_count > metrics.total_file_count
+        || metrics.unorganized_file_count > metrics.total_file_count
+        || metrics.managed_file_count + metrics.unorganized_file_count > metrics.total_file_count
+    {
+        return Err(validation_error("cleanliness snapshot failed validation"));
+    }
+
+    for deduction in &metrics.deductions {
+        if deduction.reason_code.trim().is_empty() || deduction.points > 100 {
+            return Err(validation_error(
+                "cleanliness snapshot deduction failed validation",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_room_snapshot_response(
+    expected_room_id: &str,
+    response: RoomSnapshotResponse,
+) -> Result<AgentRoomSnapshot, AgentError> {
+    if response.id.is_empty()
+        || response.room_id != expected_room_id
+        || response.score > 100
+        || !response.metrics.is_object()
+        || response.calculated_at.trim().is_empty()
+    {
+        return Err(invalid_response_error(
+            "room snapshot failed response validation",
+        ));
+    }
+    Ok(AgentRoomSnapshot {
+        snapshot_id: response.id,
+        room_id: response.room_id,
+        score: response.score,
+        metrics: response.metrics,
+        calculated_at: response.calculated_at,
+    })
+}
+
+fn validate_source_version(version: &AgentFileTransferSourceVersion) -> Result<(), AgentError> {
+    if version.file_id.is_empty()
+        || version.file_id.len() > 512
+        || version.size_bytes == 0
+        || version.modified_at.is_empty()
+    {
+        return Err(validation_error(
+            "file transfer sourceVersion failed validation",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_relative_path(label: &str, path: &str) -> Result<(), AgentError> {
+    if path.is_empty()
+        || path.len() > 1024
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains('\0')
+        || path.contains(':')
+        || path
+            .split(['/', '\\'])
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(validation_error(&format!(
+            "{label} must be a managed-root-relative path"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_sha256(value: &str) -> Result<(), AgentError> {
+    if !is_valid_sha256(value) {
+        return Err(validation_error(
+            "file transfer sha256 must be 64 lowercase hex characters",
+        ));
+    }
+    Ok(())
+}
+
+fn is_valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase())
+}
+
 fn validate_proposal_item(
     expected_proposal_id: &str,
     item: ProposalItemResponse,
@@ -1507,6 +2265,13 @@ impl AgentError {
     /// forever with the same payload.
     pub fn is_transient(&self) -> bool {
         matches!(self.code, AgentErrorCode::TransportUnavailable)
+    }
+
+    pub fn is_terminal_pairing_failure(&self) -> bool {
+        matches!(
+            self.code,
+            AgentErrorCode::Unauthenticated | AgentErrorCode::Forbidden
+        )
     }
 }
 
@@ -1753,6 +2518,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auth_failure_revokes_local_pairing_and_realtime_credentials() {
+        let (server_url, server) = one_shot_error_server(
+            "/v1/devices/device-1/heartbeat",
+            "HTTP/1.1 403 Forbidden",
+            r#"{"code":"DEVICE_REVOKED","message":"device revoked"}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/devices/device-1/heartbeat HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+            },
+        );
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .heartbeat("ONLINE_IDLE".to_string())
+            .await
+            .expect_err("revoked devices must fail heartbeat");
+        server.join().expect("server thread");
+
+        let status = runtime.connection_status();
+        assert_eq!(error.code, AgentErrorCode::Forbidden);
+        assert_eq!(status.state, AgentConnectionState::Revoked);
+        assert_eq!(status.device_id, None);
+        assert_eq!(status.last_error_code, Some(AgentErrorCode::Forbidden));
+        assert_eq!(status.last_error_message.as_deref(), Some("device revoked"));
+        assert!(runtime.realtime_credentials().is_none());
+        assert!(store.load().expect("credential store").is_none());
+    }
+
+    #[tokio::test]
     async fn managed_root_creates_a_mobile_room_through_the_server_contract() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind room server");
         let address = listener.local_addr().expect("room server address");
@@ -1859,6 +2662,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_file_transfers_maps_the_control_plane_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/devices/device-1/file-transfers/pending",
+            r#"[{
+                "id":"transfer-1",
+                "roomId":"room-1",
+                "desktopDeviceId":"device-1",
+                "sourceRelativePath":"docs/report.pdf",
+                "sourceVersion":null,
+                "status":"REQUESTED",
+                "failureCode":null,
+                "sizeBytes":null,
+                "sha256":null,
+                "expiresAt":"2026-07-13T01:00:00.000Z",
+                "completedAt":null,
+                "createdAt":"2026-07-13T00:00:00.000Z"
+            }]"#,
+            |request| {
+                assert!(
+                    request.starts_with("GET /v1/devices/device-1/file-transfers/pending HTTP/1.1")
+                );
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let transfers = runtime
+            .pending_file_transfers()
+            .await
+            .expect("pending transfers");
+        server.join().expect("server thread");
+
+        assert_eq!(transfers.len(), 1);
+        assert_eq!(transfers[0].transfer_id, "transfer-1");
+        assert_eq!(transfers[0].source_relative_path, "docs/report.pdf");
+        assert_eq!(transfers[0].status, "REQUESTED");
+    }
+
+    #[tokio::test]
+    async fn upload_target_uses_validated_source_version_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/agent/file-transfers/transfer-1/upload-target",
+            r#"{"transferId":"transfer-1","uploadUrl":"http://127.0.0.1:9000/bucket/object?signature=ok","expiresAt":"2026-07-13T01:00:00.000Z"}"#,
+            |request| {
+                assert!(request.starts_with(
+                    "POST /v1/agent/file-transfers/transfer-1/upload-target HTTP/1.1"
+                ));
+                assert!(request.contains(r#""fileId":"hm:abc""#));
+                assert!(request.contains(r#""sizeBytes":42"#));
+                assert!(request.contains(r#""modifiedAt":"2026-07-13T00:00:00.000Z""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let target = runtime
+            .request_file_transfer_upload_target(
+                "transfer-1".to_string(),
+                super::AgentFileTransferSourceVersion {
+                    file_id: "hm:abc".to_string(),
+                    size_bytes: 42,
+                    modified_at: "2026-07-13T00:00:00.000Z".to_string(),
+                },
+            )
+            .await
+            .expect("upload target");
+        server.join().expect("server thread");
+
+        assert_eq!(target.transfer_id, "transfer-1");
+        assert!(target.upload_url.starts_with("http://127.0.0.1:9000/"));
+    }
+
+    #[tokio::test]
     async fn create_execution_claims_the_decision_with_an_idempotency_key() {
         let (server_url, server) = one_shot_json_server(
             "/v1/agent/executions",
@@ -1924,6 +2815,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn room_snapshot_uses_the_cleanliness_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/rooms/room-1/snapshots",
+            r#"{"id":"snapshot-1","roomId":"room-1","score":88,"metrics":{"totalFileCount":10,"managedFileCount":8,"unorganizedFileCount":2,"deductions":[]},"calculatedAt":"2026-07-13T00:00:00.000Z"}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/rooms/room-1/snapshots HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+                assert!(request.contains(r#""score":88"#));
+                assert!(request.contains(r#""totalFileCount":10"#));
+                assert!(request.contains(r#""calculatedAt":"2026-07-13T00:00:00.000Z""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+        let snapshot = crate::cleanliness::CleanlinessSnapshot {
+            score: 88,
+            metrics: crate::cleanliness::CleanlinessMetrics {
+                total_file_count: 10,
+                managed_file_count: 8,
+                unorganized_file_count: 2,
+                deductions: Vec::new(),
+            },
+            calculated_at: "2026-07-13T00:00:00.000Z".to_string(),
+        };
+
+        let saved = runtime
+            .submit_room_snapshot("room-1".to_string(), snapshot)
+            .await
+            .expect("room snapshot");
+        server.join().expect("server thread");
+
+        assert_eq!(saved.snapshot_id, "snapshot-1");
+        assert_eq!(saved.room_id, "room-1");
+        assert_eq!(saved.score, 88);
+    }
+
+    #[tokio::test]
     async fn update_execution_rejects_a_non_object_result_summary() {
         let runtime = AgentRuntime::for_test(
             Some("http://127.0.0.1:3000"),
@@ -1961,6 +2897,36 @@ mod tests {
             inspect(&request);
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn one_shot_error_server<F>(
+        expected_path: &'static str,
+        status_line: &'static str,
+        response_body: &'static str,
+        inspect: F,
+    ) -> (String, thread::JoinHandle<()>)
+    where
+        F: FnOnce(&str) + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut buffer = [0_u8; 8192];
+            let length = stream.read(&mut buffer).expect("read request");
+            let request = String::from_utf8_lossy(&buffer[..length]);
+            assert!(request.contains(expected_path));
+            inspect(&request);
+            let response = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 response_body.len(),
                 response_body
             );
