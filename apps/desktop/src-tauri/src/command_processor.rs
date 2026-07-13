@@ -22,11 +22,13 @@ use crate::storage::outbox::OutboxStore;
 /// such as create, rename, or trash. Those commands stay local/manual in `commands::file_engine`.
 const ANALYZE: &str = "ANALYZE";
 const RENAME: &str = "RENAME";
+const MOVE: &str = "MOVE";
 const ORGANIZE: &str = "ORGANIZE";
 const ORGANIZE_FILES: &str = "organize_files";
 const ORGANIZE_ROOT: &str = "ORGANIZE_ROOT";
 const DEFAULT_MAX_PROPOSALS: usize = 50;
 const USER_REQUESTED_RENAME_REASON: &str = "USER_REQUESTED_RENAME";
+const USER_REQUESTED_MOVE_REASON: &str = "USER_REQUESTED_MOVE";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct CommandProcessingReport {
@@ -83,6 +85,14 @@ struct RenameCommandPayload {
     root_id: String,
     source_relative_path: String,
     new_name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct MoveCommandPayload {
+    root_id: String,
+    source_relative_paths: Vec<String>,
+    destination_relative_directory: String,
 }
 
 impl OrganizeFilesPayload {
@@ -191,6 +201,7 @@ pub async fn process_commands(
         report.processed_count += 1;
         let result = match command.command_type.as_str() {
             RENAME => process_rename_command(agent, roots, outbox, &command).await,
+            MOVE => process_move_command(agent, roots, outbox, &command).await,
             _ => process_organize_command(agent, roots, outbox, &command).await,
         };
         match result {
@@ -221,6 +232,42 @@ pub async fn process_commands(
     }
 
     Ok(report)
+}
+
+async fn process_move_command(
+    agent: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    command: &AgentCommand,
+) -> Result<usize, String> {
+    let payload = parse_move_payload(command)?;
+
+    agent
+        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let room = agent
+        .root_id_for_room(command.room_id.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    let managed_root = roots.ensure_active_room_binding(&room.root_id, &command.room_id)?;
+    if payload.root_id != managed_root.root_id {
+        return Err("command rootId does not match the room binding".to_string());
+    }
+    if !managed_root.enabled {
+        return Err(format!(
+            "managed root is disabled: {}",
+            managed_root.root_id
+        ));
+    }
+
+    let local_report = build_move_proposal_report(&managed_root.root, &payload)?;
+    let submission = build_agent_proposal_submission(command, local_report, 200)?;
+    let item_count = submission.items.len();
+    enqueue_proposal(outbox, &submission)?;
+
+    Ok(item_count)
 }
 
 async fn process_rename_command(
@@ -317,22 +364,88 @@ fn parse_rename_payload(command: &AgentCommand) -> Result<RenameCommandPayload, 
         .map_err(|error| format!("invalid rename payload: {error}"))
 }
 
+fn parse_move_payload(command: &AgentCommand) -> Result<MoveCommandPayload, String> {
+    serde_json::from_value(command.payload.clone())
+        .map_err(|error| format!("invalid move payload: {error}"))
+}
+
+fn build_move_proposal_report(
+    root: &str,
+    payload: &MoveCommandPayload,
+) -> Result<ProposalReport, String> {
+    if payload.source_relative_paths.is_empty() || payload.source_relative_paths.len() > 200 {
+        return Err("MOVE sourceRelativePaths must contain 1 to 200 paths".to_string());
+    }
+    let destination_directory =
+        normalize_remote_relative_directory(&payload.destination_relative_directory)?;
+    let guard = PathGuard::new(root).map_err(|error| error.to_string())?;
+    ensure_destination_directory_is_safe(&guard, &destination_directory)?;
+
+    let mut proposals = Vec::with_capacity(payload.source_relative_paths.len());
+    for source_relative_path in &payload.source_relative_paths {
+        let source_relative_path = normalize_remote_file_source(source_relative_path)?;
+        let file_name = source_relative_path
+            .rsplit_once('/')
+            .map(|(_, name)| name)
+            .unwrap_or(source_relative_path.as_str());
+        let destination_relative_path = if destination_directory.is_empty() {
+            file_name.to_string()
+        } else {
+            format!("{destination_directory}/{file_name}")
+        };
+        if source_relative_path == destination_relative_path {
+            return Err("MOVE destination must differ from the source path".to_string());
+        }
+        let proposal = build_single_move_proposal(
+            &guard,
+            &source_relative_path,
+            &destination_relative_path,
+            USER_REQUESTED_MOVE_REASON,
+        )?;
+        proposals.push(proposal);
+    }
+
+    Ok(ProposalReport {
+        root: guard.root().display().to_string(),
+        proposals,
+    })
+}
+
 fn build_rename_proposal_report(
     root: &str,
     payload: &RenameCommandPayload,
 ) -> Result<ProposalReport, String> {
-    validate_remote_relative_path(&payload.source_relative_path)?;
+    let source_relative_path = normalize_remote_file_source(&payload.source_relative_path)?;
     let new_name = validate_remote_file_name(&payload.new_name)?;
-    let destination_relative_path = sibling_relative_path(&payload.source_relative_path, &new_name);
-    if normalize_slashes(&payload.source_relative_path) == destination_relative_path {
+    let destination_relative_path = sibling_relative_path(&source_relative_path, &new_name);
+    if source_relative_path == destination_relative_path {
         return Err("rename newName must differ from the source file name".to_string());
     }
 
     let guard = PathGuard::new(root).map_err(|error| error.to_string())?;
+    let proposal = build_single_move_proposal(
+        &guard,
+        &source_relative_path,
+        &destination_relative_path,
+        USER_REQUESTED_RENAME_REASON,
+    )?;
+
+    Ok(ProposalReport {
+        root: guard.root().display().to_string(),
+        proposals: vec![proposal],
+    })
+}
+
+fn build_single_move_proposal(
+    guard: &PathGuard,
+    source_relative_path: &str,
+    destination_relative_path: &str,
+    reason: &str,
+) -> Result<Proposal, String> {
     let source = guard
-        .resolve_existing(&payload.source_relative_path)
+        .resolve_existing(source_relative_path)
         .map_err(|error| error.to_string())?;
-    let raw_source = guard.root().join(&payload.source_relative_path);
+    let raw_source = guard.root().join(source_relative_path);
     let metadata = fs::symlink_metadata(&raw_source).map_err(|error| {
         format!(
             "cannot read source metadata {}: {error}",
@@ -349,9 +462,7 @@ fn build_rename_proposal_report(
         return Err("RENAME source escaped managed root".to_string());
     }
 
-    let destination = guard
-        .resolve_for_create(&destination_relative_path)
-        .map_err(|error| error.to_string())?;
+    let destination = guard.root().join(destination_relative_path);
     let status = if destination.exists() {
         ProposalStatus::DestinationExists
     } else {
@@ -359,23 +470,16 @@ fn build_rename_proposal_report(
     };
     let action = ProposalAction::Move;
 
-    Ok(ProposalReport {
-        root: guard.root().display().to_string(),
-        proposals: vec![Proposal {
-            proposal_id: proposal_id(
-                &action,
-                &payload.source_relative_path,
-                &destination_relative_path,
-            ),
-            action,
-            from: normalize_slashes(&payload.source_relative_path),
-            to: destination_relative_path,
-            content: None,
-            source_size_bytes: metadata.len(),
-            source_modified_unix_ms: modified_unix_ms(&metadata),
-            reason: USER_REQUESTED_RENAME_REASON.to_string(),
-            status,
-        }],
+    Ok(Proposal {
+        proposal_id: proposal_id(&action, source_relative_path, destination_relative_path),
+        action,
+        from: source_relative_path.to_string(),
+        to: destination_relative_path.to_string(),
+        content: None,
+        source_size_bytes: metadata.len(),
+        source_modified_unix_ms: modified_unix_ms(&metadata),
+        reason: reason.to_string(),
+        status,
     })
 }
 
@@ -463,6 +567,9 @@ fn reason_code(proposal: &Proposal) -> String {
     if proposal.reason == USER_REQUESTED_RENAME_REASON {
         return USER_REQUESTED_RENAME_REASON.to_string();
     }
+    if proposal.reason == USER_REQUESTED_MOVE_REASON {
+        return USER_REQUESTED_MOVE_REASON.to_string();
+    }
 
     match proposal.action {
         ProposalAction::Move => "RULE_MOVE_BY_EXTENSION",
@@ -531,6 +638,11 @@ fn validate_relative_scope(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_remote_file_source(path: &str) -> Result<String, String> {
+    validate_remote_relative_path(path)?;
+    Ok(normalize_slashes(path))
+}
+
 fn validate_remote_relative_path(path: &str) -> Result<(), String> {
     if path.trim().is_empty()
         || path.contains('\\')
@@ -543,6 +655,48 @@ fn validate_remote_relative_path(path: &str) -> Result<(), String> {
             .any(|part| part.is_empty() || part == "." || part == "..")
     {
         return Err("remote command path must stay inside the managed root".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_remote_relative_directory(path: &str) -> Result<String, String> {
+    let trimmed = path.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    validate_remote_relative_path(trimmed)?;
+    Ok(normalize_slashes(trimmed))
+}
+
+fn ensure_destination_directory_is_safe(
+    guard: &PathGuard,
+    relative_directory: &str,
+) -> Result<(), String> {
+    let mut current = guard.root().to_path_buf();
+    for segment in relative_directory
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+    {
+        current.push(segment);
+        if !current.exists() {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&current)
+            .map_err(|error| format!("cannot inspect destination directory: {error}"))?;
+        if is_link_or_reparse_point(&metadata, metadata.file_type()) {
+            return Err(
+                "MOVE destination refuses symlinks, junctions, and reparse points".to_string(),
+            );
+        }
+        if !metadata.is_dir() {
+            return Err("MOVE destination path contains a non-directory entry".to_string());
+        }
+        let resolved = current
+            .canonicalize()
+            .map_err(|error| format!("cannot canonicalize destination directory: {error}"))?;
+        if !resolved.starts_with(guard.root()) {
+            return Err("MOVE destination escaped managed root".to_string());
+        }
     }
     Ok(())
 }
@@ -622,7 +776,7 @@ fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
 fn is_supported_command(command: &AgentCommand) -> bool {
     matches!(
         command.command_type.as_str(),
-        ANALYZE | RENAME | ORGANIZE | ORGANIZE_FILES | ORGANIZE_ROOT
+        ANALYZE | RENAME | MOVE | ORGANIZE | ORGANIZE_FILES | ORGANIZE_ROOT
     )
 }
 
@@ -643,10 +797,11 @@ mod tests {
     use crate::storage::outbox::OutboxStore;
 
     use super::{
-        build_agent_proposal_submission, build_rename_proposal_report, parse_organize_payload,
-        process_commands, resolve_proposal, validate_relative_scope, AgentCommand,
-        AgentProposalActionType, AgentProposalConflictState, OrganizeFilesPayload,
-        RenameCommandPayload, USER_REQUESTED_RENAME_REASON,
+        build_agent_proposal_submission, build_move_proposal_report, build_rename_proposal_report,
+        parse_organize_payload, process_commands, resolve_proposal, validate_relative_scope,
+        AgentCommand, AgentProposalActionType, AgentProposalConflictState, MoveCommandPayload,
+        OrganizeFilesPayload, RenameCommandPayload, USER_REQUESTED_MOVE_REASON,
+        USER_REQUESTED_RENAME_REASON,
     };
 
     fn command(payload: serde_json::Value) -> AgentCommand {
@@ -870,6 +1025,100 @@ mod tests {
         let error = build_rename_proposal_report(&root.to_string_lossy(), &slash_name)
             .expect_err("reject name");
         assert!(error.contains("safe file name"));
+    }
+
+    #[test]
+    fn move_command_builds_one_proposal_per_file_without_touching_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("inbox")).expect("inbox");
+        std::fs::write(root.join("inbox/a.txt"), "a").expect("a");
+        std::fs::write(root.join("inbox/b.txt"), "bb").expect("b");
+
+        let payload = MoveCommandPayload {
+            root_id: "root:inbox".to_string(),
+            source_relative_paths: vec!["inbox/a.txt".to_string(), "inbox/b.txt".to_string()],
+            destination_relative_directory: "archive".to_string(),
+        };
+
+        let report =
+            build_move_proposal_report(&root.to_string_lossy(), &payload).expect("move proposal");
+
+        assert!(root.join("inbox/a.txt").exists());
+        assert!(root.join("inbox/b.txt").exists());
+        assert!(!root.join("archive").exists());
+        assert_eq!(report.proposals.len(), 2);
+        assert_eq!(report.proposals[0].from, "inbox/a.txt");
+        assert_eq!(report.proposals[0].to, "archive/a.txt");
+        assert_eq!(report.proposals[0].reason, USER_REQUESTED_MOVE_REASON);
+        assert_eq!(report.proposals[1].from, "inbox/b.txt");
+        assert_eq!(report.proposals[1].to, "archive/b.txt");
+
+        let submission =
+            build_agent_proposal_submission(&command(json!({"maxProposals": 2})), report, 200)
+                .expect("submission");
+        assert_eq!(submission.summary.item_count, 2);
+        assert!(submission
+            .items
+            .iter()
+            .all(|item| item.reason_code == USER_REQUESTED_MOVE_REASON));
+    }
+
+    #[test]
+    fn move_command_marks_destination_conflicts_per_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("inbox")).expect("inbox");
+        std::fs::create_dir_all(root.join("archive")).expect("archive");
+        std::fs::write(root.join("inbox/a.txt"), "a").expect("a");
+        std::fs::write(root.join("archive/a.txt"), "existing").expect("existing");
+
+        let payload = MoveCommandPayload {
+            root_id: "root:inbox".to_string(),
+            source_relative_paths: vec!["inbox/a.txt".to_string()],
+            destination_relative_directory: "archive".to_string(),
+        };
+
+        let report =
+            build_move_proposal_report(&root.to_string_lossy(), &payload).expect("move proposal");
+        let submission =
+            build_agent_proposal_submission(&command(json!({"maxProposals": 1})), report, 200)
+                .expect("submission");
+
+        assert_eq!(
+            std::fs::read_to_string(root.join("archive/a.txt")).expect("existing"),
+            "existing"
+        );
+        assert_eq!(
+            submission.items[0].conflict_state,
+            AgentProposalConflictState::NameConflict
+        );
+    }
+
+    #[test]
+    fn move_command_rejects_unsafe_paths() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(root.join("inbox")).expect("inbox");
+        std::fs::write(root.join("inbox/a.txt"), "a").expect("a");
+
+        let traversal = MoveCommandPayload {
+            root_id: "root:inbox".to_string(),
+            source_relative_paths: vec!["inbox/../outside.txt".to_string()],
+            destination_relative_directory: "archive".to_string(),
+        };
+        let error = build_move_proposal_report(&root.to_string_lossy(), &traversal)
+            .expect_err("reject traversal");
+        assert!(error.contains("managed root"));
+
+        let unsafe_destination = MoveCommandPayload {
+            root_id: "root:inbox".to_string(),
+            source_relative_paths: vec!["inbox/a.txt".to_string()],
+            destination_relative_directory: "../archive".to_string(),
+        };
+        let error = build_move_proposal_report(&root.to_string_lossy(), &unsafe_destination)
+            .expect_err("reject destination");
+        assert!(error.contains("managed root"));
     }
 
     #[test]
