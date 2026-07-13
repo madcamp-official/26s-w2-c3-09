@@ -1,7 +1,7 @@
 # MOUSEKEEPER 구현 이력 및 MVP 감사
 
 > 감사 기준일: 2026-07-13
-> 감사 기준 브랜치: `main`
+> 감사 기준 브랜치: `B` (`origin/main` 기준 v1.4 구현 포함)
 > 기준 문서: `MOUSEKEEPER_PLAN.md`, `IMPLEMENTATION_PLAN.md`, `AI_implement_rule.txt`
 > 판정 원칙: 파일이나 클래스가 있다는 이유만으로 완료 처리하지 않고, 호출 경로·영속화·안전 경계·테스트를 함께 확인한다.
 
@@ -13,11 +13,25 @@
 - `[~]`: 핵심 경로는 있으나 기획 완료 조건 일부 또는 실제 환경 E2E가 남음
 - `[ ]`: 기획에는 있으나 구현이 없거나 `UNCONFIGURED` 상태임
 
+### 1.1 v1.4 연결·청결도·모바일 파일 접근
+
+- [x] `mousekeeper-cleanliness-v1` 공식으로 Rust가 한 번 계산한 점수·감점·시각을 Desktop 표시, outbox, 서버 `RoomSnapshot`, 모바일 상세가 그대로 사용한다.
+- [x] 모바일과 Desktop 어느 쪽에서든 device를 해제할 수 있고, 동일 `Idempotency-Key` 재시도는 저장된 결과를 재사용한다. 성공 transaction은 연결 room, 진행 중 browse·transfer·cache reservation까지 함께 종료한다.
+- [x] 로그인 직후 활성 device/room을 서버에서 먼저 복구하는 fail-closed Pairing Gate를 적용했다. 활성 Desktop이 없으면 과거 cache나 main navigation을 렌더링하지 않는다.
+- [x] room 연결은 양쪽에서 해제할 수 있다. Desktop은 watcher와 disposable index만 정리하고 managed root, 원본 파일, operation journal, undo 기록을 보존한다.
+- [x] 모바일에 active folder 목록, breadcrumb 탐색, metadata, pagination, 만료형 transfer, `.part` 다운로드, SHA-256 확인 후 ACK 흐름을 연결했다.
+- [x] 파일·폴더 이름 검색은 300ms debounce와 2자 제한, 현재 폴더/managed root scope, generation cursor, 오래된 응답 폐기를 적용했다. 서버는 전체 index를 보관하지 않고 만료 시 검색어와 결과 page를 지운다.
+- [x] 모바일 appearance/accessory/theme/unlock 선택과 mutation 호출을 제거하고 고정 기본 외형·테마만 렌더링한다. 기존 DB 값과 deprecated PATCH 계약은 하위 호환을 위해 유지한다.
+- [x] `device.revoked`·`room.removed`는 durable sync event를 먼저 기록한 뒤 publish하며, 모바일 Drift cache/outbox와 Desktop binding에 동일 reducer를 적용해 socket 유실 시 replay로 수렴한다.
+- [x] `CharacterState` 9종과 lifecycle payload의 wire value를 TypeScript·JSON Schema·OpenAPI·Rust·Flutter에서 통일하고, 모바일 parser가 잘못된 status·ID·sequence를 fail-closed로 거부한다.
+- [x] realtime replay·cursor·cache와 mutation queue를 UID·generation에 묶어 A 로그아웃→B 로그인 중 늦은 A 응답이 B 상태를 오염시키지 않도록 계정별로 격리한다.
+- [~] PostgreSQL/Redis가 필요한 실제 transaction·object lifecycle 통합 suite는 로컬 Docker daemon 미가동으로 이번 회귀 실행에서 skip됐다. 코드·계약·클라이언트 테스트는 통과했지만 운영 배포 전 실제 DB에서 migration과 revoke 경합 E2E를 다시 실행해야 한다.
+
 ## 2. 구현 완료 기능
 
 ### 2.1 공통 계약과 품질 경계
 
-- [x] NestJS controller 60개와 `packages/contracts/openapi.yaml` route coverage 일치
+- [x] NestJS controller 62개와 `packages/contracts/openapi.yaml` route coverage 일치
 - [x] Command, Proposal, Decision, ExecutionResult, FileBrowse, FileTransfer, 자동 승인 정책 JSON/Zod schema
 - [x] event envelope, 사용자별 단조 증가 sequence, correlation/aggregate 식별자
 - [x] 중요 mutation의 idempotency key 및 replay 충돌 검증
@@ -36,14 +50,14 @@
 - [x] REST sync replay와 Socket.IO 사용자/device room 인증
 - [x] file browse 요청, cursor page, timeout/offline/cursor 오류 상태
 - [x] FileTransfer 요청·signed PUT/GET·HEAD 크기 확인·SHA-256 metadata·ACK/cancel/expiry 상태
-- [x] character profile, 외형/테마 선택, affinity 원장과 중복 보상 방지, 최소 unlock 정책
+- [x] character profile, affinity 원장과 중복 보상 방지; 기존 외형/테마 선택 API는 하위 호환용 deprecated 경로로만 유지
 - [x] chat message 영속화. AI 미설정은 assistant 성공을 만들지 않고 명시적으로 `UNCONFIGURED`
 - [x] FCM token 등록/해제, notification outbox와 영구 무효 token 정리
 - [x] audit activity summary와 privacy-safe request/Sentry 경계
 
 ### 2.3 데이터베이스와 worker
 
-- [x] Drizzle schema 27개 PostgreSQL table과 16개 migration
+- [x] Drizzle schema 28개 PostgreSQL table과 17개 migration
 - [x] user/device/room/command/proposal/decision/execution/sync/audit 관계와 인덱스
 - [x] browse/transfer/object deletion job 영속화
 - [x] notification job claim·lease·retry와 FCM batch 전송
@@ -89,7 +103,7 @@
 - [x] Socket.IO foreground event와 REST replay 복구
 - [x] FCM foreground/background handler와 token 등록 경로
 - [x] smart-cache opt-in policy, quota/file limit, freshness·last verified·pending command 경고
-- [x] affinity unlock, 외형·테마, animation off 설정 UI
+- [x] affinity 숫자·ledger 표시와 animation off 설정, 고정 기본 외형·테마
 - [x] 8종 PNG 상태 이미지가 모바일과 Desktop build에 포함됨
 
 ### 2.6 인프라와 운영 코드
@@ -130,7 +144,7 @@
 
 ### 3.3 테스트·문서 공백
 
-- [~] 일반 server test에서는 외부 DB/object storage가 필요한 6개 suite가 환경 변수 없이 skip된다. 운영 의존 E2E는 별도 opt-in CI job으로 분리해야 한다.
+- [~] 일반 server test에서는 외부 DB/object storage가 필요한 7개 suite가 환경 변수 없이 skip된다. 운영 의존 E2E는 별도 opt-in CI job으로 분리해야 한다.
 - [ ] `docs/e2e-scenarios.md`, `docs/threat-model.md`, `docs/adr/0001-local-first.md`가 계획 목록과 달리 없다.
 - [ ] 독립 `presence`, `smart-cache`, `rule-dsl` JSON schema 일부가 없다. 현재 OpenAPI와 TypeScript Zod schema로 검증되지만 계약 산출물 목록과 일치시키는 결정이 필요하다.
 - [ ] 100,000 entry, 3 managed root 성능 회귀와 watcher overflow 장시간 soak 결과가 없다.
@@ -208,7 +222,7 @@
 | 캐릭터 상태 애니메이션 | 부분 | PNG 상태 이미지, 실제 animation 없음 |
 | 모바일 집 | 완료 | room/presence/cleanliness/pending/result |
 | 제한된 자연어 채팅 | 미충족 | AI gateway 없음, `UNCONFIGURED` |
-| 호감도 | 완료 | 원장형 event와 unlock |
+| 호감도 | 완료 | 원장형 event와 숫자·완료 대사; 시각 해금 없음 |
 | 동일 환경 배포 | 미충족 | rename 후 release artifact/운영 migration 미검증 |
 
 - 엄격 완료: **13/22 (59%)**
@@ -265,18 +279,18 @@
 
 | 검사 | 감사 시 결과 |
 |---|---|
-| `pnpm check:contracts` | controller 60개와 OpenAPI 일치 |
+| `pnpm check:contracts` | controller 62개와 OpenAPI 일치 |
 | Node workspace typecheck/build | 통과 |
-| contracts test | 18개 통과 |
-| server test | 29개 통과, 외부 의존 suite 6개 skip |
+| contracts test | 25개 통과 |
+| server test | 40개 통과, 외부 DB/인프라 suite 7개 skip |
 | worker test | 8개 통과 |
 | desktop-agent-simulator test | 1개 통과 |
 | Flutter analyze | 오류 0개 |
-| Flutter test | 27개 통과 |
-| Rust file-engine | unit 100개 + CLI integration 3개 통과 |
-| Rust Desktop core | 120개 통과 |
+| Flutter test | 78개 통과 |
+| Rust file-engine | unit 106개 + CLI integration 3개 통과 |
+| Rust Desktop core | 기본 feature 142개 통과 |
 | Rust format | 두 crate 모두 통과 |
-| Tauri feature check/test | feature check 통과, feature test 98개 통과 |
+| Tauri feature check/test | feature test 114개와 Clippy `-D warnings` 통과 |
 | Android debug build | `UNCONFIGURED` build와 `com.mousekeeper.app` Firebase 활성 build 모두 통과 |
 
 Firebase JSON은 API key가 포함된 provider 설정이므로 `.gitignore`에 유지하고 로컬에만 설치했다. CI와 팀원 환경에는 secret/file injection 방식이 필요하다.

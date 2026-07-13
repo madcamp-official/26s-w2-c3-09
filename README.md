@@ -2,7 +2,7 @@
 
 > 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md), 현재 완료/누락 판정은 [구현 이력 및 MVP 감사](HISTORY.md)를 기준으로 합니다.
 >
-> 현재 감사 기준: `main` (`2026-07-13`), A/B 통합 코드 포함
+> 현재 감사 기준: `B` (`origin/main` 기반, `2026-07-13`), A/B v1.4 통합 코드 포함
 
 ## 공통과제 II : 협업형 실전 산출물 제작 (2인 1팀)
 
@@ -113,7 +113,7 @@ Tauri Desktop
 ### B — Product & Cloud
 
 - Firebase Android 및 Google 로그인, Firebase Admin token 검증 경로
-- PostgreSQL/Drizzle 16개 migration과 Redis/Valkey local compose
+- PostgreSQL/Drizzle 17개 migration과 Redis/Valkey local compose
 - pairing, device, room, heartbeat/presence, command/proposal/decision/execution API
 - Socket.IO `/realtime`, idempotency, audit, cursor replay
 - Flutter home/room/rule/proposal/result/chat/files/smart-cache UI와 Drift cache/outbox
@@ -138,24 +138,37 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill | rename migration, signed release, Sentry DSN |
 | 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle | Desktop client encryption과 key lifecycle |
 
+### v1.4 — 청결도·연결 해제·모바일 파일 접근
+
+- 청결도는 Rust의 `mousekeeper-cleanliness-v1` 공식이 만든 하나의 snapshot만 사용한다. Desktop은 그 객체를 표시·queue하고 서버는 재계산 없이 저장하며 모바일은 score, 감점 code/count/points, 계산 시각, 공식 버전을 그대로 표시한다.
+- device와 room 연결 해제는 모바일·Desktop 양쪽에서 시작할 수 있다. 서버는 멱등 transaction으로 ACTIVE 상태와 진행 작업을 종료하고 durable event를 기록한 뒤 즉시 publish한다. device 해제는 socket과 연결 room을 함께 정리한다.
+- 모바일은 로그인 직후 서버의 ACTIVE device/room을 확인하는 Pairing Gate를 통과해야 main navigation을 만든다. stale Drift cache는 gate를 열 수 없고 revoke/remove event와 replay가 관련 cache·outbox를 계단식으로 제거한다. event 유실 시에도 2초 간격의 직렬 authoritative reconcile로 수렴한다.
+- `CharacterState` 9종과 lifecycle 최종 상태는 TypeScript·JSON Schema·OpenAPI·Rust·Flutter에서 같은 대문자 wire value를 사용한다. 모바일은 잘못된 상태·ID·sequence를 fail-closed로 폐기하고 상대경로는 모든 계약에서 같은 1,024자·경계 규칙을 적용한다.
+- 모바일 realtime replay와 mutation queue는 시작 시점 UID·generation에 고정된다. 로그아웃 뒤 다른 계정으로 전환되면 이전 계정의 늦은 socket 응답·cursor·cache write·ACK·outbox 갱신을 모두 폐기하며, 계정별 flush는 서로 막지 않는다.
+- room 연결 해제 시 Desktop watcher와 disposable index만 정리한다. managed root, 실제 파일, `.mousekeeper_trash`, operation journal과 undo 가능 기록은 삭제하지 않는다.
+- 모바일 Files 화면은 연결된 folder 선택, breadcrumb 탐색, metadata, pagination, filename 검색과 검증 다운로드를 제공한다. 검색은 300ms debounce·2자 제한·generation cursor를 사용하며, 다운로드는 `.part`에 받은 뒤 SHA-256이 일치해야 최종 저장 및 ACK한다.
+- 호감도 숫자와 ledger는 유지하지만 appearance/accessory/room theme 해금 UI와 mutation 호출은 제거했다. MVP 화면은 affinity와 무관한 고정 외형·테마를 사용한다.
+
+연결 해제와 file access의 DB 통합 suite는 PostgreSQL·Redis가 실행되는 환경에서 opt-in으로 동작한다. 로컬 Docker daemon이 꺼진 검증에서는 이를 성공으로 가장하지 않고 skip으로 기록하며, 배포 전 migration 적용과 실제 revoke/search/download 경합 E2E가 필요하다.
+
 ## 검증 기록 (`2026-07-13`)
 
 | 검사 | 결과 |
 |---|---|
-| `pnpm check:contracts` | 서버 controller 60개와 OpenAPI 일치 |
+| `pnpm check:contracts` | 서버 controller 62개와 OpenAPI 일치 |
 | `pnpm typecheck` | Node/React workspace 전체 통과 |
 | Desktop `tsc + vite build` | production web bundle 성공 |
-| contracts test | 18개 통과 |
-| server test | 일반 모드 29개 통과·외부 DB 통합 6개 skip, 실제 S3 lifecycle E2E 별도 통과 |
+| contracts test | 25개 통과 |
+| server test | 일반 모드 40개 통과·외부 DB/인프라 통합 7개 skip, 실제 S3 lifecycle E2E는 이전 운영 검증 유지 |
 | worker test | IAM role·FCM config·영구 무효 token·Sentry redaction 포함 8개 통과 |
 | desktop-agent-simulator test | 1개 통과 |
 | `flutter analyze` | 오류 0개 |
-| Flutter test | FCM·Sentry privacy 포함 27개 통과 |
+| Flutter test | Pairing Gate·계정 전환 race·typed event·검색·검증 다운로드 포함 78개 통과 |
 | Android debug APK | Firebase Messaging·Sentry SDK 포함 빌드 성공 |
-| Rust file-engine CLI | unit 100개 + integration 3개, 총 103개 통과 |
-| Rust Desktop/Tauri core | 120개 통과 |
+| Rust file-engine CLI | unit 106개 + integration 3개, 총 109개 통과 |
+| Rust Desktop/Tauri core | 기본 feature 142개 통과 |
 | Rust fixture E2E | proposal → precheck → execute → undo 통과 |
-| Tauri feature check | `cargo check --features tauri-commands` 통과 |
+| Tauri feature test | `cargo test --features tauri-commands` 114개 및 Clippy `-D warnings` 통과 |
 | Windows release bundle | 실제 앱 feature를 포함한 MSI 6.82MB, NSIS 4.81MB 생성 성공 |
 | Desktop ↔ server presence | `ONLINE_IDLE` heartbeat `201`, REST replay `200` 확인 |
 | Android ↔ server | SM S901N `adb reverse` 연결, devices/rooms/presence API `200` 확인 |
