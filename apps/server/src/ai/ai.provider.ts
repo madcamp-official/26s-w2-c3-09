@@ -1,3 +1,6 @@
+import type { createCommandSchema } from '@mousekeeper/contracts';
+import type { z } from 'zod';
+
 export const AI_PROVIDER = Symbol('AI_PROVIDER');
 
 export type ChatContext = {
@@ -21,7 +24,29 @@ export type AiUnavailableResult = {
   code: 'AI_PROVIDER_UNCONFIGURED';
 };
 
-export type AiProviderResult = AiUnavailableResult;
+export type AiInvalidResult = {
+  status: 'INVALID';
+  code: 'AI_OUTPUT_INVALID';
+};
+
+export type AiNoActionResult = {
+  status: 'READY';
+  kind: 'NO_ACTION';
+};
+
+export type AiCommandDraftResult = {
+  status: 'READY';
+  kind: 'COMMAND_DRAFT';
+  command: z.infer<typeof createCommandSchema>;
+  confirmationSummary: string;
+  expiresAt?: string;
+};
+
+export type AiProviderResult =
+  | AiUnavailableResult
+  | AiInvalidResult
+  | AiNoActionResult
+  | AiCommandDraftResult;
 
 export interface AiProvider {
   classifyAndRespond(input: ChatContext): Promise<AiProviderResult>;

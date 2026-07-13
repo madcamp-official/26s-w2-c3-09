@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { createCommandDraftSchema } from '@mousekeeper/contracts';
+import { createCommandDraftSchema } from '@mousekeeper/contracts';
 import {
   chatMessages,
   chatSessions,
@@ -543,11 +543,62 @@ export class ChatService {
         content: message.content,
       },
     });
+    if (ai.status === 'UNCONFIGURED') {
+      return {
+        message,
+        assistant: null,
+        aiStatus: ai.status,
+        ai,
+      };
+    }
+    if (ai.status === 'INVALID') {
+      return {
+        message,
+        assistant: null,
+        aiStatus: ai.status,
+        ai,
+      };
+    }
+    if (ai.kind === 'NO_ACTION') {
+      return {
+        message,
+        assistant: null,
+        aiStatus: ai.status,
+        ai,
+      };
+    }
+
+    const draftInput = createCommandDraftSchema.safeParse({
+      sourceMessageId: message.id,
+      command: ai.command,
+      confirmationSummary: ai.confirmationSummary,
+      expiresAt: ai.expiresAt,
+    });
+    if (!draftInput.success) {
+      return {
+        message,
+        assistant: null,
+        aiStatus: 'INVALID' as const,
+        ai: {
+          status: 'INVALID' as const,
+          code: 'AI_OUTPUT_INVALID' as const,
+        },
+      };
+    }
+    const draft = await this.createCommandDraft(
+      userId,
+      session.id,
+      draftInput.data,
+    );
     return {
       message,
-      assistant: null,
-      aiStatus: ai.status,
-      ai,
+      assistant: draft.message,
+      aiStatus: 'READY' as const,
+      ai: {
+        status: 'READY' as const,
+        kind: 'COMMAND_DRAFT' as const,
+        commandDraftId: draft.draft.id,
+      },
     };
   }
 

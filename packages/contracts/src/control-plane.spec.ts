@@ -440,6 +440,33 @@ describe("chat session contracts", () => {
     };
 
     expect(createChatMessageResponseSchema.parse(response)).toEqual(response);
+    const draftResponse = {
+      ...response,
+      assistant: {
+        ...response.message,
+        id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a4",
+        senderType: "ASSISTANT",
+        messageType: "COMMAND_DRAFT",
+        content: "Rename reports/old.pdf to reports/final.pdf",
+        structuredPayload: {
+          id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+          intent: "RENAME",
+          confirmationSummary: "Rename reports/old.pdf to reports/final.pdf",
+          status: "DRAFT",
+          expiresAt: "2026-07-13T01:12:03.000Z",
+          commandId: null,
+        },
+      },
+      aiStatus: "READY",
+      ai: {
+        status: "READY",
+        kind: "COMMAND_DRAFT",
+        commandDraftId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+      },
+    };
+    expect(createChatMessageResponseSchema.parse(draftResponse)).toEqual(
+      draftResponse,
+    );
     expect(
       createChatMessageResponseSchema.safeParse({
         ...response,

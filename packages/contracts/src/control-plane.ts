@@ -674,14 +674,48 @@ export const aiProviderUnavailableSchema = z
     code: z.literal("AI_PROVIDER_UNCONFIGURED"),
   })
   .strict();
+export const aiProviderInvalidSchema = z
+  .object({
+    status: z.literal("INVALID"),
+    code: z.literal("AI_OUTPUT_INVALID"),
+  })
+  .strict();
+export const aiProviderNoActionSchema = z
+  .object({
+    status: z.literal("READY"),
+    kind: z.literal("NO_ACTION"),
+  })
+  .strict();
+export const aiProviderCommandDraftSchema = z
+  .object({
+    status: z.literal("READY"),
+    kind: z.literal("COMMAND_DRAFT"),
+    commandDraftId: uuidSchema,
+  })
+  .strict();
+export const chatAiResultSchema = z.union([
+  aiProviderUnavailableSchema,
+  aiProviderInvalidSchema,
+  aiProviderNoActionSchema,
+  aiProviderCommandDraftSchema,
+]);
 export const createChatMessageResponseSchema = z
   .object({
     message: chatMessageSchema,
     assistant: chatMessageSchema.nullable(),
-    aiStatus: z.literal("UNCONFIGURED"),
-    ai: aiProviderUnavailableSchema,
+    aiStatus: z.enum(["UNCONFIGURED", "READY", "INVALID"]),
+    ai: chatAiResultSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.aiStatus !== value.ai.status) {
+      context.addIssue({
+        code: "custom",
+        path: ["aiStatus"],
+        message: "aiStatus must match ai.status",
+      });
+    }
+  });
 export const commandDraftStatusSchema = z.enum([
   "DRAFT",
   "APPROVED",

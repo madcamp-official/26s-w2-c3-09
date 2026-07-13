@@ -1803,6 +1803,28 @@ components:
       properties:
         status: { type: string, enum: [UNCONFIGURED] }
         code: { type: string, enum: [AI_PROVIDER_UNCONFIGURED] }
+    AiProviderInvalid:
+      type: object
+      additionalProperties: false
+      required: [status, code]
+      properties:
+        status: { type: string, enum: [INVALID] }
+        code: { type: string, enum: [AI_OUTPUT_INVALID] }
+    AiProviderNoAction:
+      type: object
+      additionalProperties: false
+      required: [status, kind]
+      properties:
+        status: { type: string, enum: [READY] }
+        kind: { type: string, enum: [NO_ACTION] }
+    AiProviderCommandDraft:
+      type: object
+      additionalProperties: false
+      required: [status, kind, commandDraftId]
+      properties:
+        status: { type: string, enum: [READY] }
+        kind: { type: string, enum: [COMMAND_DRAFT] }
+        commandDraftId: { type: string, format: uuid }
     CreateChatMessageResponse:
       type: object
       additionalProperties: false
@@ -1813,8 +1835,13 @@ components:
           oneOf:
             - { $ref: "#/components/schemas/ChatMessage" }
             - { type: "null" }
-        aiStatus: { type: string, enum: [UNCONFIGURED] }
-        ai: { $ref: "#/components/schemas/AiProviderUnavailable" }
+          aiStatus: { type: string, enum: [UNCONFIGURED, READY, INVALID] }
+          ai:
+            oneOf:
+              - { $ref: "#/components/schemas/AiProviderUnavailable" }
+              - { $ref: "#/components/schemas/AiProviderInvalid" }
+              - { $ref: "#/components/schemas/AiProviderNoAction" }
+              - { $ref: "#/components/schemas/AiProviderCommandDraft" }
     CreateCommandDraft:
       type: object
       additionalProperties: false
