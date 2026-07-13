@@ -31,4 +31,21 @@ void main() {
       isNull,
     );
   });
+
+  test('validated realtime character events preserve the server state', () {
+    expect(
+      realtimeCharacterKindFor('character.event', {'kind': 'SUCCESS'}),
+      'SUCCESS',
+    );
+    expect(
+      realtimeCharacterKindFor('character.event', {'kind': 'MADE_UP'}),
+      isNull,
+    );
+    expect(
+      realtimeCharacterKindFor('presence.updated', {
+        'payload': {'presence': 'OFFLINE'},
+      }),
+      'OFFLINE',
+    );
+  });
 }

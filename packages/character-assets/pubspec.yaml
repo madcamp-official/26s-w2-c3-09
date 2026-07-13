@@ -12,4 +12,12 @@ dependencies:
 
 flutter:
   assets:
-    - mascot.svg
+    - mascot.png
+    - mouse_clean.png
+    - mouse_considering.png
+    - mouse_fighting.png
+    - mouse_hello.png
+    - mouse_sleeping.png
+    - mouse_stand.png
+    - mouse_walk.png
+    - mouse_working.png

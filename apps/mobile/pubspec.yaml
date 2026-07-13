@@ -49,7 +49,6 @@ dependencies:
   uuid: ^4.5.3
   crypto: ^3.0.7
   socket_io_client: ^3.1.6
-  flutter_svg: ^2.3.0
   housemouse_character_assets:
     path: ../../packages/character-assets
 

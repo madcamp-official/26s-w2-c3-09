@@ -123,6 +123,28 @@ pre {
   width: 76px;
   height: 76px;
   object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.mascot-image.motion-walk,
+.mascot-image.motion-working,
+.mascot-image.motion-hello {
+  animation: mascot-bob 700ms ease-in-out infinite alternate;
+}
+
+@keyframes mascot-bob {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot-image {
+    animation: none;
+  }
 }
 
 .agent-actions,

@@ -1,12 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
-import 'package:housemouse_character_assets/character_assets.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../auth/auth_controller.dart';
 import '../auth/pairing_page.dart';
 import '../character/character_settings_page.dart';
+import '../character/housemouse_motion.dart';
 import '../rooms/room_page.dart';
 import 'home_controller.dart';
 
@@ -42,6 +41,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       if (previous != null) ref.invalidate(homeControllerProvider);
     });
     final state = ref.watch(homeControllerProvider);
+    final realtimeCharacterKind = ref.watch(realtimeCharacterKindProvider);
     return Scaffold(
       appBar: AppBar(
         title: const Text('HOUSEMOUSE'),
@@ -101,40 +101,56 @@ class _HomePageState extends ConsumerState<HomePage> {
                 ),
                 const SizedBox(height: 12),
               ],
-              if (data.character != null) ...[
-                Card(
-                  child: ListTile(
-                    leading: SizedBox(
-                      width: 52,
-                      height: 52,
-                      child: SvgPicture.asset(
-                        housemouseMascotAsset,
-                        package: housemouseMascotPackage,
-                        semanticsLabel: 'HouseMouse 마스코트',
+              Card(
+                child: ListTile(
+                  leading: SizedBox(
+                    width: 52,
+                    height: 52,
+                    child: HousemouseMotionImage(
+                      motion: housemouseMotionForHome(
+                        isOffline: data.isOffline,
+                        presences: data.devices.map(
+                          (item) => item['presence'] as String? ?? 'OFFLINE',
+                        ),
+                        executionStatuses: data.rooms.map(
+                          (item) => item['latestExecutionStatus'] as String?,
+                        ),
+                        hasPendingProposal: data.rooms.any(
+                          (item) =>
+                              (item['pendingProposalCount'] as int? ?? 0) > 0,
+                        ),
+                        realtimeCharacterKind: realtimeCharacterKind,
                       ),
                     ),
-                    title: const Text('HOUSEMOUSE 캐릭터'),
-                    subtitle: Text(
-                      '호감도 ${data.character!['affinityTotal'] ?? 0} · '
-                      '${data.character!['riveAssetStatus'] == 'UNCONFIGURED' ? '기본 마스코트 · 모션 설정 전' : '모션 연결됨'}',
-                    ),
-                    trailing: const Icon(Icons.tune),
-                    onTap: () async {
-                      final changed = await Navigator.of(context).push<bool>(
-                        MaterialPageRoute(
-                          builder: (_) => CharacterSettingsPage(
-                            initialCharacter: data.character!,
-                          ),
-                        ),
-                      );
-                      if (changed == true) {
-                        ref.invalidate(homeControllerProvider);
-                      }
-                    },
                   ),
+                  title: const Text('HOUSEMOUSE 캐릭터'),
+                  subtitle: data.character == null
+                      ? const Text('오프라인 · 캐릭터 설정을 확인할 수 없음')
+                      : Text(
+                          '호감도 ${data.character!['affinityTotal'] ?? 0} · '
+                          '${data.character!['riveAssetStatus'] == 'UNCONFIGURED' ? 'PNG 상태 모션 사용 중 · Rive 미설정' : '모션 연결됨'}',
+                        ),
+                  trailing: data.character == null
+                      ? null
+                      : const Icon(Icons.tune),
+                  onTap: data.character == null
+                      ? null
+                      : () async {
+                          final changed = await Navigator.of(context)
+                              .push<bool>(
+                                MaterialPageRoute(
+                                  builder: (_) => CharacterSettingsPage(
+                                    initialCharacter: data.character!,
+                                  ),
+                                ),
+                              );
+                          if (changed == true) {
+                            ref.invalidate(homeControllerProvider);
+                          }
+                        },
                 ),
-                const SizedBox(height: 20),
-              ],
+              ),
+              const SizedBox(height: 20),
               Text('내 PC', style: Theme.of(context).textTheme.titleLarge),
               const SizedBox(height: 8),
               if (data.devices.isEmpty)

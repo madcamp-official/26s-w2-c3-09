@@ -93,7 +93,7 @@ Tauri Desktop
 - Desktop Agent 연결·pairing·replay 상태 UI
 - managed root 등록 시 서버 room 자동 생성·중복 조회와 수동 `Sync to mobile` 재시도
 - system tray, 사용자가 직접 설정하는 autostart, MSI/NSIS Windows bundle 구성
-- Desktop·Flutter가 함께 사용하는 픽셀풍 HouseMouse SVG 마스코트
+- Desktop·Flutter가 함께 사용하는 8종 픽셀풍 HouseMouse PNG 상태 모션
 - Windows에서 Cargo object 파일 잠금으로 Vite가 종료되지 않도록 `src-tauri/target` 감시 제외
 - overlay window/event bridge skeleton
 - 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
