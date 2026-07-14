@@ -533,6 +533,58 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     ).toHaveLength(0);
   });
 
+  it('rejects UPLOAD drafts before they become unsupported desktop commands', async () => {
+    const session = await service.createSession(userId, roomId);
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Upload report',
+    );
+    const draftResult = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'UPLOAD',
+        payload: {
+          rootId: 'Downloads',
+          destinationRelativePath: 'incoming/report.pdf',
+          transferId: randomUUID(),
+          expectedSha256: 'a'.repeat(64),
+          expectedSize: 1024,
+        },
+      },
+      confirmationSummary: 'Upload report.pdf to incoming/report.pdf',
+    });
+
+    await expect(
+      service.confirmCommandDraft(userId, draftResult.draft.id, 'upload-key'),
+    ).rejects.toMatchObject({
+      response: { code: 'UPLOAD_TRANSFER_UNCONFIGURED' },
+    });
+    expect(
+      await connection.db
+        .select()
+        .from(commands)
+        .where(eq(commands.roomId, roomId)),
+    ).toHaveLength(0);
+    expect(
+      await connection.db
+        .select()
+        .from(fileTransfers)
+        .where(eq(fileTransfers.roomId, roomId)),
+    ).toHaveLength(0);
+    expect(
+      (
+        await connection.db
+          .select({
+            status: commandDrafts.status,
+            commandId: commandDrafts.commandId,
+          })
+          .from(commandDrafts)
+          .where(eq(commandDrafts.id, draftResult.draft.id))
+      )[0],
+    ).toEqual({ status: 'DRAFT', commandId: null });
+  });
+
   it('rejects and expires command drafts without creating commands', async () => {
     const session = await service.createSession(userId, roomId);
     const source = await service.createMessage(

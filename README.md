@@ -4,6 +4,7 @@
 
 - Chat `FIND` command drafts now materialize as read-only file-browse requests instead of queued write-capable commands. The server stores the browse request idempotently, Desktop validates `query`/`extensions`/`limit`, and the local SQLite file index filters extensions before applying page limits.
 - Chat `DOWNLOAD` command drafts now materialize as idempotent FileTransfer requests instead of queued write-capable commands. The draft records `fileTransferId`, emits the same durable file-transfer event flow as manual downloads, and fails closed with `EXPECTED_IDENTITY_UNSUPPORTED` when a draft includes file identity preconditions that the current desktop transfer contract cannot yet carry.
+- Chat `UPLOAD` command drafts now fail closed at confirmation with `UPLOAD_TRANSFER_UNCONFIGURED` instead of entering the desktop command queue. The current FileTransfer state machine is desktop-to-mobile only, so mobile-to-desktop uploads must wait for an explicit inverse transfer contract rather than pretending to work.
 - Desktop command processing now fails contract-level `FIND`, `DOWNLOAD`, and `UPLOAD` commands visibly instead of silently skipping them. Until those intent-specific handlers are wired, the agent queues a durable `FAILED` command status so server/mobile state can leave `QUEUED` rather than polling forever.
 - Mobile Room now exposes an approval-first manual file command form for `RENAME`, `MOVE`, `TRASH`, and `CREATE`. The form validates obvious unsafe relative paths locally, sends the existing server command contract with `requiresApproval`, and relies on the desktop agent to create proposals before any file mutation.
 - Mobile Smart Cache reads now use `smartCachePolicyProvider(roomId)`, `smartCacheFilesProvider(roomId)`, and `smartCacheStatusProvider(roomId)`, preserving the existing transport-only offline fallback while keeping policy/file projections behind provider-backed reads.
@@ -347,6 +348,7 @@ flutter test
 ### 실시간 인터랙션
 
 **WebSocket**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API
 - https://techblog.woowahan.com/5268/
 - https://tech.kakao.com/posts/391
@@ -354,21 +356,25 @@ flutter test
 - https://kakaoentertainment-tech.tistory.com/110
 
 **Socket.IO**
+
 - https://socket.io/docs/v4/
 - https://inpa.tistory.com/entry/SOCKET-%F0%9F%93%9A-Namespace-Room-%EA%B8%B0%EB%8A%A5
 - https://adjh54.tistory.com/549
 - https://fred16157.github.io/node.js/nodejs-socketio-communication-room-and-namespace/
 
 **SSE (Server-Sent Events)**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 - https://developer.mozilla.org/ko/docs/Web/API/Server-sent_events/Using_server-sent_events
 - https://api7.ai/ko/blog/what-is-sse
 
 **TCP / UDP Socket**
+
 - https://docs.python.org/3/library/socket.html
 - https://inpa.tistory.com/entry/NW-%F0%9F%8C%90-%EC%95%84%EC%A7%81%EB%8F%84-%EB%AA%A8%ED%98%B8%ED%95%9C-TCP-UDP-%EA%B0%9C%EB%85%90-%E2%9D%93-%EC%89%BD%EA%B2%8C-%EC%9D%B4%ED%95%B4%ED%95%98%EC%9E%90
 
 **gRPC Streaming**
+
 - https://grpc.io/docs/what-is-grpc/core-concepts/
 - https://tech.ktcloud.com/entry/gRPC%EC%9D%98-%EB%82%B4%EB%B6%80-%EA%B5%AC%EC%A1%B0-%ED%8C%8C%ED%97%A4%EC%B9%98%EA%B8%B0-HTTP2-Protobuf-%EA%B7%B8%EB%A6%AC%EA%B3%A0-%EC%8A%A4%ED%8A%B8%EB%A6%AC%EB%B0%8D
 - https://tech.ktcloud.com/entry/gRPC%EC%9D%98-%EB%82%B4%EB%B6%80-%EA%B5%AC%EC%A1%B0-%ED%8C%8C%ED%97%A4%EC%B9%98%EA%B8%B02-Channel-Stub
@@ -376,6 +382,7 @@ flutter test
 - https://devocean.sk.com/blog/techBoardDetail.do?ID=167433
 
 **WebRTC**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API
 - https://webrtc.org/getting-started/overview
 - https://web.dev/articles/webrtc-basics?hl=ko
@@ -385,6 +392,7 @@ flutter test
 - https://on.com2us.com/tech/webrtc-coturn-turn-stun-server-setup-guide/
 
 **QUIC / WebTransport**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/WebTransport_API
 - https://datatracker.ietf.org/doc/html/rfc9000
 - https://news.hada.io/topic?id=13888

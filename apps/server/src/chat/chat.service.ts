@@ -11,6 +11,7 @@ import {
   createFileTransferSchema,
   downloadCommandPayloadSchema,
   findCommandPayloadSchema,
+  uploadCommandPayloadSchema,
 } from '@mousekeeper/contracts';
 import {
   chatMessages,
@@ -350,6 +351,9 @@ export class ChatService {
       if (draft.intent === 'DOWNLOAD') {
         return this.materializeDownloadDraftIn(tx, userId, owned, key);
       }
+      if (draft.intent === 'UPLOAD') {
+        return this.materializeUploadDraftIn(tx, userId, owned);
+      }
       const device = await this.requireActiveRoomDeviceIn(
         tx,
         userId,
@@ -565,6 +569,34 @@ export class ChatService {
       draft: this.publicDraft(updated),
       fileTransfer,
     };
+  }
+
+  private async materializeUploadDraftIn(
+    tx: Transaction,
+    userId: string,
+    owned: {
+      draft: typeof commandDrafts.$inferSelect;
+      session: typeof chatSessions.$inferSelect;
+    },
+  ): Promise<never> {
+    const parsed = uploadCommandPayloadSchema.safeParse(owned.draft.arguments);
+    if (!parsed.success) {
+      throw new ConflictException({ code: 'INVALID_DRAFT_ARGUMENTS' });
+    }
+    const room = await this.requireOwnedRoomIn(
+      tx,
+      userId,
+      owned.session.roomId,
+    );
+    if (parsed.data.rootId !== room.rootAlias) {
+      throw new ConflictException({ code: 'ROOT_MISMATCH' });
+    }
+
+    throw new ConflictException({
+      code: 'UPLOAD_TRANSFER_UNCONFIGURED',
+      message:
+        'UPLOAD drafts require a mobile-to-desktop transfer state machine and are not materialized as desktop commands.',
+    });
   }
 
   async rejectCommandDraft(userId: string, draftId: string) {
