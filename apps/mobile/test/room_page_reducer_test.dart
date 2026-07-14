@@ -309,4 +309,77 @@ void main() {
       expect(identical(stale, patched), isTrue);
     },
   );
+
+  test('room content reducer patches only changed slices', () {
+    final current = RoomContent(
+      commands: const [
+        {'id': 'command-a', 'status': 'DELIVERED'},
+      ],
+      proposals: const [
+        {'id': 'proposal-a', 'status': 'OPEN'},
+      ],
+      executions: const [
+        {
+          'execution': {'id': 'execution-a', 'status': 'EXECUTING'},
+          'proposal': null,
+        },
+      ],
+      activity: const [
+        {'eventType': 'proposal.created'},
+      ],
+      snapshot: const {
+        'id': 'snapshot-a',
+        'roomId': 'room-a',
+        'score': 50,
+        'calculatedAt': '2026-07-13T09:00:00.000Z',
+      },
+      isOffline: false,
+    );
+
+    final patched = reduceRoomContentForRealtimeUpdate(
+      current: current,
+      roomId: 'room-a',
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.executionStatus,
+        eventType: 'execution.updated',
+        roomId: 'room-a',
+        executionId: 'execution-a',
+        executionStatus: 'SUCCEEDED',
+      ),
+    );
+
+    expect(identical(patched, current), isFalse);
+    expect(identical(patched.commands, current.commands), isTrue);
+    expect(identical(patched.proposals, current.proposals), isTrue);
+    expect(identical(patched.activity, current.activity), isTrue);
+    expect(
+      (patched.executions.single['execution'] as Map)['status'],
+      'SUCCEEDED',
+    );
+  });
+
+  test('room content reducer returns same object for unrelated events', () {
+    final current = RoomContent(
+      commands: const [],
+      proposals: const [],
+      executions: const [],
+      activity: const [],
+      snapshot: null,
+      isOffline: false,
+    );
+
+    final patched = reduceRoomContentForRealtimeUpdate(
+      current: current,
+      roomId: 'room-a',
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.executionStatus,
+        eventType: 'execution.updated',
+        roomId: 'room-b',
+        executionId: 'execution-a',
+        executionStatus: 'SUCCEEDED',
+      ),
+    );
+
+    expect(identical(patched, current), isTrue);
+  });
 }

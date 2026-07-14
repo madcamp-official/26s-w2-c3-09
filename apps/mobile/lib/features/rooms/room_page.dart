@@ -15,8 +15,8 @@ import '../files/smart_cache_page.dart';
 import '../chat/chat_page.dart';
 import '../rules/rules_page.dart';
 
-class _RoomContent {
-  const _RoomContent({
+class RoomContent {
+  const RoomContent({
     required this.commands,
     required this.proposals,
     required this.executions,
@@ -31,12 +31,12 @@ class _RoomContent {
   final Map<String, dynamic>? snapshot;
   final bool isOffline;
 
-  _RoomContent copyWith({
+  RoomContent copyWith({
     List<Map<String, dynamic>>? commands,
     List<Map<String, dynamic>>? proposals,
     List<Map<String, dynamic>>? executions,
     Map<String, dynamic>? snapshot,
-  }) => _RoomContent(
+  }) => RoomContent(
     commands: commands ?? this.commands,
     proposals: proposals ?? this.proposals,
     executions: executions ?? this.executions,
@@ -162,6 +162,45 @@ Map<String, dynamic>? patchRoomSnapshotForRealtimeUpdate({
   return Map<String, dynamic>.unmodifiable(next);
 }
 
+RoomContent reduceRoomContentForRealtimeUpdate({
+  required RoomContent current,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  final commands = patchCommandItemsForRealtimeUpdate(
+    commands: current.commands,
+    update: update,
+    roomId: roomId,
+  );
+  final proposals = patchProposalItemsForRealtimeUpdate(
+    proposals: current.proposals,
+    update: update,
+    roomId: roomId,
+  );
+  final executions = patchExecutionItemsForRealtimeUpdate(
+    executions: current.executions,
+    update: update,
+    roomId: roomId,
+  );
+  final snapshot = patchRoomSnapshotForRealtimeUpdate(
+    snapshot: current.snapshot,
+    update: update,
+    roomId: roomId,
+  );
+  if (identical(commands, current.commands) &&
+      identical(proposals, current.proposals) &&
+      identical(executions, current.executions) &&
+      identical(snapshot, current.snapshot)) {
+    return current;
+  }
+  return current.copyWith(
+    commands: commands,
+    proposals: proposals,
+    executions: executions,
+    snapshot: snapshot,
+  );
+}
+
 bool _snapshotIsNewer({
   required Object? currentCalculatedAt,
   required Object? nextCalculatedAt,
@@ -227,8 +266,8 @@ class RoomPage extends ConsumerStatefulWidget {
 }
 
 class _RoomPageState extends ConsumerState<RoomPage> {
-  late Future<_RoomContent> _content;
-  _RoomContent? _latestContent;
+  late Future<RoomContent> _content;
+  RoomContent? _latestContent;
   bool _suppressNextRealtimeRevisionReload = false;
   bool _submitting = false;
   @override
@@ -237,7 +276,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     _reload();
   }
 
-  Future<_RoomContent> _load() async {
+  Future<RoomContent> _load() async {
     final api = ref.read(apiClientProvider);
     final cache = ref.read(displayCacheProvider);
     final id = widget.room['id'] as String;
@@ -257,7 +296,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         cache.saveSnapshot(id, snapshot),
       ]);
       if (!_roomIsActive(id)) throw StateError('ROOM_REMOVED');
-      return _RoomContent(
+      return RoomContent(
         commands: lists[0],
         proposals: lists[1],
         executions: lists[2],
@@ -273,7 +312,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         cache.executions(id),
         cache.snapshot(id),
       ]);
-      return _RoomContent(
+      return RoomContent(
         commands: cached[0] as List<Map<String, dynamic>>,
         proposals: cached[1] as List<Map<String, dynamic>>,
         executions: cached[2] as List<Map<String, dynamic>>,
@@ -310,41 +349,21 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     final current = _latestContent;
     if (current == null) return false;
     final roomId = widget.room['id'] as String;
-    final commands = patchCommandItemsForRealtimeUpdate(
-      commands: current.commands,
+    final patched = reduceRoomContentForRealtimeUpdate(
+      current: current,
       update: update,
       roomId: roomId,
     );
-    final proposals = patchProposalItemsForRealtimeUpdate(
-      proposals: current.proposals,
-      update: update,
-      roomId: roomId,
-    );
-    final executions = patchExecutionItemsForRealtimeUpdate(
-      executions: current.executions,
-      update: update,
-      roomId: roomId,
-    );
-    final snapshot = patchRoomSnapshotForRealtimeUpdate(
-      snapshot: current.snapshot,
-      update: update,
-      roomId: roomId,
-    );
-    if (identical(commands, current.commands) &&
-        identical(proposals, current.proposals) &&
-        identical(executions, current.executions) &&
-        identical(snapshot, current.snapshot)) {
+    if (identical(patched, current)) {
       return false;
     }
-    final patched = current.copyWith(
-      commands: commands,
-      proposals: proposals,
-      executions: executions,
-      snapshot: snapshot,
-    );
     _latestContent = patched;
     _content = Future.value(patched);
     final cache = ref.read(displayCacheProvider);
+    final commands = patched.commands;
+    final proposals = patched.proposals;
+    final executions = patched.executions;
+    final snapshot = patched.snapshot;
     if (!identical(commands, current.commands)) {
       unawaited(cache.replaceCommands(roomId, commands));
     }
@@ -528,7 +547,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         icon: const Icon(Icons.auto_fix_high),
         label: const Text('정리 제안 요청'),
       ),
-      body: FutureBuilder<_RoomContent>(
+      body: FutureBuilder<RoomContent>(
         future: _content,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
