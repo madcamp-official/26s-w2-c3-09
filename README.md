@@ -2,6 +2,8 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- RuleDefinition hardening: the Rust file engine now accepts the server/mobile `RuleDefinition` draft shape as well as root-local `rules.json`, maps additive conditions such as modified/created age, size, relative path, file kind, name operators, `TRASH`, and `CREATE_DIR`, records directory entries for safe destination checks, and deduplicates identical `CREATE_DIR` proposals before execution approval.
+- Latency validation: no merge-conflict markers are present; the existing mobile/server/desktop latency hardening was rechecked with focused tests. Mobile Home uses one `/v1/home/summary` load plus WebSocket item patches, the 5-second connection safety reconcile does not refetch Home summary, Desktop keeps 5-second heartbeat with 15/30-second REST reconcile, and pairing status remains isolated at 60/min with 2-second desktop polling.
 - Server `/realtime` now installs a Socket.IO Redis adapter from the existing `REDIS_URL`, using dedicated duplicated pub/sub clients so multi-process room broadcasts no longer depend on a single API process.
 - Mobile smart-cache downloads now POST `DOWNLOAD_COMPLETED` to `/v1/cached-files/:cachedFileId/access-events` only after local save and SHA-256 verification; the server records `lastAccessedAt`/usage score from that verified ACK instead of treating signed URL issuance as a completed access.
 - Realtime/event contract artifacts now include independent JSON Schema files for `presence.updated`, item-scoped `smart-cache.updated`, and the safe declarative Rule DSL, with OpenAPI component refs and regression checks.

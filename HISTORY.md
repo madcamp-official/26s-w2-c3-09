@@ -1,5 +1,14 @@
 # MOUSEKEEPER 구현 이력 및 MVP 감사
 
+## 2026-07-14 추가 검증 및 정리
+
+- [x] Git conflict marker와 unmerged path를 재확인했다. 현재 저장소에는 `<<<<<<<`, `=======`, `>>>>>>>` 충돌 마커와 `UU` 상태 파일이 없다.
+- [x] 모바일 통신 지연 개선 상태를 재검증했다. Home은 최초/명시 갱신 때 `/v1/home/summary`를 한 번 읽고, `presence.updated`, proposal/decision/execution/snapshot/file browse/transfer 이벤트는 WebSocket payload로 해당 항목만 patch한다.
+- [x] 5초 모바일 연결 안전 reconcile은 ACTIVE device/room gate만 확인하며 Home summary 전체 재호출을 유발하지 않는다.
+- [x] 데스크톱 background runtime은 heartbeat를 5초로 유지하고, REST reconcile은 15초 fast pass와 30초 heavy pass로 분리되어 있다.
+- [x] pairing status 조회는 일반 pairing mutation과 다른 60회/분 rate-limit bucket을 쓰며, 데스크톱 pairing UI는 2초 간격으로 status를 확인한다.
+- [x] Rust file engine은 서버/모바일 `RuleDefinition` draft를 내부 `RuleSet`으로 변환할 수 있게 되었고, modified/created age, size, relative path, file kind, name operator, `TRASH`, `CREATE_DIR`를 proposal 단계에서 검증한다. `CREATE_DIR` proposal은 중복 생성되지 않으며 기존 디렉터리는 `DestinationExists`로 표시된다.
+
 > 감사 기준일: 2026-07-13
 > 감사 기준 브랜치: `B` (`origin/main` 기준 v1.4 구현 포함)
 > 기준 문서: `MOUSEKEEPER_PLAN.md`, `IMPLEMENTATION_PLAN.md`, `AI_implement_rule.txt`
