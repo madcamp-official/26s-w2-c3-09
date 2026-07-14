@@ -222,6 +222,33 @@ void main() {
     );
   });
 
+  test('chat message events become session-scoped realtime patches', () {
+    final update = realtimeChatMessageUpdateFor('chat.message.created', {
+      'eventId': 'chat-event',
+      'eventType': 'chat.message.created',
+      'aggregateId': 'message-a',
+      'roomId': 'room-a',
+      'payload': {
+        'messageId': 'message-a',
+        'sessionId': 'session-a',
+        'senderType': 'ASSISTANT',
+        'messageType': 'TEXT',
+      },
+    });
+
+    expect(update?.messageId, 'message-a');
+    expect(update?.sessionId, 'session-a');
+    expect(update?.roomId, 'room-a');
+    expect(update?.senderType, 'ASSISTANT');
+    expect(update?.messageType, 'TEXT');
+    expect(
+      realtimeChatMessageUpdateFor('chat.message.created', {
+        'payload': {'messageId': 'message-a'},
+      }),
+      isNull,
+    );
+  });
+
   test('complete realtime patches suppress generic page revision fan-out', () {
     final presence = realtimeHomeUpdateFor('presence.updated', {
       'deviceId': 'device-a',
@@ -326,6 +353,9 @@ void main() {
         },
       },
     );
+    final chatMessage = realtimeChatMessageUpdateFor('chat.message.created', {
+      'payload': {'messageId': 'message-a', 'sessionId': 'session-a'},
+    });
 
     for (final entry in <(String, RealtimeHomeUpdate?)>[
       ('presence.updated', presence),
@@ -372,6 +402,17 @@ void main() {
         null,
         null,
         fileDirectory,
+      ),
+      true,
+    );
+    expect(
+      realtimeUpdateSuppressesGenericRevision(
+        'chat.message.created',
+        null,
+        null,
+        null,
+        null,
+        chatMessage,
       ),
       true,
     );

@@ -143,6 +143,22 @@ class RealtimeFileDirectoryUpdate {
   final Map<String, dynamic>? entry;
 }
 
+class RealtimeChatMessageUpdate {
+  const RealtimeChatMessageUpdate({
+    required this.messageId,
+    required this.sessionId,
+    this.roomId,
+    this.senderType,
+    this.messageType,
+  });
+
+  final String messageId;
+  final String sessionId;
+  final String? roomId;
+  final String? senderType;
+  final String? messageType;
+}
+
 final realtimeFileTransferUpdateProvider =
     NotifierProvider<
       RealtimeFileTransferUpdateController,
@@ -160,6 +176,12 @@ final realtimeFileDirectoryUpdateProvider =
       RealtimeFileDirectoryUpdateController,
       RealtimeFileDirectoryUpdate?
     >(RealtimeFileDirectoryUpdateController.new);
+
+final realtimeChatMessageUpdateProvider =
+    NotifierProvider<
+      RealtimeChatMessageUpdateController,
+      RealtimeChatMessageUpdate?
+    >(RealtimeChatMessageUpdateController.new);
 
 class RealtimeHomeUpdateController extends Notifier<RealtimeHomeUpdate?> {
   @override
@@ -202,6 +224,17 @@ class RealtimeFileDirectoryUpdateController
   }
 
   void emit(RealtimeFileDirectoryUpdate update) => state = update;
+}
+
+class RealtimeChatMessageUpdateController
+    extends Notifier<RealtimeChatMessageUpdate?> {
+  @override
+  RealtimeChatMessageUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeChatMessageUpdate update) => state = update;
 }
 
 RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
@@ -443,7 +476,9 @@ bool realtimeUpdateSuppressesGenericRevision(
   RealtimeFileTransferUpdate? fileTransferUpdate,
   RealtimeFileBrowseUpdate? fileBrowseUpdate,
   RealtimeFileDirectoryUpdate? fileDirectoryUpdate,
+  RealtimeChatMessageUpdate? chatMessageUpdate,
 ]) {
+  if (chatMessageUpdate != null) return true;
   if (fileTransferUpdate != null) return true;
   if (fileBrowseUpdate != null || event.startsWith('file.browse.')) {
     return true;
@@ -573,6 +608,44 @@ RealtimeFileDirectoryUpdate? realtimeFileDirectoryUpdateFor(
         ? previousRelativePath
         : null,
     entry: entry is Map ? Map<String, dynamic>.from(entry) : null,
+  );
+}
+
+RealtimeChatMessageUpdate? realtimeChatMessageUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (event != 'chat.message.created' || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final messageId = switch (payload['messageId'] ?? value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final sessionId = switch (payload['sessionId'] ?? value['sessionId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  if (messageId == null || sessionId == null) return null;
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final senderType = payload['senderType'];
+  final messageType = payload['messageType'];
+  return RealtimeChatMessageUpdate(
+    messageId: messageId,
+    sessionId: sessionId,
+    roomId: roomId,
+    senderType: senderType is String && senderType.isNotEmpty
+        ? senderType
+        : null,
+    messageType: messageType is String && messageType.isNotEmpty
+        ? messageType
+        : null,
   );
 }
 
@@ -852,6 +925,14 @@ class RealtimeController extends Notifier<int> {
           .read(realtimeFileDirectoryUpdateProvider.notifier)
           .emit(fileDirectoryUpdate);
     }
+    final chatMessageUpdate = realtimeChatMessageUpdateFor(event, data);
+    if (shouldRefresh &&
+        chatMessageUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeChatMessageUpdateProvider.notifier)
+          .emit(chatMessageUpdate);
+    }
     final homeUpdate = realtimeHomeUpdateFor(event, data);
     if (shouldRefresh &&
         homeUpdate != null &&
@@ -867,6 +948,7 @@ class RealtimeController extends Notifier<int> {
           fileTransferUpdate,
           fileBrowseUpdate,
           fileDirectoryUpdate,
+          chatMessageUpdate,
         ) &&
         _isActiveSocket(session, socket)) {
       state++;
@@ -929,6 +1011,15 @@ class RealtimeController extends Notifier<int> {
                   .read(realtimeFileDirectoryUpdateProvider.notifier)
                   .emit(fileDirectoryUpdate);
             }
+            final chatMessageUpdate = realtimeChatMessageUpdateFor(
+              eventType,
+              event,
+            );
+            if (chatMessageUpdate != null) {
+              ref
+                  .read(realtimeChatMessageUpdateProvider.notifier)
+                  .emit(chatMessageUpdate);
+            }
             final homeUpdate = realtimeHomeUpdateFor(eventType, event);
             if (homeUpdate != null) {
               ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
@@ -939,6 +1030,7 @@ class RealtimeController extends Notifier<int> {
               fileTransferUpdate,
               fileBrowseUpdate,
               fileDirectoryUpdate,
+              chatMessageUpdate,
             )) {
               requiresGenericRevision = true;
             }

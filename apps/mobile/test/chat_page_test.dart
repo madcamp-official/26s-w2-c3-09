@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mousekeeper/core/sync/realtime_controller.dart';
 import 'package:mousekeeper/features/chat/chat_page.dart';
 
 void main() {
@@ -325,6 +326,43 @@ void main() {
     expect(find.text('첫 메시지'), findsOneWidget);
     expect(gateway.updatedTitles, ['s1:새 제목']);
     expect(gateway.messageLoads, {'s1': 1});
+  });
+
+  testWidgets('realtime message event fetches only the selected session page', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화'), _session('s2', '둘째 대화')],
+      messagesBySession: {
+        's1': [_message('m1', 's1', 'USER', '첫 메시지')],
+        's2': [_message('other', 's2', 'USER', '다른 세션 메시지')],
+      },
+    );
+
+    await _pumpChat(tester, gateway);
+    gateway.messagesBySession['s1']!.add(
+      _message('m2', 's1', 'ASSISTANT', '새 답장'),
+    );
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ChatPage)),
+    );
+    container
+        .read(realtimeChatMessageUpdateProvider.notifier)
+        .emit(
+          const RealtimeChatMessageUpdate(
+            messageId: 'm2',
+            sessionId: 's1',
+            roomId: 'room-1',
+          ),
+        );
+    await tester.pumpAndSettle();
+
+    expect(find.text('새 답장'), findsOneWidget);
+    expect(find.text('다른 세션 메시지'), findsNothing);
+    expect(gateway.messageRequests, [
+      {'sessionId': 's1', 'cursor': null, 'limit': chatMessagePageSize},
+      {'sessionId': 's1', 'cursor': 'm1', 'limit': chatMessagePageSize},
+    ]);
   });
 }
 

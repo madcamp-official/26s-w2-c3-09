@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
+import '../../core/sync/realtime_controller.dart';
 import 'readme_command_page.dart';
 
 abstract interface class ChatGateway {
@@ -387,6 +388,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _deleting = false;
   bool _disposed = false;
   final Set<String> _draftingIds = {};
+  final Set<String> _realtimeMessageIdsInFlight = {};
   int _loadVersion = 0;
 
   ChatGateway get _gateway => widget.gateway ?? ref.read(chatGatewayProvider);
@@ -670,6 +672,47 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<void> _applyRealtimeChatMessage(
+    RealtimeChatMessageUpdate update,
+  ) async {
+    if (update.roomId != null && update.roomId != widget.roomId) return;
+    if (update.sessionId != _conversation.selectedSessionId) {
+      _invalidateChatReadModels();
+      return;
+    }
+    if (_conversation.messages.any(
+      (message) => message['id'] == update.messageId,
+    )) {
+      return;
+    }
+    if (!_realtimeMessageIdsInFlight.add(update.messageId)) return;
+    try {
+      final sessionId = update.sessionId;
+      final cursor = _conversation.messageCursor;
+      final received = cursor == null
+          ? await _listInitialMessages(sessionId)
+          : await _listMoreMessages(sessionId, cursor);
+      if (_disposed || sessionId != _conversation.selectedSessionId) return;
+      final merged = mergeChatMessages(_conversation.messages, received);
+      if (identical(merged, _conversation.messages)) return;
+      setState(() {
+        _conversation = _conversation.copyWith(
+          messages: merged,
+          messageCursor: lastChatMessageId(merged),
+          clearMessageCursor: merged.isEmpty,
+          hasMoreMessages: received.length == chatMessagePageSize,
+        );
+      });
+      _scrollToBottom();
+    } catch (_) {
+      // Realtime chat events are a latency optimization. If this targeted
+      // fetch fails, the next explicit open/refresh still reads the durable
+      // session messages from the server.
+    } finally {
+      _realtimeMessageIdsInFlight.remove(update.messageId);
+    }
+  }
+
   Future<void> _confirmCommandDraft(String draftId) async {
     if (_draftingIds.contains(draftId)) return;
     setState(() => _draftingIds.add(draftId));
@@ -737,74 +780,81 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('집쥐인과 대화'),
-      actions: [
-        IconButton(
-          tooltip: 'README 초안 요청',
-          icon: const Icon(Icons.description_outlined),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ReadmeCommandPage(roomId: widget.roomId),
+  Widget build(BuildContext context) {
+    ref.listen(realtimeChatMessageUpdateProvider, (previous, next) {
+      if (next == null || identical(previous, next) || !mounted) return;
+      unawaited(_applyRealtimeChatMessage(next));
+    });
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('집쥐인과 대화'),
+        actions: [
+          IconButton(
+            tooltip: 'README 초안 요청',
+            icon: const Icon(Icons.description_outlined),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ReadmeCommandPage(roomId: widget.roomId),
+              ),
             ),
           ),
-        ),
-      ],
-    ),
-    body: Column(
-      children: [
-        _SessionBar(
-          sessions: _conversation.sessions,
-          selectedSessionId: _conversation.selectedSessionId,
-          creating: _creating,
-          renaming: _renaming,
-          deleting: _deleting,
-          onCreate: _createSession,
-          onRename: _renameSelectedSession,
-          onDelete: _deleteSelectedSession,
-          onSelected: (id) {
-            if (id != _conversation.selectedSessionId) {
-              unawaited(_selectSession(id));
-            }
-          },
-        ),
-        Expanded(child: _buildBody()),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    key: const ValueKey('chat-message-field'),
-                    controller: input,
-                    maxLength: 2000,
-                    enabled:
-                        _conversation.selectedSessionId != null && !_sending,
-                    decoration: const InputDecoration(
-                      hintText: '메시지',
-                      border: OutlineInputBorder(),
+        ],
+      ),
+      body: Column(
+        children: [
+          _SessionBar(
+            sessions: _conversation.sessions,
+            selectedSessionId: _conversation.selectedSessionId,
+            creating: _creating,
+            renaming: _renaming,
+            deleting: _deleting,
+            onCreate: _createSession,
+            onRename: _renameSelectedSession,
+            onDelete: _deleteSelectedSession,
+            onSelected: (id) {
+              if (id != _conversation.selectedSessionId) {
+                unawaited(_selectSession(id));
+              }
+            },
+          ),
+          Expanded(child: _buildBody()),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('chat-message-field'),
+                      controller: input,
+                      maxLength: 2000,
+                      enabled:
+                          _conversation.selectedSessionId != null && !_sending,
+                      decoration: const InputDecoration(
+                        hintText: '메시지',
+                        border: OutlineInputBorder(),
+                      ),
+                      onSubmitted: (_) => unawaited(send()),
                     ),
-                    onSubmitted: (_) => unawaited(send()),
                   ),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  key: const ValueKey('chat-send-button'),
-                  tooltip: '보내기',
-                  onPressed: _sending || _conversation.selectedSessionId == null
-                      ? null
-                      : send,
-                  icon: const Icon(Icons.send),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  IconButton(
+                    key: const ValueKey('chat-send-button'),
+                    tooltip: '보내기',
+                    onPressed:
+                        _sending || _conversation.selectedSessionId == null
+                        ? null
+                        : send,
+                    icon: const Icon(Icons.send),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
 
   Widget _buildBody() {
     if (_loading) return const Center(child: CircularProgressIndicator());
