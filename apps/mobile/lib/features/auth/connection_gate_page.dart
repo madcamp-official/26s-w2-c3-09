@@ -43,7 +43,7 @@ enum PairingGateLoadingStage {
   authenticating(0.15, '로그인 상태를 확인하는 중입니다'),
   loadingConnections(0.35, '연결된 PC를 확인하는 중입니다'),
   connectingRealtime(0.60, '실시간 연결을 준비하는 중입니다'),
-  reconcilingCache(0.80, '로컬 표시 상태를 맞추는 중입니다'),
+  reconcilingCache(0.80, '표시 상태를 맞추는 중입니다'),
   ready(1.0, '연결 준비가 끝났습니다');
 
   const PairingGateLoadingStage(this.progress, this.message);
@@ -70,33 +70,39 @@ class PairingGateLoadingPage extends StatelessWidget {
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     return Scaffold(
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            PixelFillMouse(
-              progress: stage.progress,
-              animate: !disableAnimations,
-            ),
-            const SizedBox(height: 20),
-            Text(stage.message, textAlign: TextAlign.center),
-            const SizedBox(height: 8),
-            Text(
-              '${(stage.progress * 100).round()}%',
-              style: Theme.of(context).textTheme.labelMedium,
-            ),
-            if (showLongWaitMessage) ...[
-              const SizedBox(height: 16),
-              const Text('연결이 평소보다 오래 걸리고 있어요.', textAlign: TextAlign.center),
-            ],
-            if (onRetry != null) ...[
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh),
-                label: const Text('다시 확인'),
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              PixelFillMouse(
+                progress: stage.progress,
+                animate: !disableAnimations,
               ),
+              const SizedBox(height: 20),
+              Text(stage.message, textAlign: TextAlign.center),
+              const SizedBox(height: 8),
+              Text(
+                '${(stage.progress * 100).round()}%',
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+              if (showLongWaitMessage) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  '연결 확인이 예상보다 오래 걸리고 있어요.',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              if (onRetry != null) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('다시 확인'),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -252,16 +258,6 @@ class PairingGateErrorPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: const Text('PC 연결 확인'),
-      actions: [
-        IconButton(
-          tooltip: '로그아웃',
-          onPressed: onSignOut,
-          icon: const Icon(Icons.logout),
-        ),
-      ],
-    ),
     body: Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -271,7 +267,8 @@ class PairingGateErrorPage extends StatelessWidget {
             const Icon(Icons.cloud_off_outlined, size: 56),
             const SizedBox(height: 16),
             const Text(
-              '서버에서 활성 PC 상태를 확인하지 못했습니다.\n이전 캐시로 메인 화면을 열지 않습니다.',
+              '서버에서 활성 PC 상태를 확인하지 못했습니다.\n'
+              '페어링이 끝나기 전에는 메인 화면으로 이동하지 않습니다.',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
@@ -282,6 +279,8 @@ class PairingGateErrorPage extends StatelessWidget {
               icon: const Icon(Icons.refresh),
               label: const Text('다시 확인'),
             ),
+            const SizedBox(height: 8),
+            TextButton(onPressed: onSignOut, child: const Text('로그아웃')),
           ],
         ),
       ),

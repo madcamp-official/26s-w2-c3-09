@@ -7,7 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
 import '../../core/sync/realtime_controller.dart';
-import 'readme_command_page.dart';
+import '../proposals/proposal_page.dart';
 
 abstract interface class ChatGateway {
   Future<List<Map<String, dynamic>>> listSessions(String roomId);
@@ -25,9 +25,21 @@ abstract interface class ChatGateway {
     String idempotencyKey,
   );
   Future<Map<String, dynamic>> rejectCommandDraft(String draftId);
+  Future<List<Map<String, dynamic>>> listPendingProposals(String roomId);
 }
 
 const chatMessagePageSize = 30;
+const pendingApprovalSessionId = '__mousekeeper_pending_approvals__';
+
+bool isPendingApprovalSessionId(String? value) =>
+    value == pendingApprovalSessionId;
+
+Map<String, dynamic> pendingApprovalSession(int count) => {
+  'id': pendingApprovalSessionId,
+  'title': count > 0 ? '승인 대기방 ($count)' : '승인 대기방',
+  'messagePreview': count > 0 ? '$count개의 제안 검토 필요' : '승인 대기 제안 없음',
+  'synthetic': true,
+};
 
 final chatGatewayProvider = Provider<ChatGateway>(
   (ref) => ApiChatGateway(ref.watch(apiClientProvider)),
@@ -52,6 +64,11 @@ final chatMessagePageProvider = FutureProvider.autoDispose
             cursor: query.cursor,
             limit: query.limit,
           );
+    });
+
+final chatPendingProposalListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>((ref, roomId) {
+      return ref.watch(chatGatewayProvider).listPendingProposals(roomId);
     });
 
 class ChatMessagesPageQuery {
@@ -129,6 +146,10 @@ class ApiChatGateway implements ChatGateway {
   @override
   Future<Map<String, dynamic>> rejectCommandDraft(String draftId) =>
       _api.post('/v1/command-drafts/$draftId/reject', const {});
+
+  @override
+  Future<List<Map<String, dynamic>>> listPendingProposals(String roomId) =>
+      _api.getList('/v1/rooms/$roomId/proposals/open');
 }
 
 String chatSessionTitle(Map<String, dynamic> session) {
@@ -243,6 +264,26 @@ List<Map<String, dynamic>> replaceChatSession(
         session,
   ];
   return found && changed ? List.unmodifiable(next) : sessions;
+}
+
+List<Map<String, dynamic>> _replacePendingApprovalSession(
+  List<Map<String, dynamic>> sessions,
+  int pendingCount,
+) {
+  final nextPending = pendingApprovalSession(pendingCount);
+  var replaced = false;
+  final next = [
+    for (final session in sessions)
+      if (isPendingApprovalSessionId(session['id'] as String?))
+        (() {
+          replaced = true;
+          return nextPending;
+        })()
+      else
+        session,
+  ];
+  if (!replaced) next.add(nextPending);
+  return List.unmodifiable(next);
 }
 
 List<Map<String, dynamic>> mergeChatMessages(
@@ -379,6 +420,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final input = TextEditingController();
   final _scrollController = ScrollController();
   ChatConversationState _conversation = const ChatConversationState.empty();
+  List<Map<String, dynamic>> _pendingProposals = const [];
   Object? _error;
   bool _loading = true;
   bool _sending = false;
@@ -398,6 +440,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final gateway = widget.gateway;
     if (gateway != null) return gateway.listSessions(widget.roomId);
     return ref.read(chatSessionListProvider(widget.roomId).future);
+  }
+
+  Future<List<Map<String, dynamic>>> _listPendingProposals() {
+    final gateway = widget.gateway;
+    if (gateway != null) return gateway.listPendingProposals(widget.roomId);
+    return ref.read(chatPendingProposalListProvider(widget.roomId).future);
   }
 
   Future<List<Map<String, dynamic>>> _listInitialMessages(String sessionId) {
@@ -424,6 +472,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   void _invalidateChatReadModels({String? sessionId}) {
     if (widget.gateway != null) return;
     ref.invalidate(chatSessionListProvider(widget.roomId));
+    ref.invalidate(chatPendingProposalListProvider(widget.roomId));
     if (sessionId != null) {
       ref.invalidate(chatMessagesProvider(sessionId));
     }
@@ -452,6 +501,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     });
     try {
       var sessions = await _listSessions();
+      final pendingProposals = await _listPendingProposals();
       if (_stale(version)) return;
       if (sessions.isEmpty) {
         final created = await _gateway.createSession(widget.roomId);
@@ -459,17 +509,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         if (_stale(version)) return;
         sessions = [created];
       }
+      final visibleSessions = [
+        ...sessions,
+        pendingApprovalSession(pendingProposals.length),
+      ];
       final selectedId = selectChatSessionId(
-        sessions,
+        visibleSessions,
         _conversation.selectedSessionId,
       );
-      final messages = selectedId == null
+      final messages =
+          selectedId == null || isPendingApprovalSessionId(selectedId)
           ? <Map<String, dynamic>>[]
           : await _listInitialMessages(selectedId);
       if (_stale(version)) return;
       setState(() {
+        _pendingProposals = pendingProposals;
         _conversation = ChatConversationState(
-          sessions: sessions,
+          sessions: visibleSessions,
           messages: messages,
           selectedSessionId: selectedId,
           messageCursor: lastChatMessageId(messages),
@@ -500,6 +556,24 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _error = null;
     });
     try {
+      if (isPendingApprovalSessionId(sessionId)) {
+        final pendingProposals = await _listPendingProposals();
+        if (_stale(version)) return;
+        setState(() {
+          _pendingProposals = pendingProposals;
+          _conversation = _conversation.copyWith(
+            sessions: _replacePendingApprovalSession(
+              _conversation.sessions,
+              pendingProposals.length,
+            ),
+            messages: const [],
+            clearMessageCursor: true,
+            hasMoreMessages: false,
+          );
+          _loading = false;
+        });
+        return;
+      }
       final messages = await _listInitialMessages(sessionId);
       if (_stale(version)) return;
       setState(() {
@@ -542,7 +616,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   Future<void> _renameSelectedSession() async {
     final sessionId = _conversation.selectedSessionId;
-    if (sessionId == null || _renaming) return;
+    if (sessionId == null ||
+        isPendingApprovalSessionId(sessionId) ||
+        _renaming) {
+      return;
+    }
     final current = _conversation.sessions
         .where((session) => session['id'] == sessionId)
         .cast<Map<String, dynamic>>()
@@ -579,7 +657,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   Future<void> _deleteSelectedSession() async {
     final sessionId = _conversation.selectedSessionId;
-    if (sessionId == null || _deleting) return;
+    if (sessionId == null ||
+        isPendingApprovalSessionId(sessionId) ||
+        _deleting) {
+      return;
+    }
     setState(() => _deleting = true);
     try {
       await _gateway.deleteSession(sessionId);
@@ -612,7 +694,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> send() async {
     final sessionId = _conversation.selectedSessionId;
     final content = input.text.trim();
-    if (sessionId == null || content.isEmpty || _sending) return;
+    if (sessionId == null ||
+        isPendingApprovalSessionId(sessionId) ||
+        content.isEmpty ||
+        _sending) {
+      return;
+    }
     setState(() => _sending = true);
     try {
       final result = await _gateway.sendMessage(sessionId, content);
@@ -641,6 +728,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _scrollToBottom();
       final notice = chatSendNotice(result);
       if (notice.isNotEmpty) _showSnack(notice);
+      if (result['assistant'] is Map<String, dynamic>) {
+        final assistant = result['assistant'] as Map<String, dynamic>;
+        if (assistant['messageType'] == 'COMMAND_DRAFT') {
+          unawaited(_refreshPendingProposals());
+        }
+      }
     } catch (error) {
       _showSnack('메시지 저장 실패: ${chatErrorMessage(error)}');
     } finally {
@@ -651,7 +744,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> _loadMoreMessages() async {
     final sessionId = _conversation.selectedSessionId;
     final cursor = _conversation.messageCursor;
-    if (sessionId == null || cursor == null || _loadingMore) return;
+    if (sessionId == null ||
+        isPendingApprovalSessionId(sessionId) ||
+        cursor == null ||
+        _loadingMore) {
+      return;
+    }
     setState(() => _loadingMore = true);
     try {
       final next = await _listMoreMessages(sessionId, cursor);
@@ -723,16 +821,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       _invalidateChatReadModels();
       final sessions = await _listSessions();
+      final pendingProposals = await _listPendingProposals();
+      final visibleSessions = [
+        ...sessions,
+        pendingApprovalSession(pendingProposals.length),
+      ];
       if (_disposed) return;
       final selectedId = selectChatSessionId(
-        sessions,
+        visibleSessions,
         _conversation.selectedSessionId,
       );
       final selectedStillAvailable =
           selectedId != null && selectedId == _conversation.selectedSessionId;
       setState(() {
+        _pendingProposals = pendingProposals;
         _conversation = _conversation.copyWith(
-          sessions: sessions,
+          sessions: visibleSessions,
           selectedSessionId: selectedId,
           clearSelectedSessionId: selectedId == null,
           messages: selectedStillAvailable ? null : const [],
@@ -759,6 +863,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
       if (_disposed) return;
       _patchDraftMessage(draftId, result['draft']);
+      unawaited(_refreshPendingProposals());
       _invalidateChatReadModels(sessionId: _conversation.selectedSessionId);
       _showSnack('Command draft confirmed.');
     } catch (error) {
@@ -777,6 +882,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final result = await _gateway.rejectCommandDraft(draftId);
       if (_disposed) return;
       _patchDraftMessage(draftId, result['draft']);
+      unawaited(_refreshPendingProposals());
       _invalidateChatReadModels(sessionId: _conversation.selectedSessionId);
       _showSnack('Command draft rejected.');
     } catch (error) {
@@ -796,6 +902,25 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     setState(() {
       _conversation = _conversation.copyWith(messages: next);
     });
+  }
+
+  Future<void> _refreshPendingProposals() async {
+    try {
+      final pendingProposals = await _listPendingProposals();
+      if (_disposed) return;
+      setState(() {
+        _pendingProposals = pendingProposals;
+        _conversation = _conversation.copyWith(
+          sessions: _replacePendingApprovalSession(
+            _conversation.sessions,
+            pendingProposals.length,
+          ),
+        );
+      });
+    } catch (_) {
+      // Pending proposal refresh is a UI badge update. The durable command
+      // draft mutation above already completed or failed explicitly.
+    }
   }
 
   bool _stale(int version) => _disposed || version != _loadVersion;
@@ -821,26 +946,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (next == null || identical(previous, next) || !mounted) return;
       unawaited(_applyRealtimeChatMessage(next));
     });
+    final selectedIsPendingApproval = isPendingApprovalSessionId(
+      _conversation.selectedSessionId,
+    );
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('집쥐인과 대화'),
-        actions: [
-          IconButton(
-            tooltip: 'README 초안 요청',
-            icon: const Icon(Icons.description_outlined),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => ReadmeCommandPage(roomId: widget.roomId),
-              ),
-            ),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('집쥐인과 대화')),
       body: Column(
         children: [
           _SessionBar(
             sessions: _conversation.sessions,
             selectedSessionId: _conversation.selectedSessionId,
+            pendingApprovalSelected: selectedIsPendingApproval,
             creating: _creating,
             renaming: _renaming,
             deleting: _deleting,
@@ -865,9 +981,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       controller: input,
                       maxLength: 2000,
                       enabled:
-                          _conversation.selectedSessionId != null && !_sending,
+                          _conversation.selectedSessionId != null &&
+                          !selectedIsPendingApproval &&
+                          !_sending,
                       decoration: const InputDecoration(
-                        hintText: '메시지',
+                        hintText: 'AI에게 파일 정리 요청을 말로 입력하세요',
                         border: OutlineInputBorder(),
                       ),
                       onSubmitted: (_) => unawaited(send()),
@@ -878,7 +996,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     key: const ValueKey('chat-send-button'),
                     tooltip: '보내기',
                     onPressed:
-                        _sending || _conversation.selectedSessionId == null
+                        _sending ||
+                            selectedIsPendingApproval ||
+                            _conversation.selectedSessionId == null
                         ? null
                         : send,
                     icon: const Icon(Icons.send),
@@ -917,10 +1037,25 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         child: Text('대화가 없습니다.\n새 대화를 만들어 주세요.', textAlign: TextAlign.center),
       );
     }
+    if (isPendingApprovalSessionId(_conversation.selectedSessionId)) {
+      return _PendingApprovalRoom(
+        proposals: _pendingProposals,
+        onRefresh: () => unawaited(_refreshPendingProposals()),
+        onOpenProposal: (proposalId) async {
+          await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  ProposalPage(proposalId: proposalId, roomId: widget.roomId),
+            ),
+          );
+          if (!_disposed) unawaited(_refreshPendingProposals());
+        },
+      );
+    }
     if (_conversation.messages.isEmpty) {
       return const Center(
         child: Text(
-          '아직 메시지가 없습니다.\n정리 요청은 이 대화에서 확인 카드로 진행됩니다.',
+          '아직 메시지가 없습니다.\n파일 목록, 히스토리, 정리 요청을 말로 물어보세요.',
           textAlign: TextAlign.center,
         ),
       );
@@ -1019,10 +1154,94 @@ class _ChatSessionTitleDialogState extends State<_ChatSessionTitleDialog> {
   );
 }
 
+class _PendingApprovalRoom extends StatelessWidget {
+  const _PendingApprovalRoom({
+    required this.proposals,
+    required this.onRefresh,
+    required this.onOpenProposal,
+  });
+
+  final List<Map<String, dynamic>> proposals;
+  final VoidCallback onRefresh;
+  final ValueChanged<String> onOpenProposal;
+
+  @override
+  Widget build(BuildContext context) {
+    if (proposals.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.inbox_outlined, size: 48),
+              const SizedBox(height: 12),
+              const Text(
+                '승인 대기 중인 제안이 없습니다.\nAI 대화에서 파일 정리를 요청하면 확인 카드가 여기에 모입니다.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: onRefresh,
+                icon: const Icon(Icons.refresh),
+                label: const Text('새로고침'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return RefreshIndicator(
+      onRefresh: () async => onRefresh(),
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Card(
+            color: Theme.of(context).colorScheme.secondaryContainer,
+            child: const ListTile(
+              leading: Icon(Icons.pending_actions_outlined),
+              title: Text('승인 대기방'),
+              subtitle: Text('AI가 만든 확인 카드를 검토하고 승인 또는 거절하세요.'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final proposal in proposals)
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.rule_folder_outlined),
+                title: Text(_proposalTitle(proposal)),
+                subtitle: Text(_proposalSubtitle(proposal)),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: proposal['id'] is String
+                    ? () => onOpenProposal(proposal['id'] as String)
+                    : null,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  static String _proposalTitle(Map<String, dynamic> proposal) {
+    final summary = proposal['summary'];
+    if (summary is Map && summary['title'] is String) {
+      return summary['title'] as String;
+    }
+    return '파일 정리 제안';
+  }
+
+  static String _proposalSubtitle(Map<String, dynamic> proposal) {
+    final itemCount = proposal['itemCount'];
+    final status = proposal['status'] as String? ?? 'OPEN';
+    return itemCount is int ? '$status · $itemCount개 항목' : status;
+  }
+}
+
 class _SessionBar extends StatelessWidget {
   const _SessionBar({
     required this.sessions,
     required this.selectedSessionId,
+    required this.pendingApprovalSelected,
     required this.creating,
     required this.renaming,
     required this.deleting,
@@ -1034,6 +1253,7 @@ class _SessionBar extends StatelessWidget {
 
   final List<Map<String, dynamic>> sessions;
   final String? selectedSessionId;
+  final bool pendingApprovalSelected;
   final bool creating;
   final bool renaming;
   final bool deleting;
@@ -1093,7 +1313,10 @@ class _SessionBar extends StatelessWidget {
           IconButton(
             key: const ValueKey('chat-rename-session'),
             tooltip: '대화 제목 수정',
-            onPressed: selectedSessionId == null || renaming ? null : onRename,
+            onPressed:
+                selectedSessionId == null || pendingApprovalSelected || renaming
+                ? null
+                : onRename,
             icon: renaming
                 ? const SizedBox.square(
                     dimension: 20,
@@ -1104,7 +1327,10 @@ class _SessionBar extends StatelessWidget {
           IconButton(
             key: const ValueKey('chat-delete-session'),
             tooltip: '대화 삭제',
-            onPressed: selectedSessionId == null || deleting ? null : onDelete,
+            onPressed:
+                selectedSessionId == null || pendingApprovalSelected || deleting
+                ? null
+                : onDelete,
             icon: deleting
                 ? const SizedBox.square(
                     dimension: 20,

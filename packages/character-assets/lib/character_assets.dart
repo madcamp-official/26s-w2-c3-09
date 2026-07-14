@@ -22,6 +22,14 @@ const mousekeeperWorkingAsset = 'mouse_working.png';
 const mousekeeperMascotAsset = mousekeeperStandAsset;
 const mousekeeperMascotPackage = 'mousekeeper_character_assets';
 
+const mousekeeperHomeBackgroundAssets = <String>[
+  'backgrounds/background_1.png',
+  'backgrounds/background_2.png',
+  'backgrounds/background_3.png',
+  'backgrounds/background_4.png',
+  'backgrounds/background_5.png',
+];
+
 String mousekeeperMotionAsset(MouseKeeperMotion motion) => switch (motion) {
   MouseKeeperMotion.clean => mousekeeperCleanAsset,
   MouseKeeperMotion.considering => mousekeeperConsideringAsset,

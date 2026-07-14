@@ -467,6 +467,7 @@ class _FakeChatGateway implements ChatGateway {
 
   final List<Map<String, dynamic>> sessions;
   final Map<String, List<Map<String, dynamic>>> messagesBySession;
+  final List<Map<String, dynamic>> pendingProposals = const [];
   final Map<String, dynamic>? sendResult;
   final Object? createError;
   final Map<String, int> messageLoads = {};
@@ -482,6 +483,11 @@ class _FakeChatGateway implements ChatGateway {
   Future<List<Map<String, dynamic>>> listSessions(String roomId) async {
     sessionLoads += 1;
     return [...sessions];
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> listPendingProposals(String roomId) async {
+    return [...pendingProposals];
   }
 
   @override
