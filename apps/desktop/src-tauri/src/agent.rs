@@ -88,6 +88,38 @@ pub struct AgentRoomSync {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatSession {
+    pub session_id: String,
+    pub room_id: String,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub message_preview: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatMessage {
+    pub message_id: String,
+    pub room_id: String,
+    pub session_id: Option<String>,
+    pub sender_type: String,
+    pub message_type: String,
+    pub content: String,
+    pub structured_payload: Value,
+    pub command_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatSendResult {
+    pub message: AgentChatMessage,
+    pub assistant: Option<AgentChatMessage>,
+    pub ai_status: String,
+    pub ai: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct AgentProposalItemRecord {
     pub item_order: i64,
     pub action_type: String,
@@ -765,6 +797,107 @@ impl AgentRuntime {
                     })
                     .collect()
             });
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn list_chat_sessions(
+        &self,
+        room_id: String,
+    ) -> Result<Vec<AgentChatSession>, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<ChatSessionResponse>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/chat-sessions"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|sessions| validate_chat_sessions(&room_id, sessions));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn create_chat_session(
+        &self,
+        room_id: String,
+        title: Option<String>,
+    ) -> Result<AgentChatSession, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let body = match title {
+            Some(title) => {
+                let trimmed = title.trim();
+                if trimmed.is_empty() || trimmed.chars().count() > 120 {
+                    return Err(validation_error(
+                        "chat session title must contain between 1 and 120 characters",
+                    ));
+                }
+                json!({ "title": trimmed })
+            }
+            None => json!({}),
+        };
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ChatSessionResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms/{room_id}/chat-sessions"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&body),
+            )
+            .await
+            .and_then(|session| validate_chat_session(&room_id, session));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn list_chat_messages(
+        &self,
+        session_id: String,
+    ) -> Result<Vec<AgentChatMessage>, AgentError> {
+        validate_opaque_value("chat session id", &session_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<ChatMessageResponse>>(
+                self.http
+                    .get(format!("{base_url}/v1/chat-sessions/{session_id}/messages"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|messages| validate_chat_messages(Some(&session_id), messages));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        session_id: String,
+        content: String,
+    ) -> Result<AgentChatSendResult, AgentError> {
+        validate_opaque_value("chat session id", &session_id, 200)?;
+        validate_chat_content(&content)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ChatSendResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/chat-sessions/{session_id}/messages"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({ "content": content.trim() })),
+            )
+            .await
+            .and_then(|response| validate_chat_send_result(&session_id, response));
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1649,6 +1782,41 @@ struct ServerRoom {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ChatSessionResponse {
+    id: String,
+    room_id: String,
+    title: String,
+    status: String,
+    created_at: String,
+    updated_at: String,
+    message_preview: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatMessageResponse {
+    id: String,
+    room_id: String,
+    session_id: Option<String>,
+    sender_type: String,
+    message_type: String,
+    content: String,
+    structured_payload: Value,
+    command_id: Option<String>,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatSendResponse {
+    message: ChatMessageResponse,
+    assistant: Option<ChatMessageResponse>,
+    ai_status: String,
+    ai: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SyncEventResponse {
     event_id: String,
     event_type: String,
@@ -1931,6 +2099,119 @@ fn validate_server_room(
         return Err(invalid_response_error("room failed response validation"));
     }
     Ok(room)
+}
+
+fn validate_chat_sessions(
+    expected_room_id: &str,
+    responses: Vec<ChatSessionResponse>,
+) -> Result<Vec<AgentChatSession>, AgentError> {
+    responses
+        .into_iter()
+        .map(|session| validate_chat_session(expected_room_id, session))
+        .collect()
+}
+
+fn validate_chat_session(
+    expected_room_id: &str,
+    response: ChatSessionResponse,
+) -> Result<AgentChatSession, AgentError> {
+    if response.id.is_empty()
+        || response.room_id != expected_room_id
+        || response.title.trim().is_empty()
+        || response.title.chars().count() > 120
+        || response.status != "ACTIVE"
+        || response.created_at.is_empty()
+        || response.updated_at.is_empty()
+        || response.message_preview.chars().count() > 120
+    {
+        return Err(invalid_response_error(
+            "chat session failed response validation",
+        ));
+    }
+    Ok(AgentChatSession {
+        session_id: response.id,
+        room_id: response.room_id,
+        title: response.title,
+        status: response.status,
+        created_at: response.created_at,
+        updated_at: response.updated_at,
+        message_preview: response.message_preview,
+    })
+}
+
+fn validate_chat_messages(
+    expected_session_id: Option<&str>,
+    responses: Vec<ChatMessageResponse>,
+) -> Result<Vec<AgentChatMessage>, AgentError> {
+    responses
+        .into_iter()
+        .map(|message| validate_chat_message(expected_session_id, message))
+        .collect()
+}
+
+fn validate_chat_message(
+    expected_session_id: Option<&str>,
+    response: ChatMessageResponse,
+) -> Result<AgentChatMessage, AgentError> {
+    let session_matches = match expected_session_id {
+        Some(expected) => response.session_id.as_deref() == Some(expected),
+        None => response.session_id.is_some(),
+    };
+    if response.id.is_empty()
+        || response.room_id.is_empty()
+        || !session_matches
+        || !matches!(response.sender_type.as_str(), "USER" | "ASSISTANT")
+        || !matches!(response.message_type.as_str(), "TEXT" | "COMMAND_DRAFT")
+        || response.content.chars().count() > 2_000
+        || response.created_at.is_empty()
+    {
+        return Err(invalid_response_error(
+            "chat message failed response validation",
+        ));
+    }
+    Ok(AgentChatMessage {
+        message_id: response.id,
+        room_id: response.room_id,
+        session_id: response.session_id,
+        sender_type: response.sender_type,
+        message_type: response.message_type,
+        content: response.content,
+        structured_payload: response.structured_payload,
+        command_id: response.command_id,
+        created_at: response.created_at,
+    })
+}
+
+fn validate_chat_send_result(
+    expected_session_id: &str,
+    response: ChatSendResponse,
+) -> Result<AgentChatSendResult, AgentError> {
+    let message = validate_chat_message(Some(expected_session_id), response.message)?;
+    let assistant = response
+        .assistant
+        .map(|message| validate_chat_message(Some(expected_session_id), message))
+        .transpose()?;
+    if response.ai_status.is_empty() || !response.ai.is_object() {
+        return Err(invalid_response_error(
+            "chat AI result failed response validation",
+        ));
+    }
+    Ok(AgentChatSendResult {
+        message,
+        assistant,
+        ai_status: response.ai_status,
+        ai: response.ai,
+    })
+}
+
+fn validate_chat_content(content: &str) -> Result<(), AgentError> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 2_000 {
+        return Err(validation_error(
+            "chat message content must contain between 1 and 2000 characters",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_sync_events(
@@ -3462,6 +3743,40 @@ mod tests {
         assert_eq!(result.source_relative_path.as_deref(), Some("docs/a.pdf"));
         assert_eq!(result.reason, "SOURCE_CHANGED");
         assert_eq!(result.stale_count, 1);
+    }
+
+    #[tokio::test]
+    async fn desktop_chat_messages_use_the_shared_server_session_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/chat-sessions/session-1/messages",
+            r#"{"message":{"id":"message-1","roomId":"room-1","sessionId":"session-1","senderType":"USER","messageType":"TEXT","content":"정리해줘","structuredPayload":{},"commandId":null,"createdAt":"2026-07-14T00:00:00.000Z"},"assistant":null,"aiStatus":"UNCONFIGURED","ai":{"status":"UNCONFIGURED","code":"AI_PROVIDER_UNCONFIGURED"}}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/chat-sessions/session-1/messages HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+                assert!(request.contains(r#""content":"정리해줘""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let result = runtime
+            .send_chat_message("session-1".to_string(), "정리해줘".to_string())
+            .await
+            .expect("chat send");
+        server.join().expect("server thread");
+
+        assert_eq!(result.message.message_id, "message-1");
+        assert_eq!(result.message.session_id.as_deref(), Some("session-1"));
+        assert_eq!(result.ai_status, "UNCONFIGURED");
+        assert!(result.assistant.is_none());
     }
 
     #[tokio::test]

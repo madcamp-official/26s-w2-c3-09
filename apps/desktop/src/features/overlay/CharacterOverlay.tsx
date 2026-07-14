@@ -11,12 +11,18 @@ import {
 import { listManagedRoots } from "../files/fileEngineApi";
 import type { ManagedRoot } from "../files/fileEngineApi";
 import {
+  createAgentChatSession,
+  listAgentChatMessages,
+  listAgentChatSessions,
+  sendAgentChatMessage
+} from "../agent/agentApi";
+import type { AgentChatMessage, AgentChatSession } from "../agent/agentApi";
+import {
   CharacterEvent,
   CharacterEventKind,
   HOUSE_DROP_TARGET_EVENT,
   HOUSE_OVERLAY_WINDOW_LABEL,
   listenForCharacterEvents,
-  submitOverlayDraftRequest
 } from "./overlayApi";
 import { useCharacterWander } from "./characterWander";
 
@@ -93,10 +99,12 @@ const HOUSE_FOOT_OFFSET = { x: 0.5, y: 0.82 } as const;
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
   const [draft, setDraft] = useState("");
-  const [sentDrafts, setSentDrafts] = useState<string[]>([]);
   const [rooms, setRooms] = useState<ManagedRoot[]>([]);
+  const [chatSession, setChatSession] = useState<AgentChatSession | null>(null);
+  const [chatMessages, setChatMessages] = useState<AgentChatMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
   const [bubbleOpen, setBubbleOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [isDraggingOverlay, setIsDraggingOverlay] = useState(false);
@@ -110,7 +118,7 @@ export function CharacterOverlay() {
 
   const activeRoom = rooms.find((root) => root.room_binding_status === "active") ?? rooms[0] ?? null;
   const activeRoomName = activeRoom?.display_name ?? "방 없음";
-  const activeRoomId = activeRoom?.room_id ?? activeRoom?.root_id ?? "unbound";
+  const activeRoomId = activeRoom?.room_id ?? null;
 
   useEffect(() => {
     document.documentElement.classList.add("overlay-root");
@@ -134,6 +142,49 @@ export function CharacterOverlay() {
       .then(setRooms)
       .catch(() => setRooms([]));
   }, [bubbleOpen]);
+
+  useEffect(() => {
+    if (!chatOpen) return;
+    if (!activeRoomId) {
+      setChatSession(null);
+      setChatMessages([]);
+      setNotice("먼저 데스크탑에서 관리 폴더를 서버 room과 연결해야 채팅을 이어서 기록할 수 있어요.");
+      return;
+    }
+
+    let cancelled = false;
+    setChatLoading(true);
+    setNotice(null);
+    void ensureRoomChatSession(activeRoomId, activeRoomName)
+      .then(async (session) => {
+        const messages = await listAgentChatMessages(session.session_id);
+        if (cancelled) return;
+        setChatSession(session);
+        setChatMessages(messages);
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setChatSession(null);
+        setChatMessages([]);
+        setNotice(cause instanceof Error ? cause.message : String(cause));
+      })
+      .finally(() => {
+        if (!cancelled) setChatLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRoomId, activeRoomName, chatOpen]);
+
+  useEffect(() => {
+    if (!chatOpen || !chatSession) return;
+    const timer = window.setInterval(() => {
+      void listAgentChatMessages(chatSession.session_id)
+        .then(setChatMessages)
+        .catch(() => undefined);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [chatOpen, chatSession]);
 
   async function setHouseDropTarget(active: boolean) {
     if (houseDropActive.current === active) return;
@@ -266,10 +317,17 @@ export function CharacterOverlay() {
     setNotice(null);
     setBusy(true);
     try {
-      await submitOverlayDraftRequest(trimmed);
-      setSentDrafts((items) => [...items.slice(-3), trimmed]);
+      if (!activeRoomId) {
+        throw new Error("먼저 관리 폴더를 서버 room과 연결해야 채팅을 보낼 수 있어요.");
+      }
+      const session = chatSession ?? (await ensureRoomChatSession(activeRoomId, activeRoomName));
+      if (!chatSession) setChatSession(session);
+      const result = await sendAgentChatMessage(session.session_id, trimmed);
+      setChatMessages((items) =>
+        appendUniqueMessages(items, [result.message, result.assistant].filter(isChatMessage))
+      );
       setDraft("");
-      setNotice("이 방의 초안으로 보냈어요.");
+      setNotice(aiNotice(result.ai_status));
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -310,7 +368,9 @@ export function CharacterOverlay() {
               notice={notice}
               roomId={activeRoomId}
               roomName={activeRoomName}
-              sentDrafts={sentDrafts}
+              messages={chatMessages}
+              loading={chatLoading}
+              sessionTitle={chatSession?.title ?? null}
               onChangeDraft={setDraft}
               onClose={() => {
                 setChatOpen(false);
@@ -464,15 +524,47 @@ async function snapCharacterToHouseFloor() {
     .catch(() => undefined);
 }
 
+async function ensureRoomChatSession(roomId: string, roomName: string) {
+  const sessions = await listAgentChatSessions(roomId);
+  return sessions[0] ?? createAgentChatSession(roomId, `${roomName} chat`);
+}
+
+function appendUniqueMessages(current: AgentChatMessage[], next: AgentChatMessage[]) {
+  const seen = new Set(current.map((message) => message.message_id));
+  const merged = [...current];
+  for (const message of next) {
+    if (seen.has(message.message_id)) continue;
+    seen.add(message.message_id);
+    merged.push(message);
+  }
+  return merged;
+}
+
+function isChatMessage(message: AgentChatMessage | null): message is AgentChatMessage {
+  return message != null;
+}
+
+function aiNotice(status: string) {
+  if (status === "UNCONFIGURED") {
+    return "메시지는 저장됐고, AI 응답은 OpenAI 설정이 끝나면 붙어요. 서버의 AI_PROVIDER/AI_API_KEY/AI_MODEL을 확인해 주세요.";
+  }
+  if (status === "INVALID") {
+    return "메시지는 저장됐지만 AI 응답 형식이 검증을 통과하지 못했어요.";
+  }
+  return null;
+}
+
 function RoomChatPanel({
   avatarUrl,
   busy,
   draft,
   event,
+  loading,
+  messages,
   notice,
   roomId,
   roomName,
-  sentDrafts,
+  sessionTitle,
   onChangeDraft,
   onClose,
   onSubmit
@@ -481,45 +573,63 @@ function RoomChatPanel({
   busy: boolean;
   draft: string;
   event: CharacterEvent;
+  loading: boolean;
+  messages: AgentChatMessage[];
   notice: string | null;
-  roomId: string;
+  roomId: string | null;
   roomName: string;
-  sentDrafts: string[];
+  sessionTitle: string | null;
   onChangeDraft: (value: string) => void;
   onClose: () => void;
   onSubmit: () => void;
 }) {
   return (
-    <div className="room-chat-panel" data-room-id={roomId}>
+    <div className="room-chat-panel" data-room-id={roomId ?? "unbound"}>
       <header className="room-chat-header">
         <button type="button" onClick={onClose} aria-label="Close chat">
           &lt;
         </button>
         <div>
           <strong>{roomName}</strong>
-          <small>방별 채팅 준비 중</small>
+          <small>{sessionTitle ?? "서버 채팅 세션 연결 중"}</small>
         </div>
         <span className="room-chat-status" title={event.kind} aria-label={event.kind} />
       </header>
 
       <div className="room-chat-thread" aria-live="polite">
-        <article className="room-chat-message is-mouse">
-          <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-          <div>
-            <strong>MouseKeeper</strong>
-            <p>{event.message ?? "이 방 기준으로 이야기할게요. 나중에는 방별 대화가 여기에 따로 쌓여요."}</p>
-          </div>
-        </article>
-        <article className="room-chat-message is-mouse">
-          <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-          <div>
-            <strong>MouseKeeper</strong>
-            <p>집 이미지, 청결도, 채팅 스레드는 같은 roomId로 연결될 예정이에요.</p>
-          </div>
-        </article>
-        {sentDrafts.map((item, index) => (
-          <article className="room-chat-message is-user" key={`${index}-${item}`}>
-            <p>{item}</p>
+        {loading ? (
+          <article className="room-chat-message is-mouse">
+            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+            <div>
+              <strong>MouseKeeper</strong>
+              <p>모바일과 공유하는 채팅 기록을 불러오는 중이에요.</p>
+            </div>
+          </article>
+        ) : null}
+        {!loading && messages.length === 0 ? (
+          <article className="room-chat-message is-mouse">
+            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+            <div>
+              <strong>MouseKeeper</strong>
+              <p>{event.message ?? "이 방 기준으로 이야기할게요. 이 기록은 모바일 채팅과 같은 서버 세션에 저장돼요."}</p>
+            </div>
+          </article>
+        ) : null}
+        {messages.map((message) => (
+          <article
+            className={`room-chat-message ${message.sender_type === "USER" ? "is-user" : "is-mouse"}`}
+            key={message.message_id}
+          >
+            {message.sender_type === "ASSISTANT" ? (
+              <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+            ) : null}
+            <div>
+              {message.sender_type === "ASSISTANT" ? <strong>MouseKeeper</strong> : null}
+              <p>{message.content}</p>
+              {message.message_type === "COMMAND_DRAFT" ? (
+                <small className="room-chat-draft-hint">모바일에서 승인할 수 있는 명령 초안이에요.</small>
+              ) : null}
+            </div>
           </article>
         ))}
       </div>
@@ -542,7 +652,7 @@ function RoomChatPanel({
           autoFocus
         />
         <button type="submit" disabled={busy || draft.trim().length === 0}>
-          전송
+          {busy ? "전송 중" : "전송"}
         </button>
       </form>
     </div>
