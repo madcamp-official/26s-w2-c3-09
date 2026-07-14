@@ -130,6 +130,40 @@ HomeData? reduceHomeDataForRealtimeUpdate({
   switch (update.kind) {
     case RealtimeHomeUpdateKind.refreshSummary:
       return null;
+    case RealtimeHomeUpdateKind.devicePaired:
+      final deviceId = update.deviceId;
+      final device = update.device;
+      if (deviceId == null ||
+          device == null ||
+          !activeDeviceIds.contains(deviceId)) {
+        return current;
+      }
+      final nextDevice = {
+        ...device,
+        'presence': device['presence'] ?? 'OFFLINE',
+      };
+      var changed = false;
+      var replaced = false;
+      final devices = current.devices
+          .map((existing) {
+            if (existing['id'] != deviceId) return existing;
+            replaced = true;
+            final merged = {
+              ...existing,
+              ...nextDevice,
+              'presence': existing['presence'] ?? nextDevice['presence'],
+            };
+            changed = changed || !_mapShallowEquals(existing, merged);
+            return merged;
+          })
+          .toList(growable: true);
+      if (!replaced) {
+        devices.add(nextDevice);
+        changed = true;
+      }
+      return changed
+          ? current.copyWith(devices: devices.toList(growable: false))
+          : current;
     case RealtimeHomeUpdateKind.presence:
       final deviceId = update.deviceId;
       final presence = update.presence;
@@ -172,6 +206,56 @@ HomeData? reduceHomeDataForRealtimeUpdate({
       return rooms.length == current.rooms.length
           ? current
           : current.copyWith(rooms: rooms);
+    case RealtimeHomeUpdateKind.proposalCreated:
+    case RealtimeHomeUpdateKind.decisionCreated:
+      final roomId = update.roomId;
+      final pendingProposalCount = update.pendingProposalCount;
+      if (roomId == null || !activeRoomIds.contains(roomId)) {
+        return current;
+      }
+      if (pendingProposalCount == null) return null;
+      var changed = false;
+      final rooms = current.rooms
+          .map((room) {
+            if (room['id'] != roomId ||
+                room['pendingProposalCount'] == pendingProposalCount) {
+              return room;
+            }
+            changed = true;
+            return {...room, 'pendingProposalCount': pendingProposalCount};
+          })
+          .toList(growable: false);
+      return changed ? current.copyWith(rooms: rooms) : current;
+    case RealtimeHomeUpdateKind.roomSnapshotUpdated:
+      final roomId = update.roomId;
+      final snapshot = update.roomSnapshot;
+      if (roomId == null ||
+          snapshot == null ||
+          !activeRoomIds.contains(roomId)) {
+        return current;
+      }
+      var changed = false;
+      final rooms = current.rooms
+          .map((room) {
+            if (room['id'] != roomId ||
+                !_snapshotIsNewer(
+                  currentCalculatedAt: room['cleanlinessCalculatedAt'],
+                  nextCalculatedAt: snapshot['calculatedAt'],
+                )) {
+              return room;
+            }
+            changed = true;
+            return {
+              ...room,
+              'cleanlinessScore': snapshot['score'],
+              'cleanlinessFormulaVersion': snapshot['formulaVersion'],
+              'cleanlinessCalculatedAt': snapshot['calculatedAt'],
+            };
+          })
+          .toList(growable: false);
+      return changed ? current.copyWith(rooms: rooms) : current;
+    case RealtimeHomeUpdateKind.commandStatus:
+      return current;
     case RealtimeHomeUpdateKind.executionStatus:
       final roomId = update.roomId;
       final status = update.executionStatus;
@@ -193,6 +277,28 @@ HomeData? reduceHomeDataForRealtimeUpdate({
   }
 }
 
+bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
+  if (left.length != right.length) return false;
+  for (final entry in left.entries) {
+    if (right[entry.key] != entry.value) return false;
+  }
+  return true;
+}
+
+bool _snapshotIsNewer({
+  required Object? currentCalculatedAt,
+  required Object? nextCalculatedAt,
+}) {
+  if (nextCalculatedAt is! String || nextCalculatedAt.isEmpty) return false;
+  final next = DateTime.tryParse(nextCalculatedAt);
+  if (next == null) return false;
+  if (currentCalculatedAt is! String || currentCalculatedAt.isEmpty) {
+    return true;
+  }
+  final current = DateTime.tryParse(currentCalculatedAt);
+  return current == null || next.isAfter(current);
+}
+
 class HomeController extends AsyncNotifier<HomeData> {
   Future<HomeData>? _loadInFlight;
 
@@ -201,7 +307,11 @@ class HomeController extends AsyncNotifier<HomeData> {
     ref.watch(homeSummaryFetcherProvider);
     ref.watch(mutationQueueProvider);
     ref.watch(displayCacheProvider);
-    final gate = ref.watch(connectionGateControllerProvider).requireValue;
+    // The five-second connection safety reconcile owns the authoritative
+    // device/room gate. Home data should not refetch just because that gate
+    // confirmed liveness; summary reloads are reserved for explicit refreshes
+    // and realtime events without a complete targeted patch.
+    final gate = ref.read(connectionGateControllerProvider).requireValue;
     ref.listen(realtimeHomeUpdateProvider, (previous, next) {
       if (next == null || identical(previous, next)) return;
       unawaited(applyRealtimeUpdate(next));

@@ -104,6 +104,14 @@ export class PairingService {
         payload: devicePairedEventPayloadSchema.parse({
           deviceId: device.id,
           status: 'ACTIVE',
+          device: {
+            id: device.id,
+            platform: device.platform,
+            deviceName: device.deviceName,
+            status: 'ACTIVE',
+            lastSeenAt: device.lastSeenAt?.toISOString() ?? null,
+            createdAt: device.createdAt.toISOString(),
+          },
         }),
       });
       return device;

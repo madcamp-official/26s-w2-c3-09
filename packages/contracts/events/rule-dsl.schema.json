@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mousekeeper.app/contracts/events/rule-dsl.schema.json",
+  "title": "RuleDefinition",
+  "description": "Safe, declarative rule DSL. It contains no arbitrary expressions or executable script fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["conditions", "action"],
+  "properties": {
+    "match": { "type": "string", "enum": ["ALL", "ANY"], "default": "ALL" },
+    "conditions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/ExtensionCondition" },
+          { "$ref": "#/$defs/AgeCondition" },
+          { "$ref": "#/$defs/FileAgeCondition" },
+          { "$ref": "#/$defs/SizeCondition" },
+          { "$ref": "#/$defs/RelativePathCondition" },
+          { "$ref": "#/$defs/FileKindCondition" },
+          { "$ref": "#/$defs/NameCondition" }
+        ]
+      }
+    },
+    "action": {
+      "oneOf": [
+        { "$ref": "#/$defs/MoveAction" },
+        { "$ref": "#/$defs/QuarantineAction" },
+        { "$ref": "#/$defs/TrashAction" },
+        { "$ref": "#/$defs/CreateDirectoryAction" }
+      ]
+    }
+  },
+  "$defs": {
+    "SafeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!(?:[A-Za-z]:|[\\\\/]))(?!.*[\\\\/]$)(?!.*[\\\\/]{2})(?!.*(?:^|[\\\\/])\\.{1,2}(?:[\\\\/]|$))[^\\u0000]+$",
+      "not": {
+        "anyOf": [
+          { "pattern": "^[A-Za-z]:" },
+          { "pattern": "^/" },
+          { "pattern": "^\\\\" },
+          { "pattern": "(^|[\\\\/])\\.\\.($|[\\\\/])" }
+        ]
+      }
+    },
+    "ExtensionCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "const": "extension" },
+        "operator": { "const": "IN" },
+        "value": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "type": "string", "pattern": "^\\.[A-Za-z0-9]+$" }
+        }
+      }
+    },
+    "AgeCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "const": "ageDays" },
+        "operator": { "const": "GTE" },
+        "value": { "type": "integer", "minimum": 0, "maximum": 36500 }
+      }
+    },
+    "FileAgeCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "type": "string", "enum": ["modifiedAgeDays", "createdAgeDays"] },
+        "operator": { "type": "string", "enum": ["GTE", "GT"] },
+        "value": { "type": "integer", "minimum": 0, "maximum": 36500 }
+      }
+    },
+    "SizeCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "const": "sizeBytes" },
+        "operator": { "type": "string", "enum": ["GTE", "LTE"] },
+        "value": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "RelativePathCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "const": "relativePath" },
+        "operator": { "const": "STARTS_WITH" },
+        "value": { "$ref": "#/$defs/SafeRelativePath" }
+      }
+    },
+    "FileKindCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "const": "fileKind" },
+        "operator": { "const": "EQ" },
+        "value": { "type": "string", "enum": ["FILE", "DIRECTORY"] }
+      }
+    },
+    "NameCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field", "operator", "value"],
+      "properties": {
+        "field": { "const": "name" },
+        "operator": { "type": "string", "enum": ["CONTAINS", "STARTS_WITH", "ENDS_WITH"] },
+        "value": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    },
+    "MoveAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "destinationTemplate"],
+      "properties": {
+        "type": { "const": "MOVE" },
+        "destinationTemplate": { "$ref": "#/$defs/SafeRelativePath" }
+      }
+    },
+    "QuarantineAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "QUARANTINE" } }
+    },
+    "TrashAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "TRASH" } }
+    },
+    "CreateDirectoryAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "relativePath"],
+      "properties": {
+        "type": { "const": "CREATE_DIR" },
+        "relativePath": { "$ref": "#/$defs/SafeRelativePath" }
+      }
+    }
+  }
+}

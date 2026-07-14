@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mousekeeper.app/contracts/events/smart-cache.schema.json",
+  "title": "SmartCacheUpdatedPayload",
+  "description": "Payloads emitted as smart-cache.updated. These events are item-scoped hints; clients should patch or refresh the affected cache surface, not the full Home projection.",
+  "oneOf": [
+    { "$ref": "#/$defs/PolicyUpdated" },
+    { "$ref": "#/$defs/CandidateBatchUpdated" },
+    { "$ref": "#/$defs/CachedFileUpdated" },
+    { "$ref": "#/$defs/ReservationUpdated" },
+    { "$ref": "#/$defs/FreshnessUpdated" }
+  ],
+  "$defs": {
+    "SafeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!(?:[A-Za-z]:|[\\\\/]))(?!.*[\\\\/]$)(?!.*[\\\\/]{2})(?!.*(?:^|[\\\\/])\\.{1,2}(?:[\\\\/]|$))[^\\u0000]+$",
+      "not": {
+        "anyOf": [
+          { "pattern": "^[A-Za-z]:" },
+          { "pattern": "^/" },
+          { "pattern": "^\\\\" },
+          { "pattern": "(^|[\\\\/])\\.\\.($|[\\\\/])" }
+        ]
+      }
+    },
+    "PolicyUpdated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomId", "enabled"],
+      "properties": {
+        "roomId": { "type": "string", "format": "uuid" },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "CandidateBatchUpdated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomId", "batchId", "approvedCount"],
+      "properties": {
+        "roomId": { "type": "string", "format": "uuid" },
+        "batchId": { "type": "string", "format": "uuid" },
+        "approvedCount": { "type": "integer", "minimum": 0, "maximum": 200 }
+      }
+    },
+    "CachedFileUpdated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cachedFileId", "status"],
+      "properties": {
+        "cachedFileId": { "type": "string", "format": "uuid" },
+        "status": { "type": "string", "enum": ["AVAILABLE", "INVALIDATED"] }
+      }
+    },
+    "ReservationUpdated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reservationId", "status"],
+      "properties": {
+        "reservationId": { "type": "string", "format": "uuid" },
+        "status": { "type": "string", "enum": ["CANCELLED", "EXPIRED"] }
+      }
+    },
+    "FreshnessUpdated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roomId", "sourceRelativePath", "reason", "freshnessStatus"],
+      "properties": {
+        "roomId": { "type": "string", "format": "uuid" },
+        "sourceRelativePath": {
+          "oneOf": [
+            { "$ref": "#/$defs/SafeRelativePath" },
+            { "type": "null" }
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["SOURCE_CHANGED", "SOURCE_REMOVED", "REINDEXED"]
+        },
+        "freshnessStatus": { "const": "STALE" }
+      }
+    }
+  }
+}

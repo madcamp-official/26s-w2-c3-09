@@ -30,7 +30,9 @@ import {
   updateAgentCommandStatus
 } from "./agentApi";
 
-const backgroundRefreshIntervalMs = 15_000;
+const heartbeatIntervalMs = 5_000;
+const backgroundStatusRefreshIntervalMs = 15_000;
+const connectionStatusRefreshIntervalMs = 30_000;
 const pairingPollIntervalMs = 2_000;
 
 const connectionStateLabels: Record<string, string> = {
@@ -74,7 +76,7 @@ function hasRecentHeartbeat(background: BackgroundRuntimeStatus | null) {
   return (
     background?.state === "running" &&
     background.last_heartbeat_unix_ms !== null &&
-    Date.now() - background.last_heartbeat_unix_ms < backgroundRefreshIntervalMs * 3
+    Date.now() - background.last_heartbeat_unix_ms < heartbeatIntervalMs * 3
   );
 }
 
@@ -219,11 +221,16 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
     if (!connection?.device_id) return;
 
     void resumeBackgroundRuntime({ silent: true });
-    const timer = window.setInterval(() => {
-      void refreshConnection();
+    const backgroundTimer = window.setInterval(() => {
       void refreshBackground();
-    }, backgroundRefreshIntervalMs);
-    return () => window.clearInterval(timer);
+    }, backgroundStatusRefreshIntervalMs);
+    const connectionTimer = window.setInterval(() => {
+      void refreshConnection();
+    }, connectionStatusRefreshIntervalMs);
+    return () => {
+      window.clearInterval(backgroundTimer);
+      window.clearInterval(connectionTimer);
+    };
   }, [connection?.device_id]);
 
   async function refreshConnection() {

@@ -136,9 +136,34 @@ export class SnapshotsService {
         eventType: 'room.snapshot.updated',
         aggregateType: 'room_snapshot',
         aggregateId: created.id,
-        payload: { snapshotId: created.id },
+        payload: roomSnapshotUpdatedPayload({
+          snapshotId: created.id,
+          roomId: created.roomId,
+          score: created.score,
+          metrics: created.metrics,
+          formulaVersion: created.formulaVersion,
+          calculatedAt: created.calculatedAt,
+        }),
       });
       return created;
     });
   }
+}
+
+export function roomSnapshotUpdatedPayload(input: {
+  snapshotId: string;
+  roomId: string;
+  score: number;
+  metrics: unknown;
+  formulaVersion: string;
+  calculatedAt: Date;
+}) {
+  return {
+    snapshotId: input.snapshotId,
+    roomId: input.roomId,
+    score: input.score,
+    metrics: input.metrics,
+    formulaVersion: input.formulaVersion,
+    calculatedAt: input.calculatedAt.toISOString(),
+  };
 }

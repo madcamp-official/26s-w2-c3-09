@@ -1,10 +1,12 @@
 import {
   createCommandSchema,
+  commandIntentSchema,
   createFileBrowseRequestSchema,
   createProposalSchema,
   createRoomSnapshotSchema,
   createRuleSchema,
   failFileTransferSchema,
+  connectionSummaryResponseSchema,
   homeSummaryResponseSchema,
   registerPushNotificationTokenSchema,
   updateCharacterSchema,
@@ -14,6 +16,22 @@ import {
   deviceRevokedEventPayloadSchema,
   roomRemovedEventPayloadSchema,
   MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION,
+  chatMessagesQuerySchema,
+  cachedFileAccessEventSchema,
+  completeCacheUploadSchema,
+  createChatMessageResponseSchema,
+  commandDraftSummarySchema,
+  createChatSessionSchema,
+  createCommandDraftSchema,
+  markCachedFilesStaleSchema,
+  updateChatSessionSchema,
+  createRuleDraftRequestSchema,
+  confirmRuleDraftResponseSchema,
+  previewRuleDraftSchema,
+  ruleDraftPreviewResponseSchema,
+  rejectRuleDraftResponseSchema,
+  ruleDraftSummarySchema,
+  ruleDraftResultSchema,
 } from "./control-plane";
 
 declare function require(path: string): unknown;
@@ -39,6 +57,191 @@ describe("push notification token contract", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("records only verified mobile cached-file access events", () => {
+    expect(
+      cachedFileAccessEventSchema.parse({ eventType: "DOWNLOAD_COMPLETED" }),
+    ).toEqual({ eventType: "DOWNLOAD_COMPLETED" });
+    expect(
+      cachedFileAccessEventSchema.safeParse({ eventType: "DOWNLOAD_STARTED" })
+        .success,
+    ).toBe(false);
+    expect(
+      cachedFileAccessEventSchema.safeParse({
+        eventType: "DOWNLOAD_COMPLETED",
+        sourceRelativePath: "docs/report.pdf",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("smart cache contracts", () => {
+  it("validates source-change stale reports without broadening their scope", () => {
+    const targeted = {
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+      sourceRelativePath: "docs/report.pdf",
+      reason: "SOURCE_CHANGED",
+    };
+
+    expect(markCachedFilesStaleSchema.parse(targeted)).toEqual(targeted);
+    expect(
+      markCachedFilesStaleSchema.safeParse({
+        roomId: targeted.roomId,
+        sourceRelativePath: null,
+        reason: "SOURCE_CHANGED",
+      }).success,
+    ).toBe(false);
+    expect(
+      markCachedFilesStaleSchema.safeParse({
+        roomId: targeted.roomId,
+        sourceRelativePath: "../outside.pdf",
+        reason: "SOURCE_REMOVED",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("uses REINDEXED only for root-wide freshness uncertainty", () => {
+    const roomId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a1";
+
+    expect(
+      markCachedFilesStaleSchema.parse({
+        roomId,
+        sourceRelativePath: null,
+        reason: "REINDEXED",
+      }),
+    ).toEqual({ roomId, sourceRelativePath: null, reason: "REINDEXED" });
+    expect(
+      markCachedFilesStaleSchema.safeParse({
+        roomId,
+        sourceRelativePath: "docs/report.pdf",
+        reason: "REINDEXED",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("requires encrypted completion metadata without key material", () => {
+    const completion = {
+      sizeBytes: 132,
+      sha256: "a".repeat(64),
+      usageScore: 10,
+      manualPin: false,
+      encryptionMetadata: {
+        algorithm: "AES-256-GCM",
+        format: "MKS1_NONCE_CIPHERTEXT_TAG",
+        keyId: "key-20260714-abcdef",
+        nonceHex: "b".repeat(24),
+        plaintextSizeBytes: 100,
+        plaintextSha256: "c".repeat(64),
+      },
+    };
+
+    expect(completeCacheUploadSchema.parse(completion)).toEqual(completion);
+    expect(
+      completeCacheUploadSchema.safeParse({
+        ...completion,
+        encryptionMetadata: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      completeCacheUploadSchema.safeParse({
+        ...completion,
+        encryptionMetadata: {
+          ...completion.encryptionMetadata,
+          key: "raw-secret",
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("event JSON schema artifacts", () => {
+  it("documents presence.updated as a device-scoped realtime patch", () => {
+    const schema = require("../events/presence.schema.json") as {
+      title: string;
+      additionalProperties: boolean;
+      required: string[];
+      properties: Record<string, { enum?: string[]; maximum?: number }>;
+    };
+
+    expect(schema.title).toBe("PresenceUpdatedPayload");
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["deviceId", "presence", "ttlSeconds"]);
+    expect(schema.properties.presence?.enum).toEqual([
+      "ONLINE_IDLE",
+      "ONLINE_SCANNING",
+      "ONLINE_EXECUTING",
+      "DEGRADED",
+      "OFFLINE",
+    ]);
+    expect(schema.properties.ttlSeconds?.maximum).toBe(3600);
+  });
+
+  it("documents smart-cache.updated as item-scoped cache events", () => {
+    const schema = require("../events/smart-cache.schema.json") as {
+      oneOf: Array<{ $ref: string }>;
+      $defs: Record<
+        string,
+        {
+          pattern?: string;
+          additionalProperties?: boolean;
+          properties?: Record<string, { enum?: string[]; const?: string }>;
+        }
+      >;
+    };
+    const safeRelativePath = new RegExp(
+      schema.$defs.SafeRelativePath.pattern ?? "",
+    );
+
+    expect(schema.oneOf.map((item) => item.$ref)).toEqual([
+      "#/$defs/PolicyUpdated",
+      "#/$defs/CandidateBatchUpdated",
+      "#/$defs/CachedFileUpdated",
+      "#/$defs/ReservationUpdated",
+      "#/$defs/FreshnessUpdated",
+    ]);
+    expect(safeRelativePath.test("docs/report.pdf")).toBe(true);
+    expect(safeRelativePath.test("../outside.pdf")).toBe(false);
+    expect(safeRelativePath.test("C:\\outside.pdf")).toBe(false);
+    expect(safeRelativePath.test("/outside.pdf")).toBe(false);
+    expect(schema.$defs.CachedFileUpdated.properties?.status?.enum).toEqual([
+      "AVAILABLE",
+      "INVALIDATED",
+    ]);
+    expect(
+      schema.$defs.FreshnessUpdated.properties?.freshnessStatus?.const,
+    ).toBe("STALE");
+  });
+
+  it("keeps the exported rule DSL declarative and path-bounded", () => {
+    const schema = require("../events/rule-dsl.schema.json") as {
+      additionalProperties: boolean;
+      required: string[];
+      properties: {
+        action: { oneOf: Array<{ $ref: string }> };
+      };
+      $defs: Record<
+        string,
+        { pattern?: string; additionalProperties?: boolean }
+      >;
+    };
+    const safeRelativePath = new RegExp(
+      schema.$defs.SafeRelativePath.pattern ?? "",
+    );
+
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["conditions", "action"]);
+    expect(schema.properties.action.oneOf.map((item) => item.$ref)).toContain(
+      "#/$defs/CreateDirectoryAction",
+    );
+    expect(safeRelativePath.test("Inbox/PDF")).toBe(true);
+    expect(safeRelativePath.test("Inbox/../Secrets")).toBe(false);
+    expect(safeRelativePath.test("\\\\server\\share")).toBe(false);
+    for (const [name, definition] of Object.entries(schema.$defs)) {
+      if (name === "SafeRelativePath") continue;
+      expect(definition.additionalProperties).toBe(false);
+    }
+    expect(JSON.stringify(schema)).not.toMatch(/shell|javascript|eval/i);
+  });
 });
 
 describe("rule contracts", () => {
@@ -57,6 +260,45 @@ describe("rule contracts", () => {
     ).toBe(true);
   });
 
+  it("accepts additive rule DSL conditions and safe actions", () => {
+    expect(
+      createRuleSchema.safeParse({
+        name: "Large old reports",
+        definition: {
+          match: "ALL",
+          conditions: [
+            { field: "modifiedAgeDays", operator: "GTE", value: 30 },
+            { field: "createdAgeDays", operator: "GT", value: 7 },
+            { field: "sizeBytes", operator: "LTE", value: 20_000_000 },
+            {
+              field: "relativePath",
+              operator: "STARTS_WITH",
+              value: "reports",
+            },
+            { field: "fileKind", operator: "EQ", value: "FILE" },
+            { field: "name", operator: "CONTAINS", value: "draft" },
+          ],
+          action: { type: "TRASH" },
+        },
+        priority: 100,
+        enabled: true,
+      }).success,
+    ).toBe(true);
+
+    expect(
+      createRuleSchema.safeParse({
+        name: "Create archive directory",
+        definition: {
+          conditions: [
+            { field: "relativePath", operator: "STARTS_WITH", value: "inbox" },
+          ],
+          action: { type: "CREATE_DIR", relativePath: "Archive/Reports" },
+        },
+        priority: 101,
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects an unsafe destination and an empty version-only update", () => {
     const unsafe = createRuleSchema.safeParse({
       name: "Unsafe",
@@ -68,6 +310,171 @@ describe("rule contracts", () => {
     });
     expect(unsafe.success).toBe(false);
     expect(updateRuleSchema.safeParse({ version: 1 }).success).toBe(false);
+  });
+
+  it("rejects unsafe expanded rule DSL paths and unsupported operators", () => {
+    expect(
+      createRuleSchema.safeParse({
+        name: "Unsafe prefix",
+        definition: {
+          conditions: [
+            {
+              field: "relativePath",
+              operator: "STARTS_WITH",
+              value: "../outside",
+            },
+          ],
+          action: { type: "TRASH" },
+        },
+        priority: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      createRuleSchema.safeParse({
+        name: "Unsupported size operator",
+        definition: {
+          conditions: [{ field: "sizeBytes", operator: "GT", value: 1024 }],
+          action: { type: "CREATE_DIR", relativePath: "Archive" },
+        },
+        priority: 1,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("rule draft contracts", () => {
+  it("validates natural-language rule draft requests and explicit provider states", () => {
+    expect(
+      createRuleDraftRequestSchema.parse({
+        instruction: "오래된 PDF는 Archive로 보내줘",
+      }),
+    ).toEqual({ instruction: "오래된 PDF는 Archive로 보내줘" });
+    expect(
+      createRuleDraftRequestSchema.safeParse({ instruction: "" }).success,
+    ).toBe(false);
+    expect(
+      ruleDraftResultSchema.parse({
+        status: "UNCONFIGURED",
+        code: "AI_PROVIDER_UNCONFIGURED",
+      }),
+    ).toEqual({
+      status: "UNCONFIGURED",
+      code: "AI_PROVIDER_UNCONFIGURED",
+    });
+    expect(
+      ruleDraftResultSchema.parse({
+        status: "READY",
+        kind: "RULE_DRAFT",
+        draft: {
+          id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+          roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a6",
+          name: "Old PDFs",
+          definition: {
+            match: "ALL",
+            conditions: [
+              { field: "modifiedAgeDays", operator: "GTE", value: 30 },
+              { field: "extension", operator: "IN", value: [".pdf"] },
+            ],
+            action: { type: "MOVE", destinationTemplate: "Archive/PDF" },
+          },
+          explanation: "30일 이상 수정되지 않은 PDF를 보관 폴더로 이동합니다.",
+          ambiguities: [],
+          status: "DRAFT",
+          expiresAt: "2026-07-13T10:00:00.000Z",
+          ruleId: null,
+        },
+      }).status,
+    ).toBe("READY");
+  });
+});
+
+describe("rule draft lifecycle response contracts", () => {
+  it("validates a bounded desktop dry-run preview response", () => {
+    const draft = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a6",
+      name: "Old PDFs",
+      definition: {
+        match: "ALL",
+        conditions: [{ field: "extension", operator: "IN", value: [".pdf"] }],
+        action: { type: "MOVE", destinationTemplate: "Archive/PDF" },
+      },
+      explanation: "Move old PDFs after explicit approval.",
+      ambiguities: [],
+      status: "DRAFT",
+      expiresAt: "2026-07-13T10:00:00.000Z",
+      ruleId: null,
+    };
+
+    expect(previewRuleDraftSchema.parse({})).toEqual({});
+    expect(
+      ruleDraftPreviewResponseSchema.parse({
+        status: "READY",
+        draft,
+        items: [
+          {
+            relativePath: "reports/old.pdf",
+            fileKind: "FILE",
+            proposedAction: "MOVE",
+            destinationRelativePath: "Archive/PDF/old.pdf",
+            reason: "extension .pdf matched",
+          },
+        ],
+        truncated: false,
+      }).items,
+    ).toHaveLength(1);
+    expect(
+      ruleDraftPreviewResponseSchema.safeParse({
+        status: "READY",
+        draft,
+        items: Array.from({ length: 201 }, (_, index) => ({
+          relativePath: `reports/${index}.pdf`,
+          fileKind: "FILE",
+          proposedAction: "MOVE",
+        })),
+        truncated: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates rule draft confirm and reject responses", () => {
+    const draft = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a6",
+      name: "Old PDFs",
+      definition: {
+        match: "ALL",
+        conditions: [{ field: "extension", operator: "IN", value: [".pdf"] }],
+        action: { type: "MOVE", destinationTemplate: "Archive/PDF" },
+      },
+      explanation: "Move old PDFs after explicit approval.",
+      ambiguities: [],
+      status: "MATERIALIZED",
+      expiresAt: "2026-07-13T10:00:00.000Z",
+      ruleId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a7",
+    };
+    const rule = {
+      id: draft.ruleId,
+      roomId: draft.roomId,
+      name: draft.name,
+      definition: draft.definition,
+      priority: 100,
+      enabled: true,
+      version: 1,
+      createdAt: "2026-07-13T10:00:00.000Z",
+      updatedAt: "2026-07-13T10:00:00.000Z",
+    };
+
+    expect(ruleDraftSummarySchema.parse(draft)).toEqual(draft);
+    expect(confirmRuleDraftResponseSchema.parse({ draft, rule })).toEqual({
+      draft,
+      rule,
+    });
+    expect(
+      rejectRuleDraftResponseSchema.parse({
+        draft: { ...draft, status: "REJECTED", ruleId: null },
+      }).draft.status,
+    ).toBe("REJECTED");
   });
 });
 
@@ -136,6 +543,8 @@ describe("v1.4 connection and browse contracts", () => {
       relativeDirectory: "Documents",
       cursor: null,
       query: null,
+      extensions: [],
+      limit: 200,
       searchScope: "CURRENT_DIRECTORY",
     });
     expect(
@@ -155,6 +564,26 @@ describe("v1.4 connection and browse contracts", () => {
       createFileBrowseRequestSchema.safeParse({
         relativeDirectory: "Documents",
         query: "r",
+      }).success,
+    ).toBe(false);
+    expect(
+      createFileBrowseRequestSchema.safeParse({
+        relativeDirectory: "Documents",
+        extensions: [".pdf"],
+      }).success,
+    ).toBe(false);
+    expect(
+      createFileBrowseRequestSchema.safeParse({
+        relativeDirectory: "Documents",
+        query: "report",
+        extensions: ["pdf"],
+      }).success,
+    ).toBe(false);
+    expect(
+      createFileBrowseRequestSchema.safeParse({
+        relativeDirectory: "Documents",
+        query: "report",
+        limit: 201,
       }).success,
     ).toBe(false);
     expect(
@@ -201,10 +630,39 @@ describe("v1.4 connection and browse contracts", () => {
   it("requires aggregate ids and final lifecycle states", () => {
     const deviceId = "33333333-3333-4333-8333-333333333333";
     const roomId = "22222222-2222-4222-8222-222222222222";
+    const timestamp = "2026-07-13T01:02:03.000Z";
 
     expect(
       devicePairedEventPayloadSchema.parse({ deviceId, status: "ACTIVE" }),
     ).toEqual({ deviceId, status: "ACTIVE" });
+    expect(
+      devicePairedEventPayloadSchema.parse({
+        deviceId,
+        status: "ACTIVE",
+        device: {
+          id: deviceId,
+          platform: "WINDOWS",
+          deviceName: "Desktop",
+          status: "ACTIVE",
+          lastSeenAt: null,
+          createdAt: timestamp,
+        },
+      }).device?.deviceName,
+    ).toBe("Desktop");
+    expect(
+      devicePairedEventPayloadSchema.safeParse({
+        deviceId,
+        status: "ACTIVE",
+        device: {
+          id: roomId,
+          platform: "WINDOWS",
+          deviceName: "Wrong device",
+          status: "ACTIVE",
+          lastSeenAt: null,
+          createdAt: timestamp,
+        },
+      }).success,
+    ).toBe(false);
     expect(
       deviceRevokedEventPayloadSchema.parse({ deviceId, status: "REVOKED" }),
     ).toEqual({ deviceId, status: "REVOKED" });
@@ -227,6 +685,8 @@ describe("character contract", () => {
 });
 
 describe("command contracts", () => {
+  const rootId = "root:downloads";
+
   it("accepts a bounded structured README request", () => {
     expect(
       createCommandSchema.safeParse({
@@ -239,6 +699,118 @@ describe("command contracts", () => {
         },
       }).success,
     ).toBe(true);
+  });
+
+  it("accepts safe file command payloads without shell-shaped escape hatches", () => {
+    expect(commandIntentSchema.parse("RENAME")).toBe("RENAME");
+    expect(
+      createCommandSchema.parse({
+        intent: "RENAME",
+        payload: {
+          rootId,
+          sourceRelativePath: "reports/old.pdf",
+          newName: "final.pdf",
+        },
+        metadata: {
+          sessionId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+          sourceMessageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+          idempotencyKey: "rename-018f4c7b",
+          requiresApproval: true,
+        },
+      }),
+    ).toEqual({
+      intent: "RENAME",
+      payload: {
+        rootId,
+        sourceRelativePath: "reports/old.pdf",
+        newName: "final.pdf",
+      },
+      metadata: {
+        sessionId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+        sourceMessageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+        idempotencyKey: "rename-018f4c7b",
+        requiresApproval: true,
+      },
+    });
+    expect(
+      createCommandSchema.safeParse({
+        intent: "MOVE",
+        payload: {
+          rootId,
+          sourceRelativePaths: ["reports/final.pdf", "reports/notes.txt"],
+          destinationRelativeDirectory: "Archive",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "FIND",
+        payload: {
+          rootId,
+          query: "invoice",
+          extensions: [".pdf"],
+          scopeRelativePath: "",
+          limit: 50,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "UPLOAD",
+        payload: {
+          rootId,
+          destinationRelativePath: "incoming/photo.png",
+          transferId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a3",
+          expectedSha256:
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          expectedSize: 42,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects unsafe file command paths, reserved names, and oversized searches", () => {
+    expect(
+      createCommandSchema.safeParse({
+        intent: "RENAME",
+        payload: {
+          rootId,
+          sourceRelativePath: "../outside.txt",
+          newName: "safe.txt",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "RENAME",
+        payload: {
+          rootId,
+          sourceRelativePath: "reports/old.pdf",
+          newName: "nested/final.pdf",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "CREATE",
+        payload: {
+          rootId,
+          kind: "FILE",
+          relativePath: "CON.txt",
+          content: "blocked reserved Windows name",
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      createCommandSchema.safeParse({
+        intent: "FIND",
+        payload: {
+          rootId,
+          query: "x",
+          limit: 201,
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects arbitrary payloads and invalid rule drafts", () => {
@@ -275,6 +847,139 @@ describe("file transfer failure contract", () => {
     expect(
       failFileTransferSchema.safeParse({
         failureCode: "ARBITRARY_PROVIDER_ERROR",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("chat session contracts", () => {
+  it("validates session mutations and bounded message pagination", () => {
+    expect(
+      createChatSessionSchema.parse({ title: "  Inbox cleanup  " }),
+    ).toEqual({ title: "Inbox cleanup" });
+    expect(updateChatSessionSchema.safeParse({}).success).toBe(false);
+    expect(updateChatSessionSchema.parse({ title: "Reports" })).toEqual({
+      title: "Reports",
+    });
+    expect(chatMessagesQuerySchema.parse({ limit: "25" })).toEqual({
+      limit: 25,
+    });
+    expect(chatMessagesQuerySchema.safeParse({ limit: "101" }).success).toBe(
+      false,
+    );
+  });
+
+  it("validates chat message responses with explicit AI unconfigured status", () => {
+    const response = {
+      message: {
+        id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+        roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+        sessionId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a3",
+        senderType: "USER",
+        messageType: "TEXT",
+        content: "Rename the old report",
+        structuredPayload: null,
+        commandId: null,
+        createdAt: "2026-07-13T01:02:03.000Z",
+      },
+      assistant: null,
+      aiStatus: "UNCONFIGURED",
+      ai: {
+        status: "UNCONFIGURED",
+        code: "AI_PROVIDER_UNCONFIGURED",
+      },
+    };
+
+    expect(createChatMessageResponseSchema.parse(response)).toEqual(response);
+    const draftResponse = {
+      ...response,
+      assistant: {
+        ...response.message,
+        id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a4",
+        senderType: "ASSISTANT",
+        messageType: "COMMAND_DRAFT",
+        content: "Rename reports/old.pdf to reports/final.pdf",
+        structuredPayload: {
+          id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+          intent: "RENAME",
+          confirmationSummary: "Rename reports/old.pdf to reports/final.pdf",
+          status: "DRAFT",
+          expiresAt: "2026-07-13T01:12:03.000Z",
+          commandId: null,
+        },
+      },
+      aiStatus: "READY",
+      ai: {
+        status: "READY",
+        kind: "COMMAND_DRAFT",
+        commandDraftId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+      },
+    };
+    expect(createChatMessageResponseSchema.parse(draftResponse)).toEqual(
+      draftResponse,
+    );
+    expect(
+      createChatMessageResponseSchema.safeParse({
+        ...response,
+        assistant: {
+          ...response.message,
+          senderType: "ASSISTANT",
+          content: "Pretend success",
+        },
+        aiStatus: "READY",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates command draft summaries without command arguments or secrets", () => {
+    const draft = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+      intent: "RENAME",
+      confirmationSummary: "Rename reports/old.pdf to final.pdf",
+      status: "DRAFT",
+      expiresAt: "2026-07-13T01:02:03.000Z",
+      commandId: null,
+      fileBrowseRequestId: null,
+      fileTransferId: null,
+    };
+
+    expect(commandDraftSummarySchema.parse(draft)).toEqual(draft);
+    expect(
+      commandDraftSummarySchema.safeParse({ ...draft, arguments: {} }).success,
+    ).toBe(false);
+  });
+
+  it("validates command draft creation while reserving metadata for the server", () => {
+    const sourceMessageId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a2";
+    expect(
+      createCommandDraftSchema.safeParse({
+        sourceMessageId,
+        command: {
+          intent: "RENAME",
+          payload: {
+            rootId: "root:downloads",
+            sourceRelativePath: "reports/old.pdf",
+            newName: "final.pdf",
+          },
+        },
+        confirmationSummary: "Rename reports/old.pdf to final.pdf",
+      }).success,
+    ).toBe(true);
+    expect(
+      createCommandDraftSchema.safeParse({
+        sourceMessageId,
+        command: {
+          intent: "RENAME",
+          payload: {
+            rootId: "root:downloads",
+            sourceRelativePath: "reports/old.pdf",
+            newName: "final.pdf",
+          },
+          metadata: {
+            idempotencyKey: "client-key",
+          },
+        },
+        confirmationSummary: "Rename reports/old.pdf to final.pdf",
       }).success,
     ).toBe(false);
   });
@@ -369,6 +1074,74 @@ describe("home summary contract", () => {
           nextUnlockAffinity: 3,
           riveAssetStatus: "UNCONFIGURED",
         },
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("connection summary contract", () => {
+  const deviceId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a1";
+  const roomId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a2";
+  const timestamp = "2026-07-13T01:02:03.000Z";
+
+  it("keeps the five-second safety check scoped to active connection data", () => {
+    const response = {
+      devices: [
+        {
+          id: deviceId,
+          platform: "WINDOWS",
+          deviceName: "Desktop",
+          status: "ACTIVE",
+          lastSeenAt: timestamp,
+          createdAt: timestamp,
+        },
+      ],
+      rooms: [
+        {
+          id: roomId,
+          desktopDeviceId: deviceId,
+          name: "Downloads",
+          rootAlias: "Downloads",
+          status: "ACTIVE",
+          createdAt: timestamp,
+        },
+      ],
+    };
+
+    expect(connectionSummaryResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("rejects home projection fields and private database fields", () => {
+    expect(
+      connectionSummaryResponseSchema.safeParse({
+        devices: [
+          {
+            id: deviceId,
+            platform: "WINDOWS",
+            deviceName: "Desktop",
+            status: "ACTIVE",
+            lastSeenAt: timestamp,
+            createdAt: timestamp,
+            presence: "ONLINE_IDLE",
+          },
+        ],
+        rooms: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      connectionSummaryResponseSchema.safeParse({
+        devices: [
+          {
+            id: deviceId,
+            userId: roomId,
+            platform: "WINDOWS",
+            deviceName: "Desktop",
+            status: "ACTIVE",
+            lastSeenAt: timestamp,
+            createdAt: timestamp,
+          },
+        ],
+        rooms: [],
       }).success,
     ).toBe(false);
   });

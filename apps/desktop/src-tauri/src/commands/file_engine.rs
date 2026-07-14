@@ -35,6 +35,8 @@ use crate::storage::managed_roots::{
     ManagedRoot, ManagedRootStatePatch, ManagedRootStore, RoomBindingStatus,
 };
 use crate::storage::watchers::WatcherStore;
+#[cfg(feature = "tauri-commands")]
+use crate::work_limiter::WorkLimiter;
 
 const DEMO_ROOT_DIR_NAME: &str = "mousekeeper-ui-demo";
 static DEMO_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -204,8 +206,10 @@ pub fn prepare_demo_root() -> Result<String, String> {
 pub fn analyze_root(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<AnalyzeReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     analyze_root_impl(root)
 }
 
@@ -242,8 +246,10 @@ pub fn reindex_managed_root(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
     app: tauri::AppHandle,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileIndexReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     let report = reindex_managed_root_impl(root)?;
     crate::cleanliness::reconcile_cleanliness_snapshot(&app, &root_id)?;
     Ok(report)
@@ -264,8 +270,10 @@ pub fn search_managed_root(
     root_id: String,
     query: String,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileIndexReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     search_managed_root_impl(root, query)
 }
 
@@ -284,8 +292,10 @@ pub fn search_managed_root(
 pub fn propose_file_changes(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<ProposalReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     propose_file_changes_impl(root)
 }
 
@@ -304,11 +314,13 @@ pub fn calculate_cleanliness_snapshot(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
     app: tauri::AppHandle,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CleanlinessSnapshot, String> {
     use tauri::Manager;
 
     let managed = store.get(&root_id)?;
     let root = managed.root.clone();
+    let _permit = limiter.try_scan()?;
     if managed.room_binding_status == crate::storage::managed_roots::RoomBindingStatus::Detached {
         return calculate_cleanliness_snapshot_impl(root);
     }
@@ -467,9 +479,11 @@ pub fn execute_file_changes(
     decisions: Vec<DecisionEntry>,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<ExecuteReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     execute_file_changes_impl(root, proposal, decisions)
 }
 
@@ -491,9 +505,11 @@ pub fn trash_file(
     path: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<TrashReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     trash_file_impl(root, path)
 }
 
@@ -514,9 +530,11 @@ pub fn create_file(
     path: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CreateFileReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     create_file_impl(root, path)
 }
 
@@ -538,9 +556,11 @@ pub fn rename_file(
     new_name: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<RenameFileReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     rename_file_impl(root, path, new_name)
 }
 
@@ -561,9 +581,11 @@ pub fn undo_last_file_operation(
     root_id: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     undo_last_file_operation_impl(root)
 }
 
@@ -583,9 +605,11 @@ pub fn undo_operation(
     operation_id: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     undo_operation_impl(root, operation_id)
 }
 
@@ -624,9 +648,11 @@ pub fn recover_journal(
     root_id: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<JournalRecoveryReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     recover_journal_impl(root)
 }
 

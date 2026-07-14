@@ -27,6 +27,7 @@ pub struct IndexedFile {
     pub size_bytes: u64,
     pub modified_unix_ms: Option<u128>,
     pub extension: Option<String>,
+    pub file_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +41,7 @@ pub struct IndexedSearchEntry {
     pub name: String,
     pub relative_path: String,
     pub is_dir: bool,
+    pub extension: Option<String>,
     pub size_bytes: Option<u64>,
     pub modified_unix_ms: Option<u128>,
 }
@@ -71,6 +73,17 @@ pub fn reindex_root(root: impl AsRef<Path>) -> Result<FileIndexReport, FileIndex
     let analysis = analyze_root(guard.root()).map_err(FileIndexError::Analyze)?;
     let search_entries = collect_search_entries(guard.root())?;
     let pool = open_root_db(guard.root()).map_err(FileIndexError::Db)?;
+    let files = analysis
+        .files
+        .iter()
+        .map(|file| IndexedFile {
+            relative_path: file.path.clone(),
+            size_bytes: file.size_bytes,
+            modified_unix_ms: file.modified_unix_ms,
+            extension: extension_of(&file.path),
+            file_id: file_id_for_relative_path(&guard, &file.path),
+        })
+        .collect::<Vec<_>>();
 
     let generation = block_on(async {
         let mut tx = pool.begin().await.map_err(query_error)?;
@@ -79,15 +92,16 @@ pub fn reindex_root(root: impl AsRef<Path>) -> Result<FileIndexReport, FileIndex
             .await
             .map_err(query_error)?;
 
-        for file in &analysis.files {
+        for file in &files {
             sqlx::query(
-                "INSERT INTO file_index (relative_path, size_bytes, modified_unix_ms, extension)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT INTO file_index (relative_path, size_bytes, modified_unix_ms, extension, file_id)
+                 VALUES (?, ?, ?, ?, ?)",
             )
-            .bind(&file.path)
+            .bind(&file.relative_path)
             .bind(file.size_bytes as i64)
             .bind(file.modified_unix_ms.map(|value| value as i64))
-            .bind(extension_of(&file.path))
+            .bind(&file.extension)
+            .bind(&file.file_id)
             .execute(&mut *tx)
             .await
             .map_err(query_error)?;
@@ -112,17 +126,6 @@ pub fn reindex_root(root: impl AsRef<Path>) -> Result<FileIndexReport, FileIndex
         Ok(generation)
     })
     .map_err(FileIndexError::Db)?;
-
-    let files = analysis
-        .files
-        .into_iter()
-        .map(|file| IndexedFile {
-            relative_path: file.path.clone(),
-            size_bytes: file.size_bytes,
-            modified_unix_ms: file.modified_unix_ms,
-            extension: extension_of(&file.path),
-        })
-        .collect();
 
     Ok(FileIndexReport {
         root: analysis.root,
@@ -170,6 +173,7 @@ pub fn upsert_file(
 ) -> Result<(), FileIndexError> {
     let guard = PathGuard::new(root).map_err(FileIndexError::Guard)?;
     let pool = open_root_db(guard.root()).map_err(FileIndexError::Db)?;
+    let file_id = file_id_for_relative_path(&guard, relative_path);
     let search_entry =
         indexed_search_entry(relative_path, false, Some(size_bytes), modified_unix_ms).ok_or_else(
             || FileIndexError::InvalidSearch("indexed file path has no name".to_string()),
@@ -178,17 +182,19 @@ pub fn upsert_file(
     block_on(async {
         let mut tx = pool.begin().await.map_err(query_error)?;
         sqlx::query(
-            "INSERT INTO file_index (relative_path, size_bytes, modified_unix_ms, extension)
-             VALUES (?, ?, ?, ?)
+            "INSERT INTO file_index (relative_path, size_bytes, modified_unix_ms, extension, file_id)
+             VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(relative_path) DO UPDATE SET
                  size_bytes = excluded.size_bytes,
                  modified_unix_ms = excluded.modified_unix_ms,
-                 extension = excluded.extension",
+                 extension = excluded.extension,
+                 file_id = excluded.file_id",
         )
         .bind(relative_path)
         .bind(size_bytes as i64)
         .bind(modified_unix_ms.map(|value| value as i64))
         .bind(extension_of(relative_path))
+        .bind(&file_id)
         .execute(&mut *tx)
         .await
         .map_err(query_error)?;
@@ -327,7 +333,7 @@ async fn fetch_indexed(
 ) -> Result<Vec<IndexedFile>, DbError> {
     let rows = match name_query {
         Some(query) => sqlx::query(
-            "SELECT fi.relative_path, fi.size_bytes, fi.modified_unix_ms, fi.extension
+            "SELECT fi.relative_path, fi.size_bytes, fi.modified_unix_ms, fi.extension, fi.file_id
              FROM file_index fi
              JOIN file_search_entries se ON se.relative_path = fi.relative_path
              WHERE instr(se.normalized_name, ?) > 0
@@ -338,7 +344,7 @@ async fn fetch_indexed(
         .await
         .map_err(query_error)?,
         None => sqlx::query(
-            "SELECT relative_path, size_bytes, modified_unix_ms, extension
+            "SELECT relative_path, size_bytes, modified_unix_ms, extension, file_id
              FROM file_index
              ORDER BY relative_path",
         )
@@ -353,12 +359,14 @@ async fn fetch_indexed(
         let size_bytes: i64 = row.try_get("size_bytes").map_err(query_error)?;
         let modified: Option<i64> = row.try_get("modified_unix_ms").map_err(query_error)?;
         let extension: Option<String> = row.try_get("extension").map_err(query_error)?;
+        let file_id: Option<String> = row.try_get("file_id").map_err(query_error)?;
 
         files.push(IndexedFile {
             relative_path,
             size_bytes: size_bytes as u64,
             modified_unix_ms: modified.map(|value| value as u128),
             extension,
+            file_id,
         });
     }
 
@@ -374,6 +382,28 @@ pub fn search_index_page(
     offset: usize,
     limit: usize,
 ) -> Result<IndexedSearchPage, FileIndexError> {
+    search_index_page_with_extensions(
+        root,
+        query,
+        scope,
+        relative_directory,
+        expected_generation,
+        offset,
+        limit,
+        &[],
+    )
+}
+
+pub fn search_index_page_with_extensions(
+    root: impl AsRef<Path>,
+    query: &str,
+    scope: IndexedSearchScope,
+    relative_directory: &str,
+    expected_generation: Option<u64>,
+    offset: usize,
+    limit: usize,
+    extensions: &[String],
+) -> Result<IndexedSearchPage, FileIndexError> {
     let query = query.trim();
     if !(2..=100).contains(&query.chars().count()) {
         return Err(FileIndexError::InvalidSearch(
@@ -385,6 +415,7 @@ pub fn search_index_page(
             "search page limit must be between 1 and 200".to_string(),
         ));
     }
+    let extensions = normalize_extension_filter(extensions)?;
     let guard = PathGuard::new(root).map_err(FileIndexError::Guard)?;
     let relative_directory = normalize_relative_directory(relative_directory)?;
     if scope == IndexedSearchScope::CurrentDirectory {
@@ -422,7 +453,7 @@ pub fn search_index_page(
             let rows = match scope {
                 IndexedSearchScope::CurrentDirectory => {
                     sqlx::query(
-                        "SELECT name, relative_path, entry_type, size_bytes, modified_unix_ms
+                        "SELECT name, relative_path, entry_type, extension, size_bytes, modified_unix_ms
                      FROM file_search_entries
                      WHERE parent_relative_path = ? AND instr(normalized_name, ?) > 0
                      ORDER BY normalized_name, relative_path
@@ -437,7 +468,7 @@ pub fn search_index_page(
                 }
                 IndexedSearchScope::ManagedRoot => {
                     sqlx::query(
-                        "SELECT name, relative_path, entry_type, size_bytes, modified_unix_ms
+                        "SELECT name, relative_path, entry_type, extension, size_bytes, modified_unix_ms
                      FROM file_search_entries
                      WHERE instr(normalized_name, ?) > 0
                      ORDER BY normalized_name, relative_path
@@ -459,7 +490,9 @@ pub fn search_index_page(
             let row_count = rows.len();
             for row in rows {
                 let entry = indexed_search_entry_from_row(&row)?;
-                if validate_indexed_search_hit(&guard, &entry) {
+                if validate_indexed_search_hit(&guard, &entry)
+                    && indexed_entry_matches_extensions(&entry, &extensions)
+                {
                     if entries.len() == limit {
                         next_offset = Some(scanned_offset);
                         break 'pages;
@@ -566,8 +599,13 @@ fn indexed_search_entry(
         .to_string();
     Some(IndexedSearchEntry {
         name,
-        relative_path: normalized_path,
         is_dir,
+        extension: if is_dir {
+            None
+        } else {
+            extension_of(&normalized_path)
+        },
+        relative_path: normalized_path,
         size_bytes: if is_dir { None } else { size_bytes },
         modified_unix_ms,
     })
@@ -589,14 +627,15 @@ async fn insert_search_entry(
     sqlx::query(
         "INSERT INTO file_search_entries (
              relative_path, parent_relative_path, name, normalized_name,
-             entry_type, size_bytes, modified_unix_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+             entry_type, extension, size_bytes, modified_unix_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&entry.relative_path)
     .bind(parent)
     .bind(&entry.name)
     .bind(normalize_name(&entry.name))
     .bind(if entry.is_dir { "directory" } else { "file" })
+    .bind(&entry.extension)
     .bind(entry.size_bytes.map(|value| value as i64))
     .bind(entry.modified_unix_ms.map(|value| value as i64))
     .execute(&mut **tx)
@@ -646,6 +685,10 @@ fn indexed_search_entry_from_row(
         .try_get("modified_unix_ms")
         .map_err(query_error)
         .map_err(FileIndexError::Db)?;
+    let extension: Option<String> = row
+        .try_get("extension")
+        .map_err(query_error)
+        .map_err(FileIndexError::Db)?;
     Ok(IndexedSearchEntry {
         name: row
             .try_get("name")
@@ -656,9 +699,44 @@ fn indexed_search_entry_from_row(
             .map_err(query_error)
             .map_err(FileIndexError::Db)?,
         is_dir: entry_type == "directory",
+        extension,
         size_bytes: size_bytes.map(|value| value as u64),
         modified_unix_ms: modified.map(|value| value as u128),
     })
+}
+
+fn normalize_extension_filter(extensions: &[String]) -> Result<Vec<String>, FileIndexError> {
+    if extensions.len() > 50 {
+        return Err(FileIndexError::InvalidSearch(
+            "extension filter may contain at most 50 extensions".to_string(),
+        ));
+    }
+    extensions
+        .iter()
+        .map(|extension| {
+            let normalized = extension.trim().to_ascii_lowercase();
+            let Some(raw) = normalized.strip_prefix('.') else {
+                return Err(FileIndexError::InvalidSearch(
+                    "extension filters must start with a dot".to_string(),
+                ));
+            };
+            if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+                return Err(FileIndexError::InvalidSearch(
+                    "extension filters may contain only ASCII letters and digits".to_string(),
+                ));
+            }
+            Ok(raw.to_string())
+        })
+        .collect()
+}
+
+fn indexed_entry_matches_extensions(entry: &IndexedSearchEntry, extensions: &[String]) -> bool {
+    extensions.is_empty()
+        || (!entry.is_dir
+            && entry
+                .extension
+                .as_ref()
+                .is_some_and(|extension| extensions.iter().any(|item| item == extension)))
 }
 
 fn normalize_relative_directory(path: &str) -> Result<String, FileIndexError> {
@@ -762,6 +840,13 @@ fn extension_of(path: &str) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
+fn file_id_for_relative_path(guard: &PathGuard, relative_path: &str) -> Option<String> {
+    guard
+        .resolve_existing(relative_path)
+        .ok()
+        .and_then(|path| crate::file_identity::file_id_for_path(&path))
+}
+
 fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
     metadata
         .modified()
@@ -814,7 +899,8 @@ mod tests {
 
     use super::{
         clear_index, list_index, reindex_root, remove_file, remove_path, search_index,
-        search_index_page, upsert_existing_file, upsert_file, FileIndexError, IndexedSearchScope,
+        search_index_page, search_index_page_with_extensions, upsert_existing_file, upsert_file,
+        FileIndexError, IndexedSearchScope,
     };
 
     fn make_root() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -839,6 +925,11 @@ mod tests {
             .collect();
         assert_eq!(paths, vec!["inbox/note.md", "inbox/photo.png"]);
         assert_eq!(report.files[0].extension.as_deref(), Some("md"));
+        #[cfg(any(unix, windows))]
+        assert!(
+            report.files.iter().all(|file| file.file_id.is_some()),
+            "supported platforms should persist an OS-backed file id"
+        );
         assert!(report.skipped_entries.is_empty());
     }
 
@@ -905,6 +996,8 @@ mod tests {
             .expect("fresh indexed");
         assert_eq!(fresh.size_bytes, 5);
         assert_eq!(fresh.extension.as_deref(), Some("txt"));
+        #[cfg(any(unix, windows))]
+        assert!(fresh.file_id.is_some());
     }
 
     #[test]
@@ -1025,6 +1118,39 @@ mod tests {
             .map(|entry| entry.relative_path.as_str())
             .collect::<Vec<_>>();
         assert_eq!(paths, vec!["needle-parent"]);
+    }
+
+    #[test]
+    fn search_filters_extensions_before_applying_limit() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        for index in 0..20 {
+            fs::write(root.join(format!("report-{index:02}.txt")), "x").expect("txt");
+        }
+        for index in 0..3 {
+            fs::write(root.join(format!("report-{index:02}.pdf")), "x").expect("pdf");
+        }
+        reindex_root(&root).expect("reindex");
+
+        let page = search_index_page_with_extensions(
+            &root,
+            "report",
+            IndexedSearchScope::ManagedRoot,
+            "",
+            None,
+            0,
+            2,
+            &[".pdf".to_string()],
+        )
+        .expect("extension-filtered search");
+
+        assert_eq!(page.entries.len(), 2);
+        assert!(page.next_offset.is_some());
+        assert!(page
+            .entries
+            .iter()
+            .all(|entry| entry.extension.as_deref() == Some("pdf")));
     }
 
     #[test]

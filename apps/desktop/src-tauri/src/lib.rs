@@ -10,12 +10,14 @@ pub mod file_browse_processor;
 pub mod file_transfer_processor;
 pub mod outbox_processor;
 pub mod overlay;
+pub mod smart_cache_crypto;
 pub mod smart_cache_processor;
 pub mod storage;
 #[cfg(feature = "tauri-commands")]
 pub mod tray;
 pub mod watcher;
 pub mod watcher_lifecycle;
+pub mod work_limiter;
 
 #[cfg(feature = "tauri-commands")]
 pub fn run() {
@@ -35,6 +37,7 @@ pub fn run() {
         .manage(storage::outbox::OutboxStore::default())
         .manage(storage::smart_cache::SmartCacheStore::default())
         .manage(storage::watchers::WatcherStore::default())
+        .manage(work_limiter::WorkLimiter::default())
         .setup(|app| {
             use tauri::Manager;
 

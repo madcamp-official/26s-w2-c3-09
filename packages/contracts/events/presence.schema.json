@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mousekeeper.app/contracts/events/presence.schema.json",
+  "title": "PresenceUpdatedPayload",
+  "description": "Payload for presence.updated realtime events. Presence is a device-scoped liveness patch, not a Home summary refresh.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deviceId", "presence", "ttlSeconds"],
+  "properties": {
+    "deviceId": { "type": "string", "format": "uuid" },
+    "presence": {
+      "type": "string",
+      "enum": [
+        "ONLINE_IDLE",
+        "ONLINE_SCANNING",
+        "ONLINE_EXECUTING",
+        "DEGRADED",
+        "OFFLINE"
+      ]
+    },
+    "ttlSeconds": { "type": "integer", "minimum": 0, "maximum": 3600 }
+  }
+}

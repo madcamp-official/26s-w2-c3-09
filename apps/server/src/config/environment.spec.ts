@@ -72,4 +72,26 @@ describe('loadEnvironment', () => {
     });
     expect(environment.FIREBASE_PROJECT_ID).toBe('render-project');
   });
+
+  it('defaults AI to an explicit unconfigured provider', () => {
+    const environment = loadEnvironment({
+      ...baseEnvironment,
+      FIREBASE_PROJECT_ID: 'test-project',
+      FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.com',
+      FIREBASE_PRIVATE_KEY: 'test-private-key',
+    });
+    expect(environment.AI_PROVIDER).toBe('unconfigured');
+  });
+
+  it('rejects unknown AI provider names instead of guessing', () => {
+    expect(() =>
+      loadEnvironment({
+        ...baseEnvironment,
+        FIREBASE_PROJECT_ID: 'test-project',
+        FIREBASE_CLIENT_EMAIL: 'firebase-admin@example.com',
+        FIREBASE_PRIVATE_KEY: 'test-private-key',
+        AI_PROVIDER: 'some-random-provider',
+      }),
+    ).toThrow('UNCONFIGURED: AI_PROVIDER');
+  });
 });

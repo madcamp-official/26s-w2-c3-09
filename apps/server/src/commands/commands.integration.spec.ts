@@ -70,14 +70,27 @@ describeDatabase('CommandsService PostgreSQL integration', () => {
     const first = await service.create(userId, roomId, key, {
       intent: 'ANALYZE',
       payload: {},
+      metadata: { idempotencyKey: key, requiresApproval: false },
     });
     const repeated = await service.create(userId, roomId, key, {
       intent: 'ANALYZE',
       payload: {},
+      metadata: { requiresApproval: false, idempotencyKey: key },
     });
     expect(repeated.id).toBe(first.id);
+    expect(first.metadata).toEqual({
+      idempotencyKey: key,
+      requiresApproval: false,
+    });
     expect(first).not.toHaveProperty('idempotencyKey');
     expect(first).not.toHaveProperty('createdByUserId');
+    await expect(
+      service.create(userId, roomId, key, {
+        intent: 'ANALYZE',
+        payload: {},
+        metadata: { idempotencyKey: key, requiresApproval: true },
+      }),
+    ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_CONFLICT' } });
     await expect(
       service.create(userId, roomId, key, { intent: 'SCAN', payload: {} }),
     ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_CONFLICT' } });

@@ -2,6 +2,8 @@ use crate::storage::smart_cache::{
     SmartCacheCandidate, SmartCacheFilePreference, SmartCacheFilePreferencePatch, SmartCacheStore,
     SmartCacheUsageEvent, SmartCacheUsageEventDraft,
 };
+#[cfg(feature = "tauri-commands")]
+use crate::work_limiter::WorkLimiter;
 use crate::{
     agent::AgentRuntime, smart_cache_processor::SmartCacheProcessingReport,
     storage::managed_roots::ManagedRootStore, storage::outbox::OutboxStore,
@@ -71,8 +73,10 @@ pub async fn process_smart_cache_for_room(
     roots: tauri::State<'_, ManagedRootStore>,
     smart_cache: tauri::State<'_, SmartCacheStore>,
     outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<SmartCacheProcessingReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
+    let _permit = limiter.try_transfer()?;
     crate::smart_cache_processor::process_smart_cache_for_room(
         &runtime,
         &roots,

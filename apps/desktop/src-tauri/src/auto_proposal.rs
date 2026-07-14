@@ -188,6 +188,7 @@ mod tests {
                 content: None,
                 source_size_bytes: 10,
                 source_modified_unix_ms: Some(20),
+                source_file_id: None,
                 reason: "rule".to_string(),
                 status: ProposalStatus::Ready,
             }],

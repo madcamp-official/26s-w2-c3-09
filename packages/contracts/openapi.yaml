@@ -67,6 +67,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HomeSummary" }
+  /v1/connections/summary:
+    get:
+      description: Lightweight mobile connection gate state for five-second safety reconcile.
+      responses:
+        "200":
+          description: Active devices and rooms only, without home projection enrichment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConnectionSummary" }
   /v1/devices:
     get:
       responses:
@@ -305,6 +314,96 @@ paths:
             { schema: { $ref: "#/components/schemas/CreateRule" } }
       responses:
         "201": { description: Versioned deterministic rule }
+  /v1/rooms/{roomId}/rule-drafts:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateRuleDraftRequest" } }
+      responses:
+        "201":
+          description: AI rule draft result persisted for explicit confirmation, or explicit provider unavailable/invalid state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuleDraftResult" }
+  /v1/rule-drafts/{draftId}/preview:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          description: Up to 200 desktop dry-run matches for an active rule draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuleDraftPreviewResponse" }
+        "409":
+          description: RULE_DRAFT_PREVIEW_UNCONFIGURED, DRAFT_EXPIRED, or INVALID_STATE_TRANSITION
+  /v1/rule-drafts/{draftId}/confirm:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          description: Rule draft materialized into a durable rule exactly once
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfirmRuleDraftResponse" }
+        "409": { description: DRAFT_EXPIRED or IDEMPOTENCY_CONFLICT }
+  /v1/rule-drafts/{draftId}/reject:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          description: Rule draft rejected without creating a rule
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RejectRuleDraftResponse" }
   /v1/rules/{ruleId}:
     parameters:
       - {
@@ -762,6 +861,23 @@ paths:
             pending-command warning,
             and desktop presence,
           }
+  /v1/rooms/{roomId}/smart-cache/files:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      description: Plan-aligned alias for the room smart-cache file list. `/v1/rooms/{roomId}/cached-files` remains available for older clients.
+      responses:
+        "200":
+          {
+            description: Available cached files,
+            pending-command warning,
+            and desktop presence,
+          }
   /v1/agent/cache-candidates:
     post:
       security: [{ deviceBearer: [] }]
@@ -790,6 +906,28 @@ paths:
             or idempotency conflict,
           }
         "503": { description: Smart cache or object storage is not configured }
+  /v1/agent/cached-files/stale:
+    post:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/MarkCachedFilesStale" } }
+      responses:
+        "201":
+          {
+            description: Available cached files marked STALE after desktop source uncertainty,
+          }
+        "400": { description: Invalid stale report }
+        "403": { description: Desktop device does not own the room }
   /v1/agent/cache-uploads/{reservationId}/complete:
     parameters:
       - {
@@ -861,6 +999,26 @@ paths:
           }
         "409": { description: Stored checksum is unavailable }
         "503": { description: Object storage is not configured }
+  /v1/cached-files/{cachedFileId}/access-events:
+    parameters:
+      - {
+          in: path,
+          name: cachedFileId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      description: Records a mobile cached-file access only after the client has saved and checksum-verified the download.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CachedFileAccessEvent" } }
+      responses:
+        "201": { description: Verified cached-file access recorded }
+        "404":
+          { description: Cached file is missing or unavailable to this user }
+        "503": { description: Smart cache is not configured }
   /v1/character:
     get:
       responses:
@@ -876,7 +1034,7 @@ paths:
             { schema: { $ref: "#/components/schemas/UpdateCharacter" } }
       responses:
         "200": { description: Updated appearance and room theme preferences }
-  /v1/rooms/{roomId}/chat:
+  /v1/rooms/{roomId}/chat-sessions:
     parameters:
       - {
           in: path,
@@ -886,7 +1044,57 @@ paths:
         }
     get:
       responses:
-        "200": { description: Up to 200 persisted room chat messages }
+        "200":
+          { description: Active chat sessions for the owned room, newest first }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateChatSession" } }
+      responses:
+        "201": { description: Chat session created }
+        "409":
+          {
+            description: CHAT_SESSION_LIMIT_REACHED with the existing active sessions,
+          }
+  /v1/chat-sessions/{sessionId}:
+    parameters:
+      - {
+          in: path,
+          name: sessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    patch:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/UpdateChatSession" } }
+      responses:
+        "200": { description: Chat session title updated }
+    delete:
+      responses:
+        "200": { description: Chat session soft-deleted }
+  /v1/chat-sessions/{sessionId}/messages:
+    parameters:
+      - {
+          in: path,
+          name: sessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      parameters:
+        - { in: query, name: cursor, schema: { type: string, format: uuid } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
+          }
+      responses:
+        "200": { description: Session messages after the optional cursor }
     post:
       requestBody:
         required: true
@@ -895,9 +1103,96 @@ paths:
             { schema: { $ref: "#/components/schemas/CreateChatMessage" } }
       responses:
         "201":
-          {
-            description: User message persisted; AI remains UNCONFIGURED without a provider,
+          description: User message persisted; AI remains UNCONFIGURED without a provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateChatMessageResponse" }
+  /v1/chat-sessions/{sessionId}/command-drafts:
+    parameters:
+      - {
+          in: path,
+          name: sessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      description: Stores a validated command draft and emits a confirmation-card chat message. This does not queue a desktop command.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateCommandDraft" } }
+      responses:
+        "201":
+          { description: Command draft persisted for explicit confirmation }
+  /v1/command-drafts/{draftId}/confirm:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
           }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          {
+            description: Draft materialized into a durable command exactly once,
+          }
+        "409": { description: DRAFT_EXPIRED or IDEMPOTENCY_CONFLICT }
+  /v1/command-drafts/{draftId}/reject:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201": { description: Draft rejected without creating a command }
+  /v1/rooms/{roomId}/chat:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      deprecated: true
+      responses:
+        "200": { description: Up to 200 persisted room chat messages }
+    post:
+      deprecated: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CreateChatMessage" } }
+      responses:
+        "201":
+          description: User message persisted; AI remains UNCONFIGURED without a provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreateChatMessageResponse" }
   /v1/sync/events:
     get:
       parameters:
@@ -1056,6 +1351,39 @@ components:
           items: { type: string, minLength: 1, maxLength: 120 }
         nextUnlockAffinity: { type: [integer, "null"], minimum: 0 }
         riveAssetStatus: { type: string, enum: [CONFIGURED, UNCONFIGURED] }
+    ConnectionSummary:
+      type: object
+      additionalProperties: false
+      required: [devices, rooms]
+      properties:
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/ConnectionSummaryDevice" }
+        rooms:
+          type: array
+          items: { $ref: "#/components/schemas/ConnectionSummaryRoom" }
+    ConnectionSummaryDevice:
+      type: object
+      additionalProperties: false
+      required: [id, platform, deviceName, status, lastSeenAt, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string, enum: [WINDOWS, MACOS, ANDROID, IOS] }
+        deviceName: { type: string, minLength: 1, maxLength: 120 }
+        status: { type: string, const: ACTIVE }
+        lastSeenAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string, format: date-time }
+    ConnectionSummaryRoom:
+      type: object
+      additionalProperties: false
+      required: [id, desktopDeviceId, name, rootAlias, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        desktopDeviceId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        rootAlias: { type: string, minLength: 1, maxLength: 120 }
+        status: { type: string, const: ACTIVE }
+        createdAt: { type: string, format: date-time }
     Heartbeat:
       type: object
       additionalProperties: false
@@ -1074,6 +1402,138 @@ components:
         desktopDeviceId: { type: string, format: uuid }
         name: { type: string, minLength: 1, maxLength: 120 }
         rootAlias: { type: string, minLength: 1, maxLength: 120 }
+    SafeCommandRelativePath:
+      type: string
+      minLength: 1
+      maxLength: 1024
+      pattern: '^(?!(?:[A-Za-z]:|[\\/]))(?!.*[\\/]{2})(?!.*(?:^|[\\/])\.{1,2}(?:[\\/]|$))(?!.*(?:^|[\\/])(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?(?:[\\/]|$))[^\u0000]+$'
+    SafeCommandRelativeDirectory:
+      oneOf:
+        - { const: "" }
+        - { $ref: "#/components/schemas/SafeCommandRelativePath" }
+    SafeCommandFileName:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: '^(?!(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$)(?!\.{1,2}$)(?!.*[\\/])(?=\S)(?!.*\s$)[^\u0000]+$'
+    CommandRootId:
+      type: string
+      minLength: 1
+      maxLength: 160
+    CommandMetadata:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionId: { type: string, format: uuid }
+        sourceMessageId: { type: string, format: uuid }
+        idempotencyKey: { type: string, minLength: 8, maxLength: 128 }
+        requiresApproval: { type: boolean }
+    EmptyCommandPayload:
+      type: object
+      additionalProperties: false
+      maxProperties: 0
+    RenameCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePath, newName]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        newName: { $ref: "#/components/schemas/SafeCommandFileName" }
+    MoveCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePaths, destinationRelativeDirectory]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePaths:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        destinationRelativeDirectory:
+          { $ref: "#/components/schemas/SafeCommandRelativeDirectory" }
+    OrganizeCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, scopeRelativePath]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        scopeRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativeDirectory" }
+        instruction: { type: string, minLength: 1, maxLength: 2000 }
+    CreateFileCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, kind, relativePath]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        kind: { type: string, enum: [FILE, DIRECTORY] }
+        relativePath: { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        content: { type: string, maxLength: 200000 }
+    TrashCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePaths]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePaths:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/SafeCommandRelativePath" }
+    FindCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, query, limit]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        query: { type: string, minLength: 2, maxLength: 100 }
+        extensions:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { type: string, pattern: '^\\.[a-zA-Z0-9]+$' }
+        scopeRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativeDirectory" }
+        limit: { type: integer, minimum: 1, maximum: 200 }
+    FileIdentity:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        fileId: { type: string, minLength: 1, maxLength: 512 }
+        sizeBytes: { type: integer, minimum: 0 }
+        modifiedAt: { type: string, format: date-time }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+    DownloadCommandPayload:
+      type: object
+      additionalProperties: false
+      required: [rootId, sourceRelativePath]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        sourceRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        expectedIdentity: { $ref: "#/components/schemas/FileIdentity" }
+    UploadCommandPayload:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          rootId,
+          destinationRelativePath,
+          transferId,
+          expectedSha256,
+          expectedSize,
+        ]
+      properties:
+        rootId: { $ref: "#/components/schemas/CommandRootId" }
+        destinationRelativePath:
+          { $ref: "#/components/schemas/SafeCommandRelativePath" }
+        transferId: { type: string, format: uuid }
+        expectedSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        expectedSize: { type: integer, minimum: 1 }
     CreateCommand:
       oneOf:
         - type: object
@@ -1081,15 +1541,15 @@ components:
           required: [intent, payload]
           properties:
             intent: { const: SCAN }
-            payload:
-              { type: object, additionalProperties: false, maxProperties: 0 }
+            payload: { $ref: "#/components/schemas/EmptyCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
         - type: object
           additionalProperties: false
           required: [intent, payload]
           properties:
             intent: { const: ANALYZE }
-            payload:
-              { type: object, additionalProperties: false, maxProperties: 0 }
+            payload: { $ref: "#/components/schemas/EmptyCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
         - type: object
           additionalProperties: false
           required: [intent, payload]
@@ -1101,6 +1561,7 @@ components:
               required: [rule]
               properties:
                 rule: { $ref: "#/components/schemas/CreateRule" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
         - type: object
           additionalProperties: false
           required: [intent, payload]
@@ -1118,6 +1579,63 @@ components:
                   type: array
                   maxItems: 20
                   items: { type: string, minLength: 1, maxLength: 120 }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: RENAME }
+            payload: { $ref: "#/components/schemas/RenameCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: MOVE }
+            payload: { $ref: "#/components/schemas/MoveCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: ORGANIZE }
+            payload: { $ref: "#/components/schemas/OrganizeCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: CREATE }
+            payload: { $ref: "#/components/schemas/CreateFileCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: TRASH }
+            payload: { $ref: "#/components/schemas/TrashCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: FIND }
+            payload: { $ref: "#/components/schemas/FindCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: DOWNLOAD }
+            payload: { $ref: "#/components/schemas/DownloadCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
+        - type: object
+          additionalProperties: false
+          required: [intent, payload]
+          properties:
+            intent: { const: UPLOAD }
+            payload: { $ref: "#/components/schemas/UploadCommandPayload" }
+            metadata: { $ref: "#/components/schemas/CommandMetadata" }
     UpdateCommandStatus:
       type: object
       additionalProperties: false
@@ -1149,7 +1667,10 @@ components:
       properties:
         itemOrder: { type: integer, minimum: 0 }
         actionType:
-          { type: string, enum: [MOVE, QUARANTINE, CREATE_DIR, README_WRITE] }
+          {
+            type: string,
+            enum: [MOVE, QUARANTINE, CREATE_DIR, CREATE_FILE, README_WRITE],
+          }
         sourceRelativePath: { type: [string, "null"], maxLength: 1024 }
         destinationRelativePath: { type: [string, "null"], maxLength: 1024 }
         reasonCode: { type: string, minLength: 1, maxLength: 100 }
@@ -1217,6 +1738,12 @@ components:
             maxLength: 100,
             default: null,
           }
+        extensions:
+          type: array
+          maxItems: 50
+          default: []
+          items: { type: string, pattern: '^\\.[a-zA-Z0-9]+$' }
+        limit: { type: integer, minimum: 1, maximum: 200, default: 200 }
         searchScope:
           {
             type: string,
@@ -1345,6 +1872,19 @@ components:
           minItems: 1
           maxItems: 200
           items: { $ref: "#/components/schemas/CacheCandidate" }
+    MarkCachedFilesStale:
+      type: object
+      additionalProperties: false
+      description: SOURCE_CHANGED and SOURCE_REMOVED require sourceRelativePath. REINDEXED must use null sourceRelativePath and marks the room's available cached files as freshness-uncertain.
+      required: [roomId, sourceRelativePath, reason]
+      properties:
+        roomId: { type: string, format: uuid }
+        sourceRelativePath:
+          oneOf:
+            - { $ref: "#/components/schemas/SafeCommandRelativePath" }
+            - { type: "null" }
+        reason:
+          { type: string, enum: [SOURCE_CHANGED, SOURCE_REMOVED, REINDEXED] }
     CacheUploadReservation:
       type: object
       additionalProperties: false
@@ -1378,12 +1918,39 @@ components:
     CompleteCacheUpload:
       type: object
       additionalProperties: false
-      required: [sizeBytes, sha256, usageScore, manualPin]
+      required: [sizeBytes, sha256, usageScore, manualPin, encryptionMetadata]
       properties:
         sizeBytes: { type: integer, minimum: 1 }
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
         usageScore: { type: integer }
         manualPin: { type: boolean }
+        encryptionMetadata:
+          { $ref: "#/components/schemas/SmartCacheEncryptionMetadata" }
+    CachedFileAccessEvent:
+      type: object
+      additionalProperties: false
+      required: [eventType]
+      properties:
+        eventType: { type: string, enum: [DOWNLOAD_COMPLETED] }
+    SmartCacheEncryptionMetadata:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          algorithm,
+          format,
+          keyId,
+          nonceHex,
+          plaintextSizeBytes,
+          plaintextSha256,
+        ]
+      properties:
+        algorithm: { type: string, enum: [AES-256-GCM] }
+        format: { type: string, enum: [MKS1_NONCE_CIPHERTEXT_TAG] }
+        keyId: { type: string, minLength: 16, maxLength: 128 }
+        nonceHex: { type: string, pattern: "^[a-f0-9]{24}$" }
+        plaintextSizeBytes: { type: integer, minimum: 1 }
+        plaintextSha256: { type: string, pattern: "^[a-f0-9]{64}$" }
     UpdateCharacter:
       type: object
       additionalProperties: false
@@ -1398,12 +1965,170 @@ components:
             accessory: { type: string, enum: [none, scarf] }
             animationsEnabled: { type: boolean }
         roomTheme: { type: [string, "null"], enum: [warm, forest, null] }
+    ChatSession:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          title,
+          summary,
+          status,
+          createdAt,
+          updatedAt,
+          deletedAt,
+          messagePreview,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        title: { type: string, minLength: 1, maxLength: 120 }
+        summary: { type: [string, "null"] }
+        status: { type: string, enum: [ACTIVE, DELETED] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        deletedAt: { type: [string, "null"], format: date-time }
+        messagePreview: { type: string, maxLength: 120 }
+    CreateChatSession:
+      type: object
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
+    UpdateChatSession:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120 }
     CreateChatMessage:
       type: object
       additionalProperties: false
       required: [content]
       properties:
         content: { type: string, minLength: 1, maxLength: 2000 }
+    ChatMessage:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          sessionId,
+          senderType,
+          messageType,
+          content,
+          structuredPayload,
+          commandId,
+          createdAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        sessionId: { type: [string, "null"], format: uuid }
+        senderType: { type: string, enum: [USER, ASSISTANT, SYSTEM] }
+        messageType:
+          {
+            type: string,
+            enum: [TEXT, COMMAND_DRAFT, RULE_DRAFT, EXECUTION_RESULT],
+          }
+        content: { type: string, minLength: 1 }
+        structuredPayload: { type: [object, "null"] }
+        commandId: { type: [string, "null"], format: uuid }
+        createdAt: { type: string, format: date-time }
+    AiProviderUnavailable:
+      type: object
+      additionalProperties: false
+      required: [status, code]
+      properties:
+        status: { type: string, enum: [UNCONFIGURED] }
+        code: { type: string, enum: [AI_PROVIDER_UNCONFIGURED] }
+    AiProviderInvalid:
+      type: object
+      additionalProperties: false
+      required: [status, code]
+      properties:
+        status: { type: string, enum: [INVALID] }
+        code: { type: string, enum: [AI_OUTPUT_INVALID] }
+    AiProviderNoAction:
+      type: object
+      additionalProperties: false
+      required: [status, kind]
+      properties:
+        status: { type: string, enum: [READY] }
+        kind: { type: string, enum: [NO_ACTION] }
+    AiProviderCommandDraft:
+      type: object
+      additionalProperties: false
+      required: [status, kind, commandDraftId]
+      properties:
+        status: { type: string, enum: [READY] }
+        kind: { type: string, enum: [COMMAND_DRAFT] }
+        commandDraftId: { type: string, format: uuid }
+    CreateChatMessageResponse:
+      type: object
+      additionalProperties: false
+      required: [message, assistant, aiStatus, ai]
+      properties:
+        message: { $ref: "#/components/schemas/ChatMessage" }
+        assistant:
+          oneOf:
+            - { $ref: "#/components/schemas/ChatMessage" }
+            - { type: "null" }
+          aiStatus: { type: string, enum: [UNCONFIGURED, READY, INVALID] }
+          ai:
+            oneOf:
+              - { $ref: "#/components/schemas/AiProviderUnavailable" }
+              - { $ref: "#/components/schemas/AiProviderInvalid" }
+              - { $ref: "#/components/schemas/AiProviderNoAction" }
+              - { $ref: "#/components/schemas/AiProviderCommandDraft" }
+    CreateCommandDraft:
+      type: object
+      additionalProperties: false
+      required: [sourceMessageId, command, confirmationSummary]
+      properties:
+        sourceMessageId: { type: string, format: uuid }
+        command:
+          allOf:
+            - { $ref: "#/components/schemas/CreateCommand" }
+          description: The command payload to queue only after explicit confirmation. Client-supplied command metadata is rejected by the server contract.
+        confirmationSummary: { type: string, minLength: 1, maxLength: 4000 }
+        expiresAt: { type: string, format: date-time }
+    CommandDraftSummary:
+      type: object
+      additionalProperties: false
+      required: [id, intent, confirmationSummary, status, expiresAt, commandId]
+      properties:
+        id: { type: string, format: uuid }
+        intent:
+          {
+            type: string,
+            enum:
+              [
+                SCAN,
+                CREATE_RULE,
+                ANALYZE,
+                README,
+                RENAME,
+                MOVE,
+                ORGANIZE,
+                CREATE,
+                TRASH,
+                FIND,
+                DOWNLOAD,
+                UPLOAD,
+              ],
+          }
+        confirmationSummary: { type: string, minLength: 1, maxLength: 4000 }
+        status:
+          {
+            type: string,
+            enum: [DRAFT, APPROVED, REJECTED, EXPIRED, MATERIALIZED],
+          }
+        expiresAt: { type: string, format: date-time }
+        commandId: { type: [string, "null"], format: uuid }
+        fileBrowseRequestId: { type: [string, "null"], format: uuid }
+        fileTransferId: { type: [string, "null"], format: uuid }
     EventEnvelope:
       type: object
       additionalProperties: false
@@ -1464,6 +2189,7 @@ components:
       properties:
         deviceId: { type: string, format: uuid }
         status: { type: string, const: ACTIVE }
+        device: { $ref: "#/components/schemas/ConnectionSummaryDevice" }
     DeviceRevokedEventPayload:
       type: object
       additionalProperties: false
@@ -1519,6 +2245,35 @@ components:
                 additionalProperties: false
                 required: [field, operator, value]
                 properties:
+                  field:
+                    { type: string, enum: [modifiedAgeDays, createdAgeDays] }
+                  operator: { type: string, enum: [GTE, GT] }
+                  value: { type: integer, minimum: 0, maximum: 36500 }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: sizeBytes }
+                  operator: { type: string, enum: [GTE, LTE] }
+                  value: { type: integer, minimum: 0 }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: relativePath }
+                  operator: { const: STARTS_WITH }
+                  value: { type: string, minLength: 1, maxLength: 1024 }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
+                  field: { const: fileKind }
+                  operator: { const: EQ }
+                  value: { type: string, enum: [FILE, DIRECTORY] }
+              - type: object
+                additionalProperties: false
+                required: [field, operator, value]
+                properties:
                   field: { const: name }
                   operator:
                     { type: string, enum: [CONTAINS, STARTS_WITH, ENDS_WITH] }
@@ -1536,6 +2291,17 @@ components:
               required: [type]
               properties:
                 type: { const: QUARANTINE }
+            - type: object
+              additionalProperties: false
+              required: [type]
+              properties:
+                type: { const: TRASH }
+            - type: object
+              additionalProperties: false
+              required: [type, relativePath]
+              properties:
+                type: { const: CREATE_DIR }
+                relativePath: { type: string, minLength: 1, maxLength: 1024 }
     CreateRule:
       type: object
       additionalProperties: false
@@ -1555,6 +2321,113 @@ components:
         definition: { $ref: "#/components/schemas/RuleDefinition" }
         priority: { type: integer, minimum: 0, maximum: 10000 }
         enabled: { type: boolean }
+    CreateRuleDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [instruction]
+      properties:
+        instruction: { type: string, minLength: 1, maxLength: 2000 }
+    RuleDraftResult:
+      oneOf:
+        - { $ref: "#/components/schemas/AiProviderUnavailable" }
+        - { $ref: "#/components/schemas/AiProviderInvalid" }
+        - type: object
+          additionalProperties: false
+          required: [status, kind, draft]
+          properties:
+            status: { type: string, enum: [READY] }
+            kind: { type: string, enum: [RULE_DRAFT] }
+            draft: { $ref: "#/components/schemas/RuleDraftSummary" }
+    RuleDraftPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [status, draft, items, truncated]
+      properties:
+        status: { type: string, enum: [READY] }
+        draft: { $ref: "#/components/schemas/RuleDraftSummary" }
+        items:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/RuleDraftPreviewItem" }
+        truncated: { type: boolean }
+    RuleDraftPreviewItem:
+      type: object
+      additionalProperties: false
+      required: [relativePath, fileKind, proposedAction]
+      properties:
+        relativePath: { type: string, minLength: 1, maxLength: 1024 }
+        fileKind: { type: string, enum: [FILE, DIRECTORY] }
+        proposedAction:
+          { type: string, enum: [MOVE, QUARANTINE, TRASH, CREATE_DIR] }
+        destinationRelativePath:
+          { type: [string, "null"], minLength: 1, maxLength: 1024 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    RuleSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          name,
+          definition,
+          priority,
+          enabled,
+          version,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        definition: { $ref: "#/components/schemas/RuleDefinition" }
+        priority: { type: integer, minimum: 0, maximum: 10000 }
+        enabled: { type: boolean }
+        version: { type: integer, minimum: 1 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    RuleDraftSummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          roomId,
+          name,
+          definition,
+          explanation,
+          ambiguities,
+          status,
+          expiresAt,
+          ruleId,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        roomId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        definition: { $ref: "#/components/schemas/RuleDefinition" }
+        explanation: { type: string, minLength: 1, maxLength: 4000 }
+        ambiguities:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 500 }
+        status: { type: string, enum: [DRAFT, REJECTED, EXPIRED, MATERIALIZED] }
+        expiresAt: { type: string, format: date-time }
+        ruleId: { type: [string, "null"], format: uuid }
+    ConfirmRuleDraftResponse:
+      type: object
+      additionalProperties: false
+      required: [draft, rule]
+      properties:
+        draft: { $ref: "#/components/schemas/RuleDraftSummary" }
+        rule: { $ref: "#/components/schemas/RuleSummary" }
+    RejectRuleDraftResponse:
+      type: object
+      additionalProperties: false
+      required: [draft]
+      properties:
+        draft: { $ref: "#/components/schemas/RuleDraftSummary" }
     CreateRoomSnapshot:
       type: object
       additionalProperties: false
@@ -1604,3 +2477,9 @@ components:
       $ref: ./events/file-browse.schema.json
     FileTransferEvent:
       $ref: ./events/file-transfer.schema.json
+    PresenceUpdatedPayload:
+      $ref: ./events/presence.schema.json
+    SmartCacheUpdatedPayload:
+      $ref: ./events/smart-cache.schema.json
+    RuleDslDefinition:
+      $ref: ./events/rule-dsl.schema.json

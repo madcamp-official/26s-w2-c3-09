@@ -8,7 +8,9 @@ import {
 } from '@nestjs/common';
 import {
   cacheCandidateBatchSchema,
+  cachedFileAccessEventSchema,
   completeCacheUploadSchema,
+  markCachedFilesStaleSchema,
   updateSmartCachePolicySchema,
 } from '@mousekeeper/contracts';
 import {
@@ -23,7 +25,7 @@ import {
   smartCachePolicies,
   type Database,
 } from '@mousekeeper/database';
-import { and, asc, eq, gt, inArray, sql, sum } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, ne, sql, sum } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import Redis from 'ioredis';
@@ -626,7 +628,9 @@ export class SmartCacheService {
           result.sizeBytes !== body.sizeBytes ||
           result.sha256 !== body.sha256 ||
           result.usageScore !== body.usageScore ||
-          result.manualPin !== body.manualPin
+          result.manualPin !== body.manualPin ||
+          canonicalJson(result.encryptionMetadata) !==
+            canonicalJson(body.encryptionMetadata)
         )
           throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
         return this.publicFile(result);
@@ -666,6 +670,7 @@ export class SmartCacheService {
             objectKey: reservation.objectKey,
             sizeBytes: body.sizeBytes,
             sha256: body.sha256,
+            encryptionMetadata: body.encryptionMetadata,
             lastVerifiedAt: new Date(),
           })
           .onConflictDoUpdate({
@@ -677,7 +682,11 @@ export class SmartCacheService {
             set: {
               availabilityStatus: 'AVAILABLE',
               freshnessStatus: 'VERIFIED_CURRENT',
+              sizeBytes: body.sizeBytes,
               sha256: body.sha256,
+              usageScore: body.usageScore,
+              manualPin: body.manualPin,
+              encryptionMetadata: body.encryptionMetadata,
               lastVerifiedAt: new Date(),
             },
           })
@@ -794,6 +803,66 @@ export class SmartCacheService {
     });
   }
 
+  async markStale(
+    userId: string,
+    deviceId: string,
+    body: z.infer<typeof markCachedFilesStaleSchema>,
+  ) {
+    const room = await this.room(userId, body.roomId);
+    if (room.desktopDeviceId !== deviceId) {
+      throw new ForbiddenException({ code: 'FORBIDDEN' });
+    }
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${body.roomId}))`,
+      );
+      await this.lockActiveRoom(tx, userId, deviceId, body.roomId);
+      const conditions = [
+        eq(cachedFiles.roomId, body.roomId),
+        eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
+        ne(cachedFiles.freshnessStatus, 'STALE'),
+      ];
+      if (body.sourceRelativePath !== null) {
+        conditions.push(
+          body.reason === 'SOURCE_REMOVED'
+            ? sql`(${cachedFiles.sourceRelativePath} = ${body.sourceRelativePath} OR starts_with(${cachedFiles.sourceRelativePath}, ${`${body.sourceRelativePath}/`}))`
+            : eq(cachedFiles.sourceRelativePath, body.sourceRelativePath),
+        );
+      }
+      const staleFiles = await tx
+        .update(cachedFiles)
+        .set({ freshnessStatus: 'STALE' })
+        .where(and(...conditions))
+        .returning({
+          id: cachedFiles.id,
+          sourceRelativePath: cachedFiles.sourceRelativePath,
+        });
+      if (staleFiles.length > 0) {
+        await this.sync.append(tx, {
+          userId,
+          deviceId,
+          roomId: body.roomId,
+          eventType: 'smart-cache.updated',
+          aggregateType: 'cached_file_freshness',
+          aggregateId: body.roomId,
+          payload: {
+            roomId: body.roomId,
+            sourceRelativePath: body.sourceRelativePath,
+            reason: body.reason,
+            freshnessStatus: 'STALE',
+            staleCount: staleFiles.length,
+          },
+        });
+      }
+      return {
+        roomId: body.roomId,
+        sourceRelativePath: body.sourceRelativePath,
+        reason: body.reason,
+        staleCount: staleFiles.length,
+      };
+    });
+  }
+
   async remove(userId: string, cachedFileId: string) {
     const owned = (
       await this.db
@@ -896,22 +965,79 @@ export class SmartCacheService {
               eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
             ),
           )
-          .for('update')
+          .for('share')
           .limit(1)
       )[0];
       if (!owned) throw new NotFoundException({ code: 'NOT_FOUND' });
       if (!owned.sha256)
         throw new ConflictException({ code: 'CHECKSUM_UNAVAILABLE' });
-      await tx
-        .update(cachedFiles)
-        .set({ lastAccessedAt: new Date() })
-        .where(eq(cachedFiles.id, cachedFileId));
       return {
         downloadUrl: await this.storage.downloadUrl(owned.objectKey, 60),
         sizeBytes: owned.sizeBytes,
         sha256: owned.sha256,
+        encryptionMetadata: owned.encryptionMetadata,
         freshnessStatus: owned.freshnessStatus,
         lastVerifiedAt: owned.lastVerifiedAt,
+      };
+    });
+  }
+
+  async recordAccess(
+    userId: string,
+    cachedFileId: string,
+    body: z.infer<typeof cachedFileAccessEventSchema>,
+  ) {
+    this.enabled();
+    return this.db.transaction(async (tx) => {
+      const candidate = (
+        await tx
+          .select({ file: cachedFiles, room: rooms })
+          .from(cachedFiles)
+          .innerJoin(
+            rooms,
+            and(
+              eq(cachedFiles.roomId, rooms.id),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .where(eq(cachedFiles.id, cachedFileId))
+          .limit(1)
+      )[0];
+      if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
+      await this.lockActiveRoom(
+        tx,
+        userId,
+        candidate.room.desktopDeviceId,
+        candidate.room.id,
+      );
+      const accessedAt = new Date();
+      const updated = (
+        await tx
+          .update(cachedFiles)
+          .set({
+            lastAccessedAt: accessedAt,
+            usageScore: sql`${cachedFiles.usageScore} + 5`,
+          })
+          .where(
+            and(
+              eq(cachedFiles.id, cachedFileId),
+              eq(cachedFiles.roomId, candidate.room.id),
+              eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
+            ),
+          )
+          .returning({
+            id: cachedFiles.id,
+            usageScore: cachedFiles.usageScore,
+            lastAccessedAt: cachedFiles.lastAccessedAt,
+          })
+      )[0];
+      if (!updated) throw new NotFoundException({ code: 'NOT_FOUND' });
+      return {
+        cachedFileId: updated.id,
+        eventType: body.eventType,
+        usageScore: updated.usageScore,
+        lastAccessedAt: updated.lastAccessedAt?.toISOString() ?? null,
       };
     });
   }
@@ -978,7 +1104,9 @@ export class SmartCacheService {
       cached.sizeBytes !== body.sizeBytes ||
       cached.sha256 !== body.sha256 ||
       cached.usageScore !== body.usageScore ||
-      cached.manualPin !== body.manualPin
+      cached.manualPin !== body.manualPin ||
+      canonicalJson(cached.encryptionMetadata) !==
+        canonicalJson(body.encryptionMetadata)
     )
       throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
     return cached;

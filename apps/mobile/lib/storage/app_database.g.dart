@@ -2902,6 +2902,809 @@ class SyncCursorsCompanion extends UpdateCompanion<SyncCursor> {
   }
 }
 
+class $CachedSmartCacheFilesTable extends CachedSmartCacheFiles
+    with TableInfo<$CachedSmartCacheFilesTable, CachedSmartCacheFile> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $CachedSmartCacheFilesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _ownerUidMeta = const VerificationMeta(
+    'ownerUid',
+  );
+  @override
+  late final GeneratedColumn<String> ownerUid = GeneratedColumn<String>(
+    'owner_uid',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _roomIdMeta = const VerificationMeta('roomId');
+  @override
+  late final GeneratedColumn<String> roomId = GeneratedColumn<String>(
+    'room_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sourceRelativePathMeta =
+      const VerificationMeta('sourceRelativePath');
+  @override
+  late final GeneratedColumn<String> sourceRelativePath =
+      GeneratedColumn<String>(
+        'source_relative_path',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _payloadJsonMeta = const VerificationMeta(
+    'payloadJson',
+  );
+  @override
+  late final GeneratedColumn<String> payloadJson = GeneratedColumn<String>(
+    'payload_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _availabilityStatusMeta =
+      const VerificationMeta('availabilityStatus');
+  @override
+  late final GeneratedColumn<String> availabilityStatus =
+      GeneratedColumn<String>(
+        'availability_status',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _freshnessStatusMeta = const VerificationMeta(
+    'freshnessStatus',
+  );
+  @override
+  late final GeneratedColumn<String> freshnessStatus = GeneratedColumn<String>(
+    'freshness_status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _localDownloadPathMeta = const VerificationMeta(
+    'localDownloadPath',
+  );
+  @override
+  late final GeneratedColumn<String> localDownloadPath =
+      GeneratedColumn<String>(
+        'local_download_path',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _sha256Meta = const VerificationMeta('sha256');
+  @override
+  late final GeneratedColumn<String> sha256 = GeneratedColumn<String>(
+    'sha256',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _sizeBytesMeta = const VerificationMeta(
+    'sizeBytes',
+  );
+  @override
+  late final GeneratedColumn<int> sizeBytes = GeneratedColumn<int>(
+    'size_bytes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _lastVerifiedAtMeta = const VerificationMeta(
+    'lastVerifiedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> lastVerifiedAt =
+      GeneratedColumn<DateTime>(
+        'last_verified_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _downloadedAtMeta = const VerificationMeta(
+    'downloadedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> downloadedAt = GeneratedColumn<DateTime>(
+    'downloaded_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    ownerUid,
+    roomId,
+    id,
+    sourceRelativePath,
+    payloadJson,
+    availabilityStatus,
+    freshnessStatus,
+    localDownloadPath,
+    sha256,
+    sizeBytes,
+    lastVerifiedAt,
+    downloadedAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'cached_smart_cache_files';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<CachedSmartCacheFile> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('owner_uid')) {
+      context.handle(
+        _ownerUidMeta,
+        ownerUid.isAcceptableOrUnknown(data['owner_uid']!, _ownerUidMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_ownerUidMeta);
+    }
+    if (data.containsKey('room_id')) {
+      context.handle(
+        _roomIdMeta,
+        roomId.isAcceptableOrUnknown(data['room_id']!, _roomIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_roomIdMeta);
+    }
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('source_relative_path')) {
+      context.handle(
+        _sourceRelativePathMeta,
+        sourceRelativePath.isAcceptableOrUnknown(
+          data['source_relative_path']!,
+          _sourceRelativePathMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_sourceRelativePathMeta);
+    }
+    if (data.containsKey('payload_json')) {
+      context.handle(
+        _payloadJsonMeta,
+        payloadJson.isAcceptableOrUnknown(
+          data['payload_json']!,
+          _payloadJsonMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_payloadJsonMeta);
+    }
+    if (data.containsKey('availability_status')) {
+      context.handle(
+        _availabilityStatusMeta,
+        availabilityStatus.isAcceptableOrUnknown(
+          data['availability_status']!,
+          _availabilityStatusMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_availabilityStatusMeta);
+    }
+    if (data.containsKey('freshness_status')) {
+      context.handle(
+        _freshnessStatusMeta,
+        freshnessStatus.isAcceptableOrUnknown(
+          data['freshness_status']!,
+          _freshnessStatusMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_freshnessStatusMeta);
+    }
+    if (data.containsKey('local_download_path')) {
+      context.handle(
+        _localDownloadPathMeta,
+        localDownloadPath.isAcceptableOrUnknown(
+          data['local_download_path']!,
+          _localDownloadPathMeta,
+        ),
+      );
+    }
+    if (data.containsKey('sha256')) {
+      context.handle(
+        _sha256Meta,
+        sha256.isAcceptableOrUnknown(data['sha256']!, _sha256Meta),
+      );
+    }
+    if (data.containsKey('size_bytes')) {
+      context.handle(
+        _sizeBytesMeta,
+        sizeBytes.isAcceptableOrUnknown(data['size_bytes']!, _sizeBytesMeta),
+      );
+    }
+    if (data.containsKey('last_verified_at')) {
+      context.handle(
+        _lastVerifiedAtMeta,
+        lastVerifiedAt.isAcceptableOrUnknown(
+          data['last_verified_at']!,
+          _lastVerifiedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('downloaded_at')) {
+      context.handle(
+        _downloadedAtMeta,
+        downloadedAt.isAcceptableOrUnknown(
+          data['downloaded_at']!,
+          _downloadedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {ownerUid, id};
+  @override
+  CachedSmartCacheFile map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return CachedSmartCacheFile(
+      ownerUid: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_uid'],
+      )!,
+      roomId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}room_id'],
+      )!,
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      sourceRelativePath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source_relative_path'],
+      )!,
+      payloadJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}payload_json'],
+      )!,
+      availabilityStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}availability_status'],
+      )!,
+      freshnessStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}freshness_status'],
+      )!,
+      localDownloadPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}local_download_path'],
+      ),
+      sha256: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}sha256'],
+      ),
+      sizeBytes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}size_bytes'],
+      ),
+      lastVerifiedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}last_verified_at'],
+      ),
+      downloadedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}downloaded_at'],
+      ),
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $CachedSmartCacheFilesTable createAlias(String alias) {
+    return $CachedSmartCacheFilesTable(attachedDatabase, alias);
+  }
+}
+
+class CachedSmartCacheFile extends DataClass
+    implements Insertable<CachedSmartCacheFile> {
+  final String ownerUid;
+  final String roomId;
+  final String id;
+  final String sourceRelativePath;
+  final String payloadJson;
+  final String availabilityStatus;
+  final String freshnessStatus;
+  final String? localDownloadPath;
+  final String? sha256;
+  final int? sizeBytes;
+  final DateTime? lastVerifiedAt;
+  final DateTime? downloadedAt;
+  final DateTime updatedAt;
+  const CachedSmartCacheFile({
+    required this.ownerUid,
+    required this.roomId,
+    required this.id,
+    required this.sourceRelativePath,
+    required this.payloadJson,
+    required this.availabilityStatus,
+    required this.freshnessStatus,
+    this.localDownloadPath,
+    this.sha256,
+    this.sizeBytes,
+    this.lastVerifiedAt,
+    this.downloadedAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['owner_uid'] = Variable<String>(ownerUid);
+    map['room_id'] = Variable<String>(roomId);
+    map['id'] = Variable<String>(id);
+    map['source_relative_path'] = Variable<String>(sourceRelativePath);
+    map['payload_json'] = Variable<String>(payloadJson);
+    map['availability_status'] = Variable<String>(availabilityStatus);
+    map['freshness_status'] = Variable<String>(freshnessStatus);
+    if (!nullToAbsent || localDownloadPath != null) {
+      map['local_download_path'] = Variable<String>(localDownloadPath);
+    }
+    if (!nullToAbsent || sha256 != null) {
+      map['sha256'] = Variable<String>(sha256);
+    }
+    if (!nullToAbsent || sizeBytes != null) {
+      map['size_bytes'] = Variable<int>(sizeBytes);
+    }
+    if (!nullToAbsent || lastVerifiedAt != null) {
+      map['last_verified_at'] = Variable<DateTime>(lastVerifiedAt);
+    }
+    if (!nullToAbsent || downloadedAt != null) {
+      map['downloaded_at'] = Variable<DateTime>(downloadedAt);
+    }
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  CachedSmartCacheFilesCompanion toCompanion(bool nullToAbsent) {
+    return CachedSmartCacheFilesCompanion(
+      ownerUid: Value(ownerUid),
+      roomId: Value(roomId),
+      id: Value(id),
+      sourceRelativePath: Value(sourceRelativePath),
+      payloadJson: Value(payloadJson),
+      availabilityStatus: Value(availabilityStatus),
+      freshnessStatus: Value(freshnessStatus),
+      localDownloadPath: localDownloadPath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(localDownloadPath),
+      sha256: sha256 == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sha256),
+      sizeBytes: sizeBytes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sizeBytes),
+      lastVerifiedAt: lastVerifiedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastVerifiedAt),
+      downloadedAt: downloadedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(downloadedAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory CachedSmartCacheFile.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return CachedSmartCacheFile(
+      ownerUid: serializer.fromJson<String>(json['ownerUid']),
+      roomId: serializer.fromJson<String>(json['roomId']),
+      id: serializer.fromJson<String>(json['id']),
+      sourceRelativePath: serializer.fromJson<String>(
+        json['sourceRelativePath'],
+      ),
+      payloadJson: serializer.fromJson<String>(json['payloadJson']),
+      availabilityStatus: serializer.fromJson<String>(
+        json['availabilityStatus'],
+      ),
+      freshnessStatus: serializer.fromJson<String>(json['freshnessStatus']),
+      localDownloadPath: serializer.fromJson<String?>(
+        json['localDownloadPath'],
+      ),
+      sha256: serializer.fromJson<String?>(json['sha256']),
+      sizeBytes: serializer.fromJson<int?>(json['sizeBytes']),
+      lastVerifiedAt: serializer.fromJson<DateTime?>(json['lastVerifiedAt']),
+      downloadedAt: serializer.fromJson<DateTime?>(json['downloadedAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'ownerUid': serializer.toJson<String>(ownerUid),
+      'roomId': serializer.toJson<String>(roomId),
+      'id': serializer.toJson<String>(id),
+      'sourceRelativePath': serializer.toJson<String>(sourceRelativePath),
+      'payloadJson': serializer.toJson<String>(payloadJson),
+      'availabilityStatus': serializer.toJson<String>(availabilityStatus),
+      'freshnessStatus': serializer.toJson<String>(freshnessStatus),
+      'localDownloadPath': serializer.toJson<String?>(localDownloadPath),
+      'sha256': serializer.toJson<String?>(sha256),
+      'sizeBytes': serializer.toJson<int?>(sizeBytes),
+      'lastVerifiedAt': serializer.toJson<DateTime?>(lastVerifiedAt),
+      'downloadedAt': serializer.toJson<DateTime?>(downloadedAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  CachedSmartCacheFile copyWith({
+    String? ownerUid,
+    String? roomId,
+    String? id,
+    String? sourceRelativePath,
+    String? payloadJson,
+    String? availabilityStatus,
+    String? freshnessStatus,
+    Value<String?> localDownloadPath = const Value.absent(),
+    Value<String?> sha256 = const Value.absent(),
+    Value<int?> sizeBytes = const Value.absent(),
+    Value<DateTime?> lastVerifiedAt = const Value.absent(),
+    Value<DateTime?> downloadedAt = const Value.absent(),
+    DateTime? updatedAt,
+  }) => CachedSmartCacheFile(
+    ownerUid: ownerUid ?? this.ownerUid,
+    roomId: roomId ?? this.roomId,
+    id: id ?? this.id,
+    sourceRelativePath: sourceRelativePath ?? this.sourceRelativePath,
+    payloadJson: payloadJson ?? this.payloadJson,
+    availabilityStatus: availabilityStatus ?? this.availabilityStatus,
+    freshnessStatus: freshnessStatus ?? this.freshnessStatus,
+    localDownloadPath: localDownloadPath.present
+        ? localDownloadPath.value
+        : this.localDownloadPath,
+    sha256: sha256.present ? sha256.value : this.sha256,
+    sizeBytes: sizeBytes.present ? sizeBytes.value : this.sizeBytes,
+    lastVerifiedAt: lastVerifiedAt.present
+        ? lastVerifiedAt.value
+        : this.lastVerifiedAt,
+    downloadedAt: downloadedAt.present ? downloadedAt.value : this.downloadedAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  CachedSmartCacheFile copyWithCompanion(CachedSmartCacheFilesCompanion data) {
+    return CachedSmartCacheFile(
+      ownerUid: data.ownerUid.present ? data.ownerUid.value : this.ownerUid,
+      roomId: data.roomId.present ? data.roomId.value : this.roomId,
+      id: data.id.present ? data.id.value : this.id,
+      sourceRelativePath: data.sourceRelativePath.present
+          ? data.sourceRelativePath.value
+          : this.sourceRelativePath,
+      payloadJson: data.payloadJson.present
+          ? data.payloadJson.value
+          : this.payloadJson,
+      availabilityStatus: data.availabilityStatus.present
+          ? data.availabilityStatus.value
+          : this.availabilityStatus,
+      freshnessStatus: data.freshnessStatus.present
+          ? data.freshnessStatus.value
+          : this.freshnessStatus,
+      localDownloadPath: data.localDownloadPath.present
+          ? data.localDownloadPath.value
+          : this.localDownloadPath,
+      sha256: data.sha256.present ? data.sha256.value : this.sha256,
+      sizeBytes: data.sizeBytes.present ? data.sizeBytes.value : this.sizeBytes,
+      lastVerifiedAt: data.lastVerifiedAt.present
+          ? data.lastVerifiedAt.value
+          : this.lastVerifiedAt,
+      downloadedAt: data.downloadedAt.present
+          ? data.downloadedAt.value
+          : this.downloadedAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CachedSmartCacheFile(')
+          ..write('ownerUid: $ownerUid, ')
+          ..write('roomId: $roomId, ')
+          ..write('id: $id, ')
+          ..write('sourceRelativePath: $sourceRelativePath, ')
+          ..write('payloadJson: $payloadJson, ')
+          ..write('availabilityStatus: $availabilityStatus, ')
+          ..write('freshnessStatus: $freshnessStatus, ')
+          ..write('localDownloadPath: $localDownloadPath, ')
+          ..write('sha256: $sha256, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('lastVerifiedAt: $lastVerifiedAt, ')
+          ..write('downloadedAt: $downloadedAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    ownerUid,
+    roomId,
+    id,
+    sourceRelativePath,
+    payloadJson,
+    availabilityStatus,
+    freshnessStatus,
+    localDownloadPath,
+    sha256,
+    sizeBytes,
+    lastVerifiedAt,
+    downloadedAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is CachedSmartCacheFile &&
+          other.ownerUid == this.ownerUid &&
+          other.roomId == this.roomId &&
+          other.id == this.id &&
+          other.sourceRelativePath == this.sourceRelativePath &&
+          other.payloadJson == this.payloadJson &&
+          other.availabilityStatus == this.availabilityStatus &&
+          other.freshnessStatus == this.freshnessStatus &&
+          other.localDownloadPath == this.localDownloadPath &&
+          other.sha256 == this.sha256 &&
+          other.sizeBytes == this.sizeBytes &&
+          other.lastVerifiedAt == this.lastVerifiedAt &&
+          other.downloadedAt == this.downloadedAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class CachedSmartCacheFilesCompanion
+    extends UpdateCompanion<CachedSmartCacheFile> {
+  final Value<String> ownerUid;
+  final Value<String> roomId;
+  final Value<String> id;
+  final Value<String> sourceRelativePath;
+  final Value<String> payloadJson;
+  final Value<String> availabilityStatus;
+  final Value<String> freshnessStatus;
+  final Value<String?> localDownloadPath;
+  final Value<String?> sha256;
+  final Value<int?> sizeBytes;
+  final Value<DateTime?> lastVerifiedAt;
+  final Value<DateTime?> downloadedAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const CachedSmartCacheFilesCompanion({
+    this.ownerUid = const Value.absent(),
+    this.roomId = const Value.absent(),
+    this.id = const Value.absent(),
+    this.sourceRelativePath = const Value.absent(),
+    this.payloadJson = const Value.absent(),
+    this.availabilityStatus = const Value.absent(),
+    this.freshnessStatus = const Value.absent(),
+    this.localDownloadPath = const Value.absent(),
+    this.sha256 = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    this.lastVerifiedAt = const Value.absent(),
+    this.downloadedAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  CachedSmartCacheFilesCompanion.insert({
+    required String ownerUid,
+    required String roomId,
+    required String id,
+    required String sourceRelativePath,
+    required String payloadJson,
+    required String availabilityStatus,
+    required String freshnessStatus,
+    this.localDownloadPath = const Value.absent(),
+    this.sha256 = const Value.absent(),
+    this.sizeBytes = const Value.absent(),
+    this.lastVerifiedAt = const Value.absent(),
+    this.downloadedAt = const Value.absent(),
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : ownerUid = Value(ownerUid),
+       roomId = Value(roomId),
+       id = Value(id),
+       sourceRelativePath = Value(sourceRelativePath),
+       payloadJson = Value(payloadJson),
+       availabilityStatus = Value(availabilityStatus),
+       freshnessStatus = Value(freshnessStatus),
+       updatedAt = Value(updatedAt);
+  static Insertable<CachedSmartCacheFile> custom({
+    Expression<String>? ownerUid,
+    Expression<String>? roomId,
+    Expression<String>? id,
+    Expression<String>? sourceRelativePath,
+    Expression<String>? payloadJson,
+    Expression<String>? availabilityStatus,
+    Expression<String>? freshnessStatus,
+    Expression<String>? localDownloadPath,
+    Expression<String>? sha256,
+    Expression<int>? sizeBytes,
+    Expression<DateTime>? lastVerifiedAt,
+    Expression<DateTime>? downloadedAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (ownerUid != null) 'owner_uid': ownerUid,
+      if (roomId != null) 'room_id': roomId,
+      if (id != null) 'id': id,
+      if (sourceRelativePath != null)
+        'source_relative_path': sourceRelativePath,
+      if (payloadJson != null) 'payload_json': payloadJson,
+      if (availabilityStatus != null) 'availability_status': availabilityStatus,
+      if (freshnessStatus != null) 'freshness_status': freshnessStatus,
+      if (localDownloadPath != null) 'local_download_path': localDownloadPath,
+      if (sha256 != null) 'sha256': sha256,
+      if (sizeBytes != null) 'size_bytes': sizeBytes,
+      if (lastVerifiedAt != null) 'last_verified_at': lastVerifiedAt,
+      if (downloadedAt != null) 'downloaded_at': downloadedAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  CachedSmartCacheFilesCompanion copyWith({
+    Value<String>? ownerUid,
+    Value<String>? roomId,
+    Value<String>? id,
+    Value<String>? sourceRelativePath,
+    Value<String>? payloadJson,
+    Value<String>? availabilityStatus,
+    Value<String>? freshnessStatus,
+    Value<String?>? localDownloadPath,
+    Value<String?>? sha256,
+    Value<int?>? sizeBytes,
+    Value<DateTime?>? lastVerifiedAt,
+    Value<DateTime?>? downloadedAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return CachedSmartCacheFilesCompanion(
+      ownerUid: ownerUid ?? this.ownerUid,
+      roomId: roomId ?? this.roomId,
+      id: id ?? this.id,
+      sourceRelativePath: sourceRelativePath ?? this.sourceRelativePath,
+      payloadJson: payloadJson ?? this.payloadJson,
+      availabilityStatus: availabilityStatus ?? this.availabilityStatus,
+      freshnessStatus: freshnessStatus ?? this.freshnessStatus,
+      localDownloadPath: localDownloadPath ?? this.localDownloadPath,
+      sha256: sha256 ?? this.sha256,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      lastVerifiedAt: lastVerifiedAt ?? this.lastVerifiedAt,
+      downloadedAt: downloadedAt ?? this.downloadedAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (ownerUid.present) {
+      map['owner_uid'] = Variable<String>(ownerUid.value);
+    }
+    if (roomId.present) {
+      map['room_id'] = Variable<String>(roomId.value);
+    }
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (sourceRelativePath.present) {
+      map['source_relative_path'] = Variable<String>(sourceRelativePath.value);
+    }
+    if (payloadJson.present) {
+      map['payload_json'] = Variable<String>(payloadJson.value);
+    }
+    if (availabilityStatus.present) {
+      map['availability_status'] = Variable<String>(availabilityStatus.value);
+    }
+    if (freshnessStatus.present) {
+      map['freshness_status'] = Variable<String>(freshnessStatus.value);
+    }
+    if (localDownloadPath.present) {
+      map['local_download_path'] = Variable<String>(localDownloadPath.value);
+    }
+    if (sha256.present) {
+      map['sha256'] = Variable<String>(sha256.value);
+    }
+    if (sizeBytes.present) {
+      map['size_bytes'] = Variable<int>(sizeBytes.value);
+    }
+    if (lastVerifiedAt.present) {
+      map['last_verified_at'] = Variable<DateTime>(lastVerifiedAt.value);
+    }
+    if (downloadedAt.present) {
+      map['downloaded_at'] = Variable<DateTime>(downloadedAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CachedSmartCacheFilesCompanion(')
+          ..write('ownerUid: $ownerUid, ')
+          ..write('roomId: $roomId, ')
+          ..write('id: $id, ')
+          ..write('sourceRelativePath: $sourceRelativePath, ')
+          ..write('payloadJson: $payloadJson, ')
+          ..write('availabilityStatus: $availabilityStatus, ')
+          ..write('freshnessStatus: $freshnessStatus, ')
+          ..write('localDownloadPath: $localDownloadPath, ')
+          ..write('sha256: $sha256, ')
+          ..write('sizeBytes: $sizeBytes, ')
+          ..write('lastVerifiedAt: $lastVerifiedAt, ')
+          ..write('downloadedAt: $downloadedAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -2918,6 +3721,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $CachedRoomSnapshotsTable(this);
   late final $MutationOutboxTable mutationOutbox = $MutationOutboxTable(this);
   late final $SyncCursorsTable syncCursors = $SyncCursorsTable(this);
+  late final $CachedSmartCacheFilesTable cachedSmartCacheFiles =
+      $CachedSmartCacheFilesTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2931,6 +3736,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     cachedRoomSnapshots,
     mutationOutbox,
     syncCursors,
+    cachedSmartCacheFiles,
   ];
 }
 
@@ -4575,6 +5381,391 @@ typedef $$SyncCursorsTableProcessedTableManager =
       SyncCursor,
       PrefetchHooks Function()
     >;
+typedef $$CachedSmartCacheFilesTableCreateCompanionBuilder =
+    CachedSmartCacheFilesCompanion Function({
+      required String ownerUid,
+      required String roomId,
+      required String id,
+      required String sourceRelativePath,
+      required String payloadJson,
+      required String availabilityStatus,
+      required String freshnessStatus,
+      Value<String?> localDownloadPath,
+      Value<String?> sha256,
+      Value<int?> sizeBytes,
+      Value<DateTime?> lastVerifiedAt,
+      Value<DateTime?> downloadedAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$CachedSmartCacheFilesTableUpdateCompanionBuilder =
+    CachedSmartCacheFilesCompanion Function({
+      Value<String> ownerUid,
+      Value<String> roomId,
+      Value<String> id,
+      Value<String> sourceRelativePath,
+      Value<String> payloadJson,
+      Value<String> availabilityStatus,
+      Value<String> freshnessStatus,
+      Value<String?> localDownloadPath,
+      Value<String?> sha256,
+      Value<int?> sizeBytes,
+      Value<DateTime?> lastVerifiedAt,
+      Value<DateTime?> downloadedAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$CachedSmartCacheFilesTableFilterComposer
+    extends Composer<_$AppDatabase, $CachedSmartCacheFilesTable> {
+  $$CachedSmartCacheFilesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get ownerUid => $composableBuilder(
+    column: $table.ownerUid,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get roomId => $composableBuilder(
+    column: $table.roomId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sourceRelativePath => $composableBuilder(
+    column: $table.sourceRelativePath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get payloadJson => $composableBuilder(
+    column: $table.payloadJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get availabilityStatus => $composableBuilder(
+    column: $table.availabilityStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get freshnessStatus => $composableBuilder(
+    column: $table.freshnessStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get localDownloadPath => $composableBuilder(
+    column: $table.localDownloadPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sha256 => $composableBuilder(
+    column: $table.sha256,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get lastVerifiedAt => $composableBuilder(
+    column: $table.lastVerifiedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get downloadedAt => $composableBuilder(
+    column: $table.downloadedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$CachedSmartCacheFilesTableOrderingComposer
+    extends Composer<_$AppDatabase, $CachedSmartCacheFilesTable> {
+  $$CachedSmartCacheFilesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get ownerUid => $composableBuilder(
+    column: $table.ownerUid,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get roomId => $composableBuilder(
+    column: $table.roomId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sourceRelativePath => $composableBuilder(
+    column: $table.sourceRelativePath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get payloadJson => $composableBuilder(
+    column: $table.payloadJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get availabilityStatus => $composableBuilder(
+    column: $table.availabilityStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get freshnessStatus => $composableBuilder(
+    column: $table.freshnessStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get localDownloadPath => $composableBuilder(
+    column: $table.localDownloadPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sha256 => $composableBuilder(
+    column: $table.sha256,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sizeBytes => $composableBuilder(
+    column: $table.sizeBytes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get lastVerifiedAt => $composableBuilder(
+    column: $table.lastVerifiedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get downloadedAt => $composableBuilder(
+    column: $table.downloadedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$CachedSmartCacheFilesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $CachedSmartCacheFilesTable> {
+  $$CachedSmartCacheFilesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get ownerUid =>
+      $composableBuilder(column: $table.ownerUid, builder: (column) => column);
+
+  GeneratedColumn<String> get roomId =>
+      $composableBuilder(column: $table.roomId, builder: (column) => column);
+
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get sourceRelativePath => $composableBuilder(
+    column: $table.sourceRelativePath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get payloadJson => $composableBuilder(
+    column: $table.payloadJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get availabilityStatus => $composableBuilder(
+    column: $table.availabilityStatus,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get freshnessStatus => $composableBuilder(
+    column: $table.freshnessStatus,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get localDownloadPath => $composableBuilder(
+    column: $table.localDownloadPath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get sha256 =>
+      $composableBuilder(column: $table.sha256, builder: (column) => column);
+
+  GeneratedColumn<int> get sizeBytes =>
+      $composableBuilder(column: $table.sizeBytes, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get lastVerifiedAt => $composableBuilder(
+    column: $table.lastVerifiedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get downloadedAt => $composableBuilder(
+    column: $table.downloadedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$CachedSmartCacheFilesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $CachedSmartCacheFilesTable,
+          CachedSmartCacheFile,
+          $$CachedSmartCacheFilesTableFilterComposer,
+          $$CachedSmartCacheFilesTableOrderingComposer,
+          $$CachedSmartCacheFilesTableAnnotationComposer,
+          $$CachedSmartCacheFilesTableCreateCompanionBuilder,
+          $$CachedSmartCacheFilesTableUpdateCompanionBuilder,
+          (
+            CachedSmartCacheFile,
+            BaseReferences<
+              _$AppDatabase,
+              $CachedSmartCacheFilesTable,
+              CachedSmartCacheFile
+            >,
+          ),
+          CachedSmartCacheFile,
+          PrefetchHooks Function()
+        > {
+  $$CachedSmartCacheFilesTableTableManager(
+    _$AppDatabase db,
+    $CachedSmartCacheFilesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$CachedSmartCacheFilesTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$CachedSmartCacheFilesTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$CachedSmartCacheFilesTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> ownerUid = const Value.absent(),
+                Value<String> roomId = const Value.absent(),
+                Value<String> id = const Value.absent(),
+                Value<String> sourceRelativePath = const Value.absent(),
+                Value<String> payloadJson = const Value.absent(),
+                Value<String> availabilityStatus = const Value.absent(),
+                Value<String> freshnessStatus = const Value.absent(),
+                Value<String?> localDownloadPath = const Value.absent(),
+                Value<String?> sha256 = const Value.absent(),
+                Value<int?> sizeBytes = const Value.absent(),
+                Value<DateTime?> lastVerifiedAt = const Value.absent(),
+                Value<DateTime?> downloadedAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => CachedSmartCacheFilesCompanion(
+                ownerUid: ownerUid,
+                roomId: roomId,
+                id: id,
+                sourceRelativePath: sourceRelativePath,
+                payloadJson: payloadJson,
+                availabilityStatus: availabilityStatus,
+                freshnessStatus: freshnessStatus,
+                localDownloadPath: localDownloadPath,
+                sha256: sha256,
+                sizeBytes: sizeBytes,
+                lastVerifiedAt: lastVerifiedAt,
+                downloadedAt: downloadedAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String ownerUid,
+                required String roomId,
+                required String id,
+                required String sourceRelativePath,
+                required String payloadJson,
+                required String availabilityStatus,
+                required String freshnessStatus,
+                Value<String?> localDownloadPath = const Value.absent(),
+                Value<String?> sha256 = const Value.absent(),
+                Value<int?> sizeBytes = const Value.absent(),
+                Value<DateTime?> lastVerifiedAt = const Value.absent(),
+                Value<DateTime?> downloadedAt = const Value.absent(),
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => CachedSmartCacheFilesCompanion.insert(
+                ownerUid: ownerUid,
+                roomId: roomId,
+                id: id,
+                sourceRelativePath: sourceRelativePath,
+                payloadJson: payloadJson,
+                availabilityStatus: availabilityStatus,
+                freshnessStatus: freshnessStatus,
+                localDownloadPath: localDownloadPath,
+                sha256: sha256,
+                sizeBytes: sizeBytes,
+                lastVerifiedAt: lastVerifiedAt,
+                downloadedAt: downloadedAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$CachedSmartCacheFilesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $CachedSmartCacheFilesTable,
+      CachedSmartCacheFile,
+      $$CachedSmartCacheFilesTableFilterComposer,
+      $$CachedSmartCacheFilesTableOrderingComposer,
+      $$CachedSmartCacheFilesTableAnnotationComposer,
+      $$CachedSmartCacheFilesTableCreateCompanionBuilder,
+      $$CachedSmartCacheFilesTableUpdateCompanionBuilder,
+      (
+        CachedSmartCacheFile,
+        BaseReferences<
+          _$AppDatabase,
+          $CachedSmartCacheFilesTable,
+          CachedSmartCacheFile
+        >,
+      ),
+      CachedSmartCacheFile,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -4595,4 +5786,6 @@ class $AppDatabaseManager {
       $$MutationOutboxTableTableManager(_db, _db.mutationOutbox);
   $$SyncCursorsTableTableManager get syncCursors =>
       $$SyncCursorsTableTableManager(_db, _db.syncCursors);
+  $$CachedSmartCacheFilesTableTableManager get cachedSmartCacheFiles =>
+      $$CachedSmartCacheFilesTableTableManager(_db, _db.cachedSmartCacheFiles);
 }

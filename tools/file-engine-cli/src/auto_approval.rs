@@ -113,6 +113,7 @@ mod tests {
             content: None,
             source_size_bytes: 1,
             source_modified_unix_ms: None,
+            source_file_id: None,
             reason: "test".to_string(),
             status,
         }

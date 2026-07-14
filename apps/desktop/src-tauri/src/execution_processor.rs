@@ -199,20 +199,15 @@ fn build_local_proposal_report(
 }
 
 fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, String> {
-    // MVP delegation is intentionally limited to relocating existing files. A delegated rename
-    // arrives as a MOVE whose destination is a sibling of the source (folder/old -> folder/new);
-    // it needs no separate action because the local engine already journals every MOVE the same
-    // way a manual rename does. CREATE_DIR and README_WRITE are write actions that create new
-    // content, so they are refused here — no delegated command may turn into an arbitrary write.
+    // Delegated write actions stay deliberately narrow. CREATE_DIR can only create one empty
+    // directory after explicit server approval and local precheck; README_WRITE can only target
+    // README.md with approved content. Arbitrary file writes are still not accepted here.
     let action = match item.action_type.as_str() {
         "MOVE" => ProposalAction::Move,
         "QUARANTINE" => ProposalAction::Trash,
+        "CREATE_DIR" => ProposalAction::CreateDir,
+        "CREATE_FILE" => ProposalAction::CreateFile,
         "README_WRITE" => ProposalAction::ReadmeWrite,
-        write @ "CREATE_DIR" => {
-            return Err(format!(
-                "delegated write action {write} is not allowed; README_WRITE is the only delegated create/write action supported"
-            ))
-        }
         other => {
             return Err(format!(
                 "delegated action type {other} is not supported yet"
@@ -225,6 +220,7 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
             .source_relative_path
             .clone()
             .ok_or_else(|| format!("proposal item {} is missing a source path", item.item_order))?,
+        ProposalAction::CreateDir | ProposalAction::CreateFile => String::new(),
         ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
@@ -236,6 +232,14 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
             )
         })?,
         ProposalAction::Trash => TRASH_DIR.to_string(),
+        ProposalAction::CreateDir | ProposalAction::CreateFile => {
+            item.destination_relative_path.clone().ok_or_else(|| {
+                format!(
+                    "proposal item {} is missing a destination path",
+                    item.item_order
+                )
+            })?
+        }
         ProposalAction::ReadmeWrite => "README.md".to_string(),
     };
 
@@ -249,7 +253,8 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
         }
     };
 
-    let (source_size_bytes, source_modified_unix_ms) = precondition_snapshot(&item.precondition);
+    let (source_size_bytes, source_modified_unix_ms, source_file_id) =
+        precondition_snapshot(&item.precondition);
     let content = if action == ProposalAction::ReadmeWrite {
         Some(readme_write_content(&item.precondition)?)
     } else {
@@ -264,6 +269,7 @@ fn local_proposal_from_item(item: &AgentProposalItemRecord) -> Result<Proposal, 
         content,
         source_size_bytes,
         source_modified_unix_ms,
+        source_file_id,
         reason: item.reason_code.clone(),
         status,
     })
@@ -281,7 +287,7 @@ fn readme_write_content(value: &Value) -> Result<String, String> {
     Ok(content.to_string())
 }
 
-fn precondition_snapshot(value: &Value) -> (u64, Option<u128>) {
+fn precondition_snapshot(value: &Value) -> (u64, Option<u128>, Option<String>) {
     let size = value
         .get("sourceSizeBytes")
         .and_then(Value::as_u64)
@@ -290,7 +296,12 @@ fn precondition_snapshot(value: &Value) -> (u64, Option<u128>) {
         .get("sourceModifiedUnixMs")
         .and_then(Value::as_u64)
         .map(u128::from);
-    (size, modified)
+    let file_id = value
+        .get("sourceFileId")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    (size, modified, file_id)
 }
 
 /// Maps a completed local execution to the control-plane execution status contract. MVP
@@ -352,6 +363,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("mtime after epoch")
             .as_millis() as u64;
+        let source_file_id =
+            file_engine_cli::file_identity::file_id_for_path(&root.join(from)).expect("file id");
         AgentProposalItemRecord {
             item_order: order,
             action_type: "MOVE".to_string(),
@@ -360,25 +373,197 @@ mod tests {
             reason_code: "RULE_MOVE_BY_EXTENSION".to_string(),
             precondition: json!({
                 "sourceSizeBytes": metadata.len(),
-                "sourceModifiedUnixMs": modified_unix_ms
+                "sourceModifiedUnixMs": modified_unix_ms,
+                "sourceFileId": source_file_id
             }),
             conflict_state: "NONE".to_string(),
         }
     }
 
     #[test]
-    fn delegated_create_dir_is_refused() {
+    fn delegated_create_dir_executes_and_stays_undoable() {
+        use file_engine_cli::journal::{read_operation_history, JournalAction};
+        use file_engine_cli::undo::undo_operation;
+
         let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("Archive")).expect("archive parent");
 
-        let mut item = move_item(0, "a.pdf", "Documents/a.pdf");
-        item.action_type = "CREATE_DIR".to_string();
+        let item = AgentProposalItemRecord {
+            item_order: 0,
+            action_type: "CREATE_DIR".to_string(),
+            source_relative_path: None,
+            destination_relative_path: Some("Archive/Reports".to_string()),
+            reason_code: "USER_REQUESTED_CREATE_DIR".to_string(),
+            precondition: json!({}),
+            conflict_state: "NONE".to_string(),
+        };
 
-        let error =
-            build_local_proposal_report(dir.path(), &[item]).expect_err("create must be refused");
-        assert!(
-            error.contains("is not allowed"),
-            "unexpected error: {error}"
+        let report = build_local_proposal_report(root, &[item]).expect("local create dir proposal");
+        let application = DecisionApplication {
+            approved: report,
+            rejected: Vec::new(),
+        };
+        let execute_report =
+            execute_decision_application(root, application).expect("execute create dir");
+        let history = read_operation_history(root).expect("history");
+
+        assert_eq!(execute_report.executed_count, 1);
+        assert!(root.join("Archive/Reports").is_dir());
+        assert_eq!(history.operations[0].action, JournalAction::CreateDir);
+        assert!(history.operations[0].can_undo);
+
+        let undo = undo_operation(root, &history.operations[0].operation_id).expect("undo");
+        assert_eq!(undo.undone_count, 1);
+        assert!(!root.join("Archive/Reports").exists());
+    }
+
+    #[test]
+    fn delegated_create_file_executes_empty_file_and_stays_undoable() {
+        use file_engine_cli::journal::{read_operation_history, JournalAction};
+        use file_engine_cli::undo::undo_operation;
+
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("Notes")).expect("notes parent");
+
+        let item = AgentProposalItemRecord {
+            item_order: 0,
+            action_type: "CREATE_FILE".to_string(),
+            source_relative_path: None,
+            destination_relative_path: Some("Notes/todo.txt".to_string()),
+            reason_code: "USER_REQUESTED_CREATE_FILE".to_string(),
+            precondition: json!({}),
+            conflict_state: "NONE".to_string(),
+        };
+
+        let report =
+            build_local_proposal_report(root, &[item]).expect("local create file proposal");
+        let application = DecisionApplication {
+            approved: report,
+            rejected: Vec::new(),
+        };
+        let execute_report =
+            execute_decision_application(root, application).expect("execute create file");
+        let history = read_operation_history(root).expect("history");
+
+        assert_eq!(execute_report.executed_count, 1);
+        assert_eq!(
+            fs::metadata(root.join("Notes/todo.txt"))
+                .expect("created file")
+                .len(),
+            0
         );
+        assert_eq!(history.operations[0].action, JournalAction::CreateFile);
+        assert!(history.operations[0].can_undo);
+
+        let undo = undo_operation(root, &history.operations[0].operation_id).expect("undo");
+        assert_eq!(undo.undone_count, 1);
+        assert!(!root.join("Notes/todo.txt").exists());
+    }
+
+    #[test]
+    fn delegated_create_batch_journals_before_writes_and_undoes_without_overwrite() {
+        use file_engine_cli::journal::{
+            read_operation_history, JournalAction, JournalStatus, JournalStore,
+        };
+        use file_engine_cli::undo::undo_root;
+
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::create_dir_all(root.join("Archive")).expect("archive parent");
+        fs::create_dir_all(root.join("Notes")).expect("notes parent");
+        fs::write(root.join("Notes/existing.txt"), "keep").expect("existing file");
+
+        let items = vec![
+            AgentProposalItemRecord {
+                item_order: 0,
+                action_type: "CREATE_DIR".to_string(),
+                source_relative_path: None,
+                destination_relative_path: Some("Archive/Reports".to_string()),
+                reason_code: "USER_REQUESTED_CREATE_DIR".to_string(),
+                precondition: json!({}),
+                conflict_state: "NONE".to_string(),
+            },
+            AgentProposalItemRecord {
+                item_order: 1,
+                action_type: "CREATE_FILE".to_string(),
+                source_relative_path: None,
+                destination_relative_path: Some("Notes/todo.txt".to_string()),
+                reason_code: "USER_REQUESTED_CREATE_FILE".to_string(),
+                precondition: json!({}),
+                conflict_state: "NONE".to_string(),
+            },
+            AgentProposalItemRecord {
+                item_order: 2,
+                action_type: "CREATE_FILE".to_string(),
+                source_relative_path: None,
+                destination_relative_path: Some("Notes/existing.txt".to_string()),
+                reason_code: "USER_REQUESTED_CREATE_FILE".to_string(),
+                precondition: json!({}),
+                conflict_state: "NONE".to_string(),
+            },
+        ];
+
+        let report =
+            build_local_proposal_report(root, &items).expect("local create batch proposal");
+        let execute_report = execute_decision_application(
+            root,
+            DecisionApplication {
+                approved: report,
+                rejected: Vec::new(),
+            },
+        )
+        .expect("execute create batch");
+
+        assert_eq!(execute_report.executed_count, 2);
+        assert_eq!(execute_report.skipped_count, 1);
+        assert!(root.join("Archive/Reports").is_dir());
+        assert_eq!(
+            fs::metadata(root.join("Notes/todo.txt"))
+                .expect("created file")
+                .len(),
+            0
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("Notes/existing.txt")).expect("existing file"),
+            "keep"
+        );
+
+        let entries = JournalStore::open(root)
+            .expect("journal")
+            .read_all()
+            .expect("raw journal entries");
+        assert_eq!(entries.len(), 4);
+        assert_eq!(entries[0].action, JournalAction::CreateDir);
+        assert_eq!(entries[0].status, JournalStatus::Planned);
+        assert_eq!(entries[1].action, JournalAction::CreateDir);
+        assert_eq!(entries[1].status, JournalStatus::Executed);
+        assert_eq!(entries[0].operation_id, entries[1].operation_id);
+        assert_eq!(entries[2].action, JournalAction::CreateFile);
+        assert_eq!(entries[2].status, JournalStatus::Planned);
+        assert_eq!(entries[3].action, JournalAction::CreateFile);
+        assert_eq!(entries[3].status, JournalStatus::Executed);
+        assert_eq!(entries[2].operation_id, entries[3].operation_id);
+
+        let history = read_operation_history(root).expect("history");
+        assert_eq!(history.operations.len(), 2);
+        assert!(history.operations.iter().all(|entry| entry.can_undo));
+
+        let undo = undo_root(root).expect("undo create batch");
+        assert_eq!(undo.undone_count, 2);
+        assert!(!root.join("Archive/Reports").exists());
+        assert!(!root.join("Notes/todo.txt").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("Notes/existing.txt")).expect("existing file after undo"),
+            "keep"
+        );
+
+        let history_after_undo = read_operation_history(root).expect("history after undo");
+        assert!(history_after_undo
+            .operations
+            .iter()
+            .all(|entry| !entry.can_undo));
     }
 
     #[test]
@@ -487,6 +672,7 @@ mod tests {
 
         let items = vec![move_item_matching_disk(root, 0, "a.pdf", "Documents/a.pdf")];
         let report = build_local_proposal_report(root, &items).expect("local proposal");
+        assert!(report.proposals[0].source_file_id.is_some());
 
         let application = DecisionApplication {
             approved: report,

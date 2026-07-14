@@ -1,5 +1,69 @@
 # MOUSEKEEPER (26s-w2-c3-09)
 
+## Recent implementation notes (2026-07-13/14)
+
+- Release E2E preflight is now available through `pnpm e2e:preflight`. It checks the API base URL, `/health`, `/ready`, Android tooling/device presence, desktop Rust tooling, required repo paths, and dirty worktree state without creating fake pass evidence.
+- Chat `FIND` command drafts now materialize as read-only file-browse requests instead of queued write-capable commands. The server stores the browse request idempotently, Desktop validates `query`/`extensions`/`limit`, and the local SQLite file index filters extensions before applying page limits.
+- Chat `DOWNLOAD` command drafts now materialize as idempotent FileTransfer requests instead of queued write-capable commands. The draft records `fileTransferId`, emits the same durable file-transfer event flow as manual downloads, and fails closed with `EXPECTED_IDENTITY_UNSUPPORTED` when a draft includes file identity preconditions that the current desktop transfer contract cannot yet carry.
+- Chat `UPLOAD` command drafts now fail closed at confirmation with `UPLOAD_TRANSFER_UNCONFIGURED` instead of entering the desktop command queue. The current FileTransfer state machine is desktop-to-mobile only, so mobile-to-desktop uploads must wait for an explicit inverse transfer contract rather than pretending to work.
+- Desktop command processing now fails contract-level `FIND`, `DOWNLOAD`, and `UPLOAD` commands visibly instead of silently skipping them. Until those intent-specific handlers are wired, the agent queues a durable `FAILED` command status so server/mobile state can leave `QUEUED` rather than polling forever.
+- Mobile Room now exposes an approval-first manual file command form for `RENAME`, `MOVE`, `TRASH`, and `CREATE`. The form validates obvious unsafe relative paths locally, sends the existing server command contract with `requiresApproval`, and relies on the desktop agent to create proposals before any file mutation.
+- Mobile Smart Cache reads now use `smartCachePolicyProvider(roomId)`, `smartCacheFilesProvider(roomId)`, and `smartCacheStatusProvider(roomId)`, preserving the existing transport-only offline fallback while keeping policy/file projections behind provider-backed reads.
+- Mobile rules now expose `ruleGatewayProvider` and `ruleListProvider(roomId)` for provider-backed reads; RulesPage still applies successful create/update/draft confirmations by local upsert instead of reloading the entire list.
+- Mobile connection gate loading now delays the pixel-fill mouse for 200ms to avoid flicker, then shows a long-wait message after 10 seconds and an explicit retry action after 20 seconds.
+- Mobile file browse transport is now provider-backed through `fileBrowseGatewayProvider`, `fileDirectoryBrowseRequesterProvider`, and `fileBrowseStatusFetcherProvider`; FilesPage still keeps the WebSocket-first wait path and only uses REST status as the 5-second safety fallback.
+- Mobile Room REST reads are now split into Riverpod providers for commands, proposals, executions, activity, and latest cleanliness snapshot. RoomPage still preserves the existing offline cache fallback, but explicit/manual reloads are the only path that invalidates those providers; WebSocket updates continue to patch the affected item instead of reloading the whole room.
+- Mobile Room state now has a `RoomContent` reducer that applies realtime command/proposal/execution/cleanliness patches as one object, preserving unchanged slices by identity and returning the same object for unrelated events.
+- Mobile realtime now accepts `file.directory.updated` payloads as directory-scoped patches and routes them to the visible Files page without bumping the generic page revision or reloading Home.
+- Mobile file directory state now has a reducer for `FILE_ADDED`, `FILE_REMOVED`, `FILE_UPDATED`, and `FILE_MOVED` style patches, updating only the visible folder entries and marking paginated/uncertain ranges stale instead of forcing an immediate full browse reload.
+- Mobile Files now preserves the same `FileDirectoryState` object for unchanged browse pages, so duplicate/empty directory responses do not trigger unnecessary state replacement while stale ranges still clear after an authoritative refresh.
+- Mobile Home's 5-second connection safety loop now has no reload callback at all; it can reconcile only the lightweight device/room gate, while Home summary refreshes remain explicit or WebSocket fallback-driven.
+- Mobile connection safety now exposes one explicit `ConnectionControlApi.summary()` path over `/v1/connections/summary`, so the 5-second reconcile cannot accidentally fan out to separate device/room reads or reload `/v1/home/summary`.
+- Mobile file browsing now keeps the visible directory page, next cursor, and desktop generation in `FileDirectoryState`, so the next `fileDirectoryProvider(rootId, relativePath)` split has one reducer-backed state object instead of scattered page fields.
+- Mobile chat read paths now expose `chatSessionListProvider(roomId)`, `chatMessagesProvider(sessionId)`, and cursor-scoped page reads, with ChatPage loading through those providers in production while preserving test gateway injection.
+- Mobile chat conversation state is now centralized in `ChatConversationState`, keeping sessions, selected session, message page, pagination cursor, and `hasMoreMessages` together so the next Riverpod provider split can avoid scattered `setState` reload paths.
+- Mobile chat state now has provider-backed gateway injection and pure reducers for session selection, pagination merge, preview touching, and command-draft patching; no-op updates preserve object identity so later realtime/chat pagination work can avoid full page reloads.
+- Mobile chat sessions can now be renamed from the session bar through the existing `PATCH /v1/chat-sessions/:sessionId` API; the returned session row replaces only the matching local row without reloading messages.
+- Mobile chat now consumes `chat.message.created` as a session-scoped realtime patch. The visible session fetches only messages after its current cursor and merges unseen rows, while the generic page revision fan-out is suppressed for complete chat message events.
+- Mobile chat now refreshes the lightweight chat session list when `chat.message.created` arrives, so other-session preview/title/order updates appear in the session picker without loading that session's messages or reloading the page.
+- RuleDefinition hardening: the Rust file engine now accepts the server/mobile `RuleDefinition` draft shape as well as root-local `rules.json`, maps additive conditions such as modified/created age, size, relative path, file kind, name operators, `TRASH`, and `CREATE_DIR`, records directory entries for safe destination checks, and deduplicates identical `CREATE_DIR` proposals before execution approval.
+- Latency validation: no merge-conflict markers are present; the existing mobile/server/desktop latency hardening was rechecked with focused tests. Mobile Home uses one `/v1/home/summary` load plus WebSocket item patches, the 5-second connection safety reconcile does not refetch Home summary, Desktop keeps 5-second heartbeat with 15/30-second REST reconcile, and pairing status remains isolated at 60/min with 2-second desktop polling.
+- Server `/realtime` now installs a Socket.IO Redis adapter from the existing `REDIS_URL`, using dedicated duplicated pub/sub clients so multi-process room broadcasts no longer depend on a single API process.
+- Mobile smart-cache downloads now POST `DOWNLOAD_COMPLETED` to `/v1/cached-files/:cachedFileId/access-events` only after local save and SHA-256 verification; the server records `lastAccessedAt`/usage score from that verified ACK instead of treating signed URL issuance as a completed access.
+- Realtime/event contract artifacts now include independent JSON Schema files for `presence.updated`, item-scoped `smart-cache.updated`, and the safe declarative Rule DSL, with OpenAPI component refs and regression checks.
+- Mobile smart-cache file listing now uses the plan-aligned `/v1/rooms/:roomId/smart-cache/files` endpoint, while the older `/v1/rooms/:roomId/cached-files` route remains as a compatibility alias.
+- Mobile now stores smart-cache file metadata in Drift (`cached_smart_cache_files`): availability/freshness, checksum, local verified download path, and last verified/downloaded timestamps are owner-scoped and purged with the room/connection cache.
+- Mobile smart-cache now falls back to owner-scoped Drift metadata only on transport failures, showing an offline warning and the last verified cache list without hiding server/auth errors.
+- Mobile file browse requests now listen for `file.browse.ready` / `file.browse.failed` WebSocket events and wake only the matching active request; REST status checks are a 5-second safety fallback instead of a fixed 2-second polling loop, and browse events no longer trigger Home summary reloads.
+- Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but HomeController no longer subscribes to that gate as a summary dependency, with regression coverage proving the loop does not trigger another `/v1/home/summary` fetch.
+- Mobile connection safety reads now use one lightweight `/v1/connections/summary` request for ACTIVE device/room gate data only; `/v1/home/summary` remains the richer Home projection and is no longer reused by the 5-second safety reconcile.
+- Realtime Home updates remain item-scoped where payloads are complete: `presence.updated` patches only the affected device, lifecycle events remove only affected devices/rooms, and execution status patches only the affected room.
+- `execution.updated` events now carry `executionId`, `roomId`, and `status` in the payload itself, so mobile reducers can perform targeted result upserts without depending on envelope-only fields.
+- Mobile Room now patches/upserts only the affected execution row for `execution.updated` realtime events and skips the redundant full room reload that follows from the generic revision signal.
+- `command.updated` events now also carry `commandId`, `roomId`, and `status`; Mobile Room patches only the affected command row instead of reloading the entire room projection.
+- `proposal.created` events now carry `proposalId`, `roomId`, `commandId`, `status`, `summary`, `itemCount`, and the authoritative `pendingProposalCount`; mobile patches the Home badge and Room proposal row without a full summary/room reload.
+- `decision.created` events now carry `decisionId`, `proposalId`, `roomId`, `commandId`, final proposal/command statuses, and authoritative `pendingProposalCount`; mobile removes the closed proposal and patches the related command without reloading the room.
+- `room.snapshot.updated` events now carry the full cleanliness snapshot projection; mobile patches Home cleanliness fields and Room `CleanlinessCard` only when the event is newer than the cached `calculatedAt`.
+- `device.paired` events now carry the active public device projection; mobile upserts the Connection Gate and Home device row from WebSocket data, avoiding an extra REST summary reconcile on successful pairing while preserving the legacy fallback for incomplete events.
+- Mobile realtime dispatch now suppresses generic `realtimeRevision` fan-out for complete item-scoped payloads, including presence, lifecycle removals, proposals, decisions, cleanliness snapshots, commands, and executions; incomplete or unknown projections still keep the full reconcile fallback.
+- Mobile file downloads now listen for `file.transfer.updated` WebSocket events and wake only the matching active transfer, keeping REST status reads as a 15-second safety fallback instead of polling every 2 seconds.
+- Desktop background runtime keeps heartbeat at 5 seconds, splits scheduled REST reconciliation into 15-second fast control-plane passes and 30-second heavy file-transfer/smart-cache passes, while Socket.IO wakeups still trigger an immediate full reconcile.
+- Desktop AgentPanel now separates local status refresh cadence: heartbeat freshness uses the 5-second runtime cadence, background status refreshes every 15 seconds, and connection status refreshes every 30 seconds.
+- Desktop full reconcile now rebuilds the SQLite browse/search index for active watched managed roots and recalculates the same cleanliness snapshot, so missed watcher events are repaired without turning mobile into a full-refresh polling client.
+- File-engine SQLite `file_index` now stores nullable OS-backed `file_id` values: Windows uses volume serial + file index via Win32, Unix uses dev + inode, and unsupported platforms leave the field empty instead of inventing an identity.
+- File-engine proposals now carry the same nullable OS-backed `source_file_id`; desktop proposal submissions preserve it as `sourceFileId`, and execution precheck rejects a changed/unavailable identity as `SourceChanged` before any journaled mutation runs.
+- Desktop file transfer sourceVersion now uses the same OS-backed file identity instead of the older `hm:` hash fallback, and revalidates identity/size/mtime before hashing, after hashing, and after streaming so source swaps are reported as `SOURCE_CHANGED`.
+- Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
+- Desktop scan, write, and transfer work now share explicit per-kind gates across manual Tauri commands and background runtime passes; overlapping same-kind work fails fast with `BUSY` instead of racing file scans, journaled writes, or object uploads.
+- Smart-cache uploads now use Desktop-side AES-256-GCM before signed PUT; the server stores ciphertext size/checksum plus encryption metadata, and mobile fails closed with `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC` until key sync/decryption is implemented.
+- Desktop watcher source changes now enqueue durable smart-cache STALE reports; the server marks only the affected available cached files stale and emits `smart-cache.updated` without forcing a mobile Home summary reload.
+- Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.
+- Rule draft preview now has an explicit `/v1/rule-drafts/:draftId/preview` contract and server route. Until a Desktop dry-run transport is wired, it fails closed with `RULE_DRAFT_PREVIEW_UNCONFIGURED` instead of returning fake match results.
+- Mobile Rules exposes that rule draft preview route from the pending draft card and surfaces the fail-closed dry-run-unconfigured state without creating or confirming a rule.
+- OpenAI Responses provider is now configurable behind `AI_PROVIDER=openai`, `AI_API_KEY`, and `AI_MODEL`; model output is parsed as structured JSON and revalidated against MouseKeeper command/rule Zod contracts before any draft enters product logic. Missing or rejected credentials still return explicit `AI_PROVIDER_UNCONFIGURED`.
+- Desktop command processing now accepts server `RENAME`, `MOVE`, `TRASH`, directory `CREATE`, and empty-file `CREATE` commands as proposal generation only: the agent validates the managed-root binding, source paths, filenames/destinations, parent directory safety, symlink/reparse safety, and destination conflicts, then submits `MOVE`, quarantine, `CREATE_DIR`, or `CREATE_FILE` proposal items without touching files before user approval.
+- Delegated `CREATE_DIR`/`CREATE_FILE` batch execution now has a desktop regression that proves planned journal entries are written before created paths, existing targets are skipped without overwrite, and undo removes only the newly created paths.
+
 > 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md), 현재 완료/누락 판정은 [구현 이력 및 MVP 감사](HISTORY.md)를 기준으로 합니다.
 >
 > 현재 감사 기준: `B` (`origin/main` 기반, `2026-07-13`), A/B v1.4 통합 코드 포함
@@ -34,7 +98,7 @@
 ## 선택 옵션
 
 - [x] 실시간 인터랙션
-- [ ] LLM Wrapper
+- [x] LLM Wrapper
 - [x] Cross-Platform
 
 ---
@@ -55,7 +119,7 @@ MOUSEKEEPER는 사용자가 등록한 로컬 폴더를 데스크톱 에이전트
 Flutter Android
   ↕ REST + Socket.IO
 NestJS/Fastify Server ─ PostgreSQL
-  ├─ Redis/Valkey: presence TTL, rate limit, 짧은 lock
+  ├─ Redis/Valkey: presence TTL, rate limit, 짧은 lock, Socket.IO adapter
   ├─ PostgreSQL durable worker: 알림, 재시도, object 만료·삭제
   └─ S3-compatible Storage: P0 만료형 전송 / P1 opt-in cache
   ↕ REST + Socket.IO
@@ -88,7 +152,7 @@ Tauri Desktop
 - Rule DSL, proposal, 사용자 decision, 실행 직전 precheck
 - journal-before-write, no-overwrite move, 복구형 trash, create/rename, history, undo, journal recovery
 - React 파일 관리 UI와 Tauri invoke bridge
-- 실제 REST agent transport: pairing 코드 생성·10초 polling, 15초 heartbeat, pending command 조회·상태 전이
+- 실제 REST agent transport: pairing 코드 생성·2초 status polling, 5초 heartbeat, 15초 fast REST reconcile, 30초 heavy transfer/smart-cache reconcile, pending command 조회·상태 전이
 - device token의 OS keychain 저장과 UI·로그 비노출, 잘못된 서버 응답 schema 검증
 - device별 SQLite sync cursor와 `/v1/sync/events` REST replay
 - Desktop Agent 연결·pairing·replay 상태 UI
@@ -97,15 +161,16 @@ Tauri Desktop
 - Desktop·Flutter가 함께 사용하는 8종 픽셀풍 MouseKeeper PNG 상태 모션
 - Windows에서 Cargo object 파일 잠금으로 Vite가 종료되지 않도록 `src-tauri/target` 감시 제외
 - overlay window/event bridge skeleton
-- 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
+- 서버 `RENAME`·`MOVE`·`TRASH`·directory `CREATE`·empty-file `CREATE` command를 직접 파일 변경이 아닌 승인 대기 `MOVE`/격리/`CREATE_DIR`/`CREATE_FILE` proposal로 변환하는 Desktop processor 경로
+- 파일 엔진·realtime용 OpenAPI 외부 JSON Schema 15개와 fixture
 
 아직 완료되지 않은 범위:
 
 - 새 Android identifier용 Firebase debug build 완료, Google login·FCM 실기기 재검증
 - Android release signing, updater signing과 rename 이후 Windows installer 재검증
 - 실제 Rive animation/interaction과 schema-validated 자연어 command provider
-- SQLite file ID, scheduled reconcile scan과 위임된 CREATE_DIR 안전 실행
-- Desktop smart-cache client-side encryption과 key lifecycle
+- Release-grade three-party E2E automation for delegated create operations and identity-checked transfer regressions
+- Mobile smart-cache decryption key sync, tag verification, and local plaintext handoff
 - Android ↔ server ↔ Desktop 전체 P0 release E2E 자동화
 
 서버 URL 또는 pairing이 없으면 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. pairing 뒤에도 heartbeat나 인증 요청이 성공하기 전에는 `offline`이며, device token은 React 계층으로 전달되지 않는다.
@@ -115,8 +180,8 @@ Tauri Desktop
 - Firebase Android 및 Google 로그인, Firebase Admin token 검증 경로
 - PostgreSQL/Drizzle 17개 migration과 Redis/Valkey local compose
 - pairing, device, room, heartbeat/presence, command/proposal/decision/execution API
-- Socket.IO `/realtime`, idempotency, audit, cursor replay
-- Flutter home/room/rule/proposal/result/chat/files/smart-cache UI와 Drift cache/outbox
+- Socket.IO `/realtime`, Redis adapter, idempotency, audit, cursor replay
+- Flutter home/room/rule partial-update·expanded DSL form/proposal/result/chat session/files/smart-cache UI와 Drift cache/outbox
 - P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
 - FCM token API·outbox·worker 전송과 모바일 foreground/background 수신 경로
 - worker, AWS EC2 systemd/Nginx 구성, Render blueprint, 실제 backup/restore drill 및 안전 문서
@@ -130,19 +195,19 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 |---|---|---|
 | 0 계약·파일 안전 POC | 완료 | Rust 안전 회귀와 fixture E2E 유지 |
 | 1 로그인·페어링·Presence | 코드 경로와 새 Firebase debug build | Google login과 background/terminated FCM 수신 확인 |
-| 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결 | file ID와 scheduled reconcile scan |
-| 3 규칙·명령·제안 | Desktop/server/mobile processor 연결 | 실제 3자 release E2E |
-| 4 실행·Undo·README·파일 전달 | MOVE/격리/README/transfer 구현 | CREATE_DIR과 실제 3자 transfer E2E |
-| 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell | Rive asset과 AI provider |
-| 6 오프라인·재접속 | 양쪽 outbox·cursor replay 구현 | 강제 종료·서버 재시작 E2E |
+| 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결, watcher 누락 보정용 30초 full-pass index reconcile, SQLite OS file ID 저장, proposal/precondition/transfer source identity 검증 | 실기기 3자 E2E 회귀 |
+| 3 규칙·명령·제안 | Desktop/server/mobile processor 연결, 확장 Rule DSL 서버 계약 | 확장 DSL Desktop evaluator 통합과 실제 3자 release E2E |
+| 4 실행·Undo·README·파일 전달 | MOVE/격리/README/transfer/CREATE_DIR/CREATE_FILE 구현 | 실제 3자 transfer E2E와 create release E2E |
+| 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI·cursor pagination, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
+| 6 오프라인·재접속 | 양쪽 outbox·cursor replay, pairing gate pixel-fill loading 구현 | 강제 종료·서버 재시작 E2E |
 | 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill | rename migration, signed release, Sentry DSN |
-| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle | Desktop client encryption과 key lifecycle |
+| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle, Desktop AES-256-GCM ciphertext upload, server encryption metadata | Mobile key sync/decryption/tag verification |
 
 ### v1.4 — 청결도·연결 해제·모바일 파일 접근
 
 - 청결도는 Rust의 `mousekeeper-cleanliness-v1` 공식이 만든 하나의 snapshot만 사용한다. Desktop은 그 객체를 표시·queue하고 서버는 재계산 없이 저장하며 모바일은 score, 감점 code/count/points, 계산 시각, 공식 버전을 그대로 표시한다.
 - device와 room 연결 해제는 모바일·Desktop 양쪽에서 시작할 수 있다. 서버는 멱등 transaction으로 ACTIVE 상태와 진행 작업을 종료하고 durable event를 기록한 뒤 즉시 publish한다. device 해제는 socket과 연결 room을 함께 정리한다.
-- 모바일은 로그인 직후 서버의 ACTIVE device/room을 확인하는 Pairing Gate를 통과해야 main navigation을 만든다. stale Drift cache는 gate를 열 수 없고 revoke/remove event와 replay가 관련 cache·outbox를 계단식으로 제거한다. event 유실 시에도 2초 간격의 직렬 authoritative reconcile로 수렴한다.
+- 모바일은 로그인 직후 서버의 ACTIVE device/room을 확인하는 Pairing Gate를 통과해야 main navigation을 만든다. stale Drift cache는 gate를 열 수 없고 revoke/remove event와 replay가 관련 cache·outbox를 계단식으로 제거한다. event 유실 시에도 5초 간격의 직렬 authoritative safety reconcile로 device/room 연결 상태만 보정하며, 홈 전체 데이터는 `/v1/home/summary`를 재호출하지 않고 완전한 WebSocket payload 단위로 갱신한다.
 - `CharacterState` 9종과 lifecycle 최종 상태는 TypeScript·JSON Schema·OpenAPI·Rust·Flutter에서 같은 대문자 wire value를 사용한다. 모바일은 잘못된 상태·ID·sequence를 fail-closed로 폐기하고 상대경로는 모든 계약에서 같은 1,024자·경계 규칙을 적용한다.
 - 모바일 realtime replay와 mutation queue는 시작 시점 UID·generation에 고정된다. 로그아웃 뒤 다른 계정으로 전환되면 이전 계정의 늦은 socket 응답·cursor·cache write·ACK·outbox 갱신을 모두 폐기하며, 계정별 flush는 서로 막지 않는다.
 - room 연결 해제 시 Desktop watcher와 disposable index만 정리한다. managed root, 실제 파일, `.mousekeeper_trash`, operation journal과 undo 가능 기록은 삭제하지 않는다.
@@ -185,8 +250,8 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 ## 다음 구현 순서
 
 1. Android USB를 다시 연결해 새 package 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
-2. Desktop smart-cache 업로더에 authenticated encryption과 OS 보안 저장소 key lifecycle을 구현한다.
-3. file ID, scheduled reconcile scan과 CREATE_DIR journal/undo 경로를 보완한다.
+2. Mobile smart-cache 복호화 key sync, AES-GCM tag verification, 안전한 로컬 plaintext 저장 경로를 구현한다.
+3. Indexed file ID 기반 proposal/precondition/transfer 회귀를 유지하고, 추가된 CREATE_DIR/CREATE_FILE Desktop batch journal/no-overwrite/undo 회귀를 실제 3자 release E2E로 확장한다.
 4. command/proposal/execute/undo와 browse/transfer를 한 managed root·실기기에서 왕복 검증한다.
 5. 새 EC2 unit/path와 Firebase package로 rename migration을 실행하고 rollback을 확인한다.
 6. 실제 `.riv`와 overlay shell을 연결하고 artboard/state machine/input을 실기기·Desktop에서 확인한다.
@@ -293,6 +358,7 @@ flutter test
 ### 실시간 인터랙션
 
 **WebSocket**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API
 - https://techblog.woowahan.com/5268/
 - https://tech.kakao.com/posts/391
@@ -300,21 +366,25 @@ flutter test
 - https://kakaoentertainment-tech.tistory.com/110
 
 **Socket.IO**
+
 - https://socket.io/docs/v4/
 - https://inpa.tistory.com/entry/SOCKET-%F0%9F%93%9A-Namespace-Room-%EA%B8%B0%EB%8A%A5
 - https://adjh54.tistory.com/549
 - https://fred16157.github.io/node.js/nodejs-socketio-communication-room-and-namespace/
 
 **SSE (Server-Sent Events)**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 - https://developer.mozilla.org/ko/docs/Web/API/Server-sent_events/Using_server-sent_events
 - https://api7.ai/ko/blog/what-is-sse
 
 **TCP / UDP Socket**
+
 - https://docs.python.org/3/library/socket.html
 - https://inpa.tistory.com/entry/NW-%F0%9F%8C%90-%EC%95%84%EC%A7%81%EB%8F%84-%EB%AA%A8%ED%98%B8%ED%95%9C-TCP-UDP-%EA%B0%9C%EB%85%90-%E2%9D%93-%EC%89%BD%EA%B2%8C-%EC%9D%B4%ED%95%B4%ED%95%98%EC%9E%90
 
 **gRPC Streaming**
+
 - https://grpc.io/docs/what-is-grpc/core-concepts/
 - https://tech.ktcloud.com/entry/gRPC%EC%9D%98-%EB%82%B4%EB%B6%80-%EA%B5%AC%EC%A1%B0-%ED%8C%8C%ED%97%A4%EC%B9%98%EA%B8%B0-HTTP2-Protobuf-%EA%B7%B8%EB%A6%AC%EA%B3%A0-%EC%8A%A4%ED%8A%B8%EB%A6%AC%EB%B0%8D
 - https://tech.ktcloud.com/entry/gRPC%EC%9D%98-%EB%82%B4%EB%B6%80-%EA%B5%AC%EC%A1%B0-%ED%8C%8C%ED%97%A4%EC%B9%98%EA%B8%B02-Channel-Stub
@@ -322,6 +392,7 @@ flutter test
 - https://devocean.sk.com/blog/techBoardDetail.do?ID=167433
 
 **WebRTC**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API
 - https://webrtc.org/getting-started/overview
 - https://web.dev/articles/webrtc-basics?hl=ko
@@ -331,6 +402,7 @@ flutter test
 - https://on.com2us.com/tech/webrtc-coturn-turn-stun-server-setup-guide/
 
 **QUIC / WebTransport**
+
 - https://developer.mozilla.org/en-US/docs/Web/API/WebTransport_API
 - https://datatracker.ietf.org/doc/html/rfc9000
 - https://news.hada.io/topic?id=13888
@@ -367,6 +439,9 @@ A-side local file engine documentation:
 
 - CLI usage and JSON contracts: [`docs/FILE_ENGINE_CLI.md`](docs/FILE_ENGINE_CLI.md)
 - Shared server/Desktop contracts: [`docs/CONTRACTS.md`](docs/CONTRACTS.md)
+- Release E2E checklist: [`docs/e2e-scenarios.md`](docs/e2e-scenarios.md)
+- Service threat model: [`docs/threat-model.md`](docs/threat-model.md)
+- Local-first ADR: [`docs/adr/0001-local-first.md`](docs/adr/0001-local-first.md)
 - Desktop/Tauri integration plan: [`apps/desktop/src-tauri/INTEGRATION.md`](apps/desktop/src-tauri/INTEGRATION.md)
 
 Current safe flow:

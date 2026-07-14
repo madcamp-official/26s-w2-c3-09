@@ -1,5 +1,23 @@
 # MOUSEKEEPER 구현 이력 및 MVP 감사
 
+## 2026-07-14 추가 검증 및 정리
+
+- [x] Chat `DOWNLOAD` command draft는 일반 command queue가 아니라 FileTransfer 요청으로 materialize된다. 서버는 draft에 `fileTransferId`를 저장하고, 같은 confirm idempotency key 재시도는 중복 row 없이 같은 transfer를 반환하며, `file.transfer.requested`와 `command.draft.updated` 이벤트를 남긴다. 현재 desktop transfer 계약이 파일 identity precondition을 아직 전달하지 못하므로 `expectedIdentity`가 있는 draft는 `EXPECTED_IDENTITY_UNSUPPORTED`로 명시 거절한다.
+- [x] Chat `UPLOAD` command draft는 현재 mobile-to-desktop inverse transfer 상태 머신이 없으므로 confirm 단계에서 `UPLOAD_TRANSFER_UNCONFIGURED`로 명시 거절한다. 이 경로는 desktop command queue, command row, FileTransfer row를 만들지 않아 지원되지 않는 업로드가 뒤늦게 데스크톱 polling 실패로 변하지 않는다.
+- [x] 모바일 ChatPage의 gateway 주입을 `chatGatewayProvider`로 분리하고, 세션 선택/preview 갱신/메시지 pagination merge/command draft patch를 순수 reducer 함수로 분리했다. 동일 payload나 중복 메시지처럼 실제 변화가 없는 경우 같은 객체를 반환하므로 이후 chat realtime patch와 pagination provider 분리의 기반이 된다.
+- [x] Git conflict marker와 unmerged path를 재확인했다. 현재 저장소에는 표준 Git conflict marker 문자열이나 `UU` 상태 파일이 없다.
+- [x] 모바일 통신 지연 개선 상태를 재검증했다. Home은 최초/명시 갱신 때 `/v1/home/summary`를 한 번 읽고, `presence.updated`, proposal/decision/execution/snapshot/file browse/transfer 이벤트는 WebSocket payload로 해당 항목만 patch한다.
+- [x] 5초 모바일 연결 안전 reconcile은 ACTIVE device/room gate만 확인하며 Home summary 전체 재호출을 유발하지 않는다.
+- [x] 모바일 연결 안전 reconcile의 API 추상화를 `summary()` 단일 경로로 고정했다. `/v1/connections/summary` 한 번으로 device/room gate를 읽기 때문에 별도 device/room fan-out이나 `/v1/home/summary` 회귀가 생기기 어렵다.
+- [x] 데스크톱 background runtime은 heartbeat를 5초로 유지하고, REST reconcile은 15초 fast pass와 30초 heavy pass로 분리되어 있다.
+- [x] 데스크톱 AgentPanel의 local status refresh도 heartbeat freshness 5초 기준, background status 15초, connection status 30초로 분리했다.
+- [x] pairing status 조회는 일반 pairing mutation과 다른 60회/분 rate-limit bucket을 쓰며, 데스크톱 pairing UI는 2초 간격으로 status를 확인한다.
+- [x] 모바일 ChatPage가 기존 `PATCH /v1/chat-sessions/:sessionId` 제목 수정 API를 호출한다. 수정 결과는 `replaceChatSession` reducer로 해당 세션 row만 교체하고 메시지 목록은 다시 불러오지 않는다.
+- [x] 모바일 realtime controller가 `chat.message.created`를 세션 단위 patch로 파싱하고 generic revision fan-out을 억제한다. ChatPage는 현재 선택된 세션 이벤트만 cursor 이후 메시지 page로 보정해 `mergeChatMessages`로 합치며, 다른 세션/화면 전체를 reload하지 않는다.
+- [x] 모바일 ChatPage는 `chat.message.created` 수신 시 세션 목록 projection만 가볍게 다시 읽어 다른 세션의 preview/title/order를 갱신한다. 선택되지 않은 세션의 메시지 목록은 읽지 않고, 실패해도 현재 대화 화면을 error page로 바꾸지 않는다.
+- [x] 모바일 Files의 `FileDirectoryState.withPage`가 동일한 browse page, cursor, generation을 다시 받으면 기존 객체를 그대로 반환한다. stale 표시가 있던 범위는 authoritative page를 받으면 새 객체로 교체해 stale을 해제한다.
+- [x] Rust file engine은 서버/모바일 `RuleDefinition` draft를 내부 `RuleSet`으로 변환할 수 있게 되었고, modified/created age, size, relative path, file kind, name operator, `TRASH`, `CREATE_DIR`를 proposal 단계에서 검증한다. `CREATE_DIR` proposal은 중복 생성되지 않으며 기존 디렉터리는 `DestinationExists`로 표시된다.
+
 > 감사 기준일: 2026-07-13
 > 감사 기준 브랜치: `B` (`origin/main` 기준 v1.4 구현 포함)
 > 기준 문서: `MOUSEKEEPER_PLAN.md`, `IMPLEMENTATION_PLAN.md`, `AI_implement_rule.txt`
@@ -51,7 +69,7 @@
 - [x] file browse 요청, cursor page, timeout/offline/cursor 오류 상태
 - [x] FileTransfer 요청·signed PUT/GET·HEAD 크기 확인·SHA-256 metadata·ACK/cancel/expiry 상태
 - [x] character profile, affinity 원장과 중복 보상 방지; 기존 외형/테마 선택 API는 하위 호환용 deprecated 경로로만 유지
-- [x] chat message 영속화. AI 미설정은 assistant 성공을 만들지 않고 명시적으로 `UNCONFIGURED`
+- [x] chat session/message 영속화와 모바일 세션 선택·생성·삭제·cursor pagination UI. AI 미설정은 assistant 성공을 만들지 않고 명시적으로 `UNCONFIGURED`
 - [x] FCM token 등록/해제, notification outbox와 영구 무효 token 정리
 - [x] audit activity summary와 privacy-safe request/Sentry 경계
 
@@ -75,7 +93,7 @@
 - [x] SQLite WAL 기반 managed root, file index, operation journal, sync cursor/outbox
 - [x] Tauri Tokio worker와 동기 SQLite API 사이의 nested-runtime-safe bridge
 - [x] 전체 scan, 이름 검색, 상대 경로 browse, watcher incremental upsert/remove
-- [x] 확장자·기간·이름 조건 Rule DSL과 결정론적 proposal 생성
+- [x] 확장자·기간·이름 조건 Rule DSL과 결정론적 proposal 생성; 서버 계약은 modified/created age, size, relative path, file kind, TRASH, CREATE_DIR까지 additive 확장
 - [x] source size/mtime precondition, destination 충돌 검출, no-overwrite move
 - [x] journal-before-write, 복구형 `.mousekeeper_trash`, operation history, undo, journal recovery
 - [x] README draft/hash/write/backup/undo 로컬 경로
@@ -103,6 +121,7 @@
 - [x] Socket.IO foreground event와 REST replay 복구
 - [x] FCM foreground/background handler와 token 등록 경로
 - [x] smart-cache opt-in policy, quota/file limit, freshness·last verified·pending command 경고
+- [x] smart-cache 목록 조회가 네트워크/타임아웃 오류일 때만 Drift의 검증된 로컬 metadata로 fallback하며, 서버·인증 오류는 숨기지 않고 실패로 유지한다.
 - [x] affinity 숫자·ledger 표시와 animation off 설정, 고정 기본 외형·테마
 - [x] 8종 PNG 상태 이미지가 모바일과 Desktop build에 포함됨
 
@@ -121,32 +140,32 @@
 ### 3.1 P0 핵심 누락
 
 - [~] **모바일 로그인:** `com.mousekeeper.app`용 Firebase JSON을 로컬 설치하고 Firebase 활성 debug build까지 통과했다. 실제 Google login과 release SHA 검증은 남았다.
-- [~] **파일 인덱스 identity:** SQLite `file_index`에는 상대 경로·크기·mtime·확장자는 있지만 기획서가 요구한 OS file ID가 없다.
-- [~] **watcher 재조정:** event 오류 시 full reindex는 있으나 누락을 주기적으로 보완하는 scheduled reconcile scan이 없다.
-- [~] **파일 실행 action:** MOVE, QUARANTINE, README_WRITE는 안전 실행되지만 서버가 위임한 CREATE_DIR은 명시적으로 거부된다.
+- [x] **파일 identity 연결:** SQLite `file_index`는 OS-backed nullable `file_id`를 저장한다. proposal/precondition은 같은 identity를 `source_file_id`/`sourceFileId`로 전달해 실행 직전 변경을 `SourceChanged`로 막고, file transfer sourceVersion도 기존 `hm:` hash 대신 같은 OS-backed identity를 사용해 업로드 전후 원본 교체를 `SOURCE_CHANGED`로 차단한다.
+- [x] **watcher 재조정:** watcher event와 overflow full reindex가 있고, 30초 full reconcile pass가 active watched root의 SQLite browse/search index와 청결도 snapshot을 주기적으로 보정한다.
+- [~] **파일 실행 action:** MOVE, QUARANTINE, README_WRITE, CREATE_DIR, CREATE_FILE 경로는 구현됐다. CREATE 계열의 Desktop batch journal/no-overwrite/undo 회귀는 고정했고, 실제 Android↔server↔Desktop 3자 release E2E는 남았다.
 - [~] **온라인 파일 전달:** server 실제 S3 lifecycle E2E와 Desktop processor 단위 테스트는 있으나 Android↔Desktop↔server 한 기기 E2E 회귀가 현재 자동화되어 있지 않다.
 - [~] **오프라인 큐:** DB queue, mobile/desktop outbox와 cursor replay는 있으나 프로세스 강제 종료·서버 재시작을 포함한 전체 E2E script가 없다.
 - [~] **캐릭터 기본 상태:** 8종 PNG 상태 전환은 있으나 기획서의 실제 애니메이션 상태 머신은 없다.
-- [ ] **제한된 자연어 명령:** chat은 메시지만 저장하고 `assistant: null`, `aiStatus: UNCONFIGURED`를 반환한다. AI gateway와 schema-validated 자연어→command draft 변환이 없다.
+- [~] **제한된 자연어 명령:** chat은 메시지를 영속하고 AI provider 인터페이스를 호출한다. provider가 `COMMAND_DRAFT`를 반환하면 서버가 `createCommandDraftSchema`로 재검증한 뒤 기존 사용자 승인 초안 경로로만 저장하며 바로 실행하지 않는다. metadata 주입이나 invalid expiresAt은 `AI_OUTPUT_INVALID`로 차단한다. 실제 provider 미설정 상태에서는 assistant 성공을 만들지 않고 `assistant: null`, `aiStatus: UNCONFIGURED`, `AI_PROVIDER_UNCONFIGURED`를 반환한다. 자연어→command draft를 만드는 실제 외부 AI adapter는 아직 없다.
 - [ ] **동일 환경 배포 완료:** 이름 변경 뒤 Windows installer, signed Android AAB, 실제 Firebase login/FCM, 운영 systemd/path migration을 다시 검증하지 않았다.
 
 ### 3.2 P1 및 운영 누락
 
-- [~] **스마트 캐시 암호화:** 서버 E2E는 AES-256-GCM 암호문 lifecycle을 검증하지만 실제 Desktop `smart_cache_processor`는 원본 파일을 그대로 signed PUT한다. 기능 flag를 켜기 전에 client-side encryption과 key 보관/폐기가 반드시 필요하다.
+- [~] **스마트 캐시 암호화:** Desktop `smart_cache_processor`는 업로드 전 AES-256-GCM envelope(`MKS1_NONCE_CIPHERTEXT_TAG`)를 만들고 OS 보안 저장소의 smart-cache key를 사용해 signed PUT에는 암호문만 보낸다. 서버는 암호문 size/checksum과 encryption metadata를 DB에 저장·반환한다. 모바일 복호화 key sync와 tag 검증은 아직 없어 다운로드는 `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`로 fail-closed 처리한다.
 - [~] **스마트 캐시 최신성:** source version 전후 검증은 있으나 watcher 변경을 STALE event로 우선 outbox에 넣는 완전한 경로가 확인되지 않았다.
 - [ ] **Rive:** `.riv`, artboard/state machine/input 명세와 실제 interaction이 없다.
 - [ ] **Android release signing:** keystore 4개 환경 변수가 없으며 release build는 fail-fast한다.
 - [ ] **Sentry 운영 수신:** SDK와 redaction test는 있으나 DSN/dashboard 수신 검증은 없다.
 - [~] **FCM 실기기:** server/worker/mobile 코드와 새 package debug build는 있으나 release SHA 기준 background/terminated 수신을 다시 검증해야 한다.
-- [~] **Socket.IO 다중 인스턴스:** Redis presence는 구현됐지만 Socket.IO Redis adapter는 없다. 단일 API process에는 동작하나 horizontal scale 전 선행해야 한다.
+- [x] **Socket.IO 다중 인스턴스:** 서버 부팅 시 기존 `REDIS_URL`에서 전용 pub/sub client를 복제해 Socket.IO Redis adapter를 설치한다. room broadcast는 다중 API process에서도 Redis를 통해 전파되며, 실제 로드밸런서 topology 검증은 배포 E2E로 남는다.
 - [~] **worker 기술 차이:** 계획의 BullMQ 대신 PostgreSQL durable job + polling worker를 사용한다. 현재 단일 배포에는 기능적으로 유효하지만 계획과 다른 선택을 ADR로 남겨야 한다.
 - [ ] **updater signing, macOS adapter/notarization, iOS release:** MVP 이후 또는 release hardening 범위로 남아 있다.
 
 ### 3.3 테스트·문서 공백
 
 - [~] 일반 server test에서는 외부 DB/object storage가 필요한 7개 suite가 환경 변수 없이 skip된다. 운영 의존 E2E는 별도 opt-in CI job으로 분리해야 한다.
-- [ ] `docs/e2e-scenarios.md`, `docs/threat-model.md`, `docs/adr/0001-local-first.md`가 계획 목록과 달리 없다.
-- [ ] 독립 `presence`, `smart-cache`, `rule-dsl` JSON schema 일부가 없다. 현재 OpenAPI와 TypeScript Zod schema로 검증되지만 계약 산출물 목록과 일치시키는 결정이 필요하다.
+- [x] `docs/e2e-scenarios.md`, `docs/threat-model.md`, `docs/adr/0001-local-first.md`를 추가해 반복 E2E, 전체 threat model, local-first/worker/realtime 운영 결정을 기록했다.
+- [x] 독립 `presence`, `smart-cache`, `rule-dsl` JSON schema를 `packages/contracts/events/`에 추가했고 OpenAPI component ref와 계약 테스트로 산출물 목록을 맞췄다.
 - [ ] 100,000 entry, 3 managed root 성능 회귀와 watcher overflow 장시간 soak 결과가 없다.
 
 ## 4. 현재까지 개발 히스토리 요약
@@ -157,7 +176,7 @@
 4. **오프라인 복구:** server sync sequence, mobile mutation outbox, desktop SQLite cursor/outbox와 REST replay를 연결했다.
 5. **파일 접근 확장:** read-only browse와 별도 FileTransfer 상태 머신, signed object storage, checksum, ACK/TTL 삭제를 추가했다.
 6. **스마트 캐시 control plane:** opt-in policy, usage score, quota reservation, freshness metadata와 object deletion tombstone을 추가했다.
-7. **제품 경험 기반:** 모바일 home/room/rule/proposal/files/chat/character 설정과 Desktop Agent/file UI, 8종 PNG 상태 이미지를 연결했다.
+7. **제품 경험 기반:** 모바일 home/room/rule partial-update와 expanded DSL form/proposal/files/chat session/character 설정, pairing gate pixel-fill loading과 Desktop Agent/file UI, 8종 PNG 상태 이미지를 연결했다.
 8. **운영 하드닝:** AWS EC2, private S3 IAM role, Nginx/systemd, FCM worker, PostgreSQL backup/restore, Sentry redaction 경계를 추가했다.
 9. **A/B 통합:** Desktop background processor가 server command, decision, browse, transfer, cache reservation 계약을 소비하도록 병합했다.
 10. **브랜드 표준화:** package scope, Rust crate, Flutter package, Android/iOS/Tauri identifier, 환경 변수, local state dir, 배포 unit/path를 MOUSEKEEPER로 통일했다.
@@ -207,12 +226,12 @@
 | Presence | 완료 | Redis TTL, OFFLINE event, UI 표시 |
 | 여러 관리 폴더 | 완료 | N개 room/root 모델, overlap만 제한 |
 | 명시적 관리 루트 | 완료 | native picker와 canonical root store |
-| 로컬 파일 인덱스 | 부분 | SQLite 존재, OS file ID 누락 |
-| watcher + 재조정 | 부분 | watcher/overflow reindex 존재, 주기 scan 누락 |
-| Rule DSL | 완료 | extension/age/name 결정론 평가 |
+| 로컬 파일 인덱스 | 완료 | SQLite index와 OS-backed nullable file_id 저장, proposal/precondition source identity 검증, transfer sourceVersion identity 검증 |
+| watcher + 재조정 | 완료 | watcher/overflow reindex와 30초 active-root reconcile |
+| Rule DSL | 부분 완료 | extension/age/name 결정론 평가 완료, 확장 DSL은 서버 계약 추가 후 Desktop evaluator 통합 대기 |
 | 파일별 제안 | 완료 | reason/destination/collision UI |
 | 전체 승인·거절 | 완료 | DB 영속·idempotency |
-| 파일 실행 | 부분 | MOVE/QUARANTINE/README, CREATE_DIR 누락 |
+| 파일 실행 | 부분 | MOVE/QUARANTINE/README/CREATE_DIR/CREATE_FILE 구현, CREATE batch journal/no-overwrite/undo 로컬 회귀 고정, 3자 release E2E 필요 |
 | 복구형 trash | 완료 | metadata/journal/undo |
 | README 제안·적용 | 완료 | hash/write/backup/undo |
 | 청결도 | 완료 | 0~100와 감점 근거 |
@@ -235,11 +254,11 @@
 
 ### 7.2 캐릭터 interaction 전에 반드시 닫아야 할 Critical Checklist
 
-- [ ] Desktop smart-cache upload에 AES-256-GCM 등 client-side authenticated encryption을 적용하고 key를 OS 보안 저장소에 보관한다.
-- [ ] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞추고 mobile 복호화·tag 검증을 연결한다.
-- [ ] SQLite file identity를 추가하고 proposal/precondition/transfer에서 size·mtime과 함께 비교한다.
-- [ ] scheduled reconcile scan과 scan/write/transfer 동시성 제한을 명시하고 테스트한다.
-- [ ] 승인된 CREATE_DIR을 journal-before-write/no-overwrite/undo 정책으로 구현하거나 P0 계약에서 제거한다.
+- [x] Desktop smart-cache upload에 AES-256-GCM client-side authenticated encryption을 적용하고 key를 OS 보안 저장소에 보관한다.
+- [~] 캐시 업로드 metadata를 암호문 size/checksum 기준으로 맞췄고 서버가 저장·반환한다. Mobile 복호화 key sync와 AES-GCM tag 검증은 아직 `UNCONFIGURED` 상태다.
+- [x] Indexed file identity를 proposal/precondition/transfer sourceVersion에서 size·mtime과 함께 비교하도록 연결했다.
+- [x] scan/write/transfer 동시성 제한을 명시하고 테스트한다. Desktop `WorkLimiter`가 scan, write, transfer gate를 분리해 수동 Tauri command와 background runtime의 중복 작업을 `BUSY`로 차단한다.
+- [~] 승인된 CREATE_DIR/CREATE_FILE의 journal-before-write/no-overwrite/undo 정책은 Desktop batch 회귀로 고정했고, 실제 3자 E2E 고정은 남았다.
 - [ ] 자연어 command provider를 선택하고 출력 Zod validation, 사용자 draft 확인, `UNCONFIGURED` 경계를 구현한다.
 - [ ] 로컬 설치된 `com.mousekeeper.app` Firebase 설정에 debug/release SHA를 확인하고 Google login/FCM을 실기기 검증한다.
 - [ ] Android↔server↔Desktop command/proposal/execute/undo와 browse/transfer를 하나의 반복 가능한 E2E로 고정한다.
@@ -250,13 +269,13 @@
 
 ### 우선순위 1 — 캐릭터 interaction 전 backend/infra 보완
 
-1. 스마트 캐시를 기본 `false`로 유지한 채 실제 Desktop encryption/key lifecycle을 먼저 완성한다.
-2. file ID migration, 주기 reconcile, CREATE_DIR 안전 operation을 보완한다.
+1. 스마트 캐시를 기본 `false`로 유지한 채 Mobile 복호화 key sync, AES-GCM tag 검증, 안전한 로컬 plaintext 저장 경로를 완성한다.
+2. Indexed file ID 기반 proposal/precondition/transfer 안전 회귀는 유지하고, CREATE_DIR/CREATE_FILE 안전 operation은 추가된 Desktop batch 회귀를 기반으로 release E2E까지 확장한다.
 3. 외부 DB/S3 integration suite를 CI의 secret-protected opt-in job으로 실행한다.
 4. Firebase debug/release SHA, release keystore, Sentry DSN을 secret manager와 provider console에 등록한다.
 5. 새 systemd/path/IAM 이름으로 EC2를 migration하고 health/ready/worker/backup/restore를 재검증한다.
 6. 물리 Android와 Windows PC를 사용하는 release E2E script와 체크리스트를 만든다.
-7. worker polling 채택과 Socket.IO 단일 인스턴스 제약을 ADR로 기록한다.
+7. worker polling 채택과 Socket.IO Redis adapter 운영 topology를 ADR로 기록한다.
 
 ### 우선순위 2 — Frontend UI/UX 고도화
 
@@ -294,3 +313,34 @@
 | Android debug build | `UNCONFIGURED` build와 `com.mousekeeper.app` Firebase 활성 build 모두 통과 |
 
 Firebase JSON은 API key가 포함된 provider 설정이므로 `.gitignore`에 유지하고 로컬에만 설치했다. CI와 팀원 환경에는 secret/file injection 방식이 필요하다.
+
+## 2026-07-14 Chat state follow-up
+
+- [x] Mobile ChatPage now centralizes sessions, selected session, message page, pagination cursor, and `hasMoreMessages` in `ChatConversationState`. This keeps the current UI behavior intact while preparing the next `chatSessionListProvider(roomId)` / `chatMessagesProvider(sessionId)` Riverpod split.
+- [x] Mobile chat read paths now use provider-backed loaders: `chatSessionListProvider(roomId)`, `chatMessagesProvider(sessionId)`, and cursor-scoped `chatMessagePageProvider`. Mutations invalidate the affected read models without pretending a full page reload happened.
+- [x] Mobile file browsing now centralizes the current directory page, next cursor, and desktop generation in `FileDirectoryState`. This is the reducer-backed base for the planned `fileDirectoryProvider(rootId, relativePath)` split and keeps append-page failures from clearing the last READY page.
+
+## 2026-07-14 Latency hardening follow-up
+
+- [x] Mobile Home's 5-second authoritative safety loop now has no callback that can reload `/v1/home/summary`; the loop only reconciles the lightweight active device/room gate, while summary data changes remain explicit refreshes or item-scoped WebSocket patches.
+- [x] Mobile file directory state now supports item-scoped add/remove/update/move reducers. Visible folder rows are patched in place, unrelated folder events return the same state object, and paginated ranges are marked stale instead of triggering an immediate full browse reload.
+- [x] Mobile realtime now parses `file.directory.updated` as a directory-scoped patch, emits it through a dedicated provider, suppresses generic revision fan-out, and applies it to the currently visible Files page when the room and directory match.
+- [x] Mobile Room state now exposes a `RoomContent` reducer for command, proposal, execution, and cleanliness realtime patches. It preserves unchanged command/proposal/activity slices by identity and returns the same object for unrelated room events.
+- [x] Mobile connection gate loading now keeps the existing pixel-fill mascot but hides sub-200ms loading flashes, adds the 10-second long-wait message, and exposes a 20-second retry action without showing stale cached Home data.
+
+## Latest room latency work
+
+- [x] Desktop command processing now treats contract-level but not-yet-wired `FIND`, `DOWNLOAD`, and `UPLOAD` intents as visible failures. The agent enqueues a durable `FAILED` command status instead of silently skipping them, preventing repeated `QUEUED` polling while preserving the no-fake-success rule.
+- [x] Mobile Room now has an approval-first manual file command form for `RENAME`, `MOVE`, `TRASH`, and `CREATE`. It validates missing root ids and obvious unsafe relative paths before submit, sends the existing command contract with `requiresApproval`, and keeps file mutation behind the desktop proposal/approval/precheck path.
+- [x] Mobile Smart Cache reads now use `smartCachePolicyProvider(roomId)`, `smartCacheFilesProvider(roomId)`, and `smartCacheStatusProvider(roomId)`. The provider-backed status load keeps the existing owner-scoped Drift fallback only for transport failures and updates cached file metadata only after a valid server payload.
+- [x] Mobile rules reads now use `ruleGatewayProvider` and `ruleListProvider(roomId)`. Successful rule create/update/draft confirmation still applies a local upsert and invalidates the backing read model for the next explicit refresh.
+- [x] Mobile file browse transport is provider-backed through `fileBrowseGatewayProvider`, `fileDirectoryBrowseRequesterProvider`, and `fileBrowseStatusFetcherProvider`; FilesPage keeps WebSocket-first completion waiting and uses REST status only as the 5-second safety fallback.
+- [x] Mobile Room REST read path is split into provider-backed projections: `roomCommandListProvider`, `roomProposalListProvider`, `roomExecutionListProvider`, `roomActivityListProvider`, and `roomSnapshotProvider`.
+- [x] Explicit/manual room reloads invalidate those projections, while targeted WebSocket reducers continue patching only the changed command/proposal/execution/cleanliness item.
+- [x] Chat `FIND` draft confirmation now creates an idempotent read-only file-browse request (`fileBrowseRequestId`) instead of a queued command, with contract/database migration coverage and Desktop-side `query`/`extensions`/`limit` validation.
+- [x] Rule draft preview now has an additive contract, OpenAPI route, and server endpoint at `POST /v1/rule-drafts/:draftId/preview`; because Desktop dry-run transport is not wired yet, it validates draft ownership/state and fails closed with `RULE_DRAFT_PREVIEW_UNCONFIGURED` without inventing file matches.
+- [x] Mobile Rules now exposes the preview endpoint from the pending draft card, records preview attempts through the injected gateway, and displays the dry-run `UNCONFIGURED` state without creating a rule or refreshing the full list.
+
+## 2026-07-14 Release E2E preflight
+
+- [x] `scripts/mousekeeper-release-e2e-preflight.ps1` and `pnpm e2e:preflight` now provide a fail-closed release prerequisite check for API URL, `/health`, `/ready`, Android tooling/device presence, Desktop Rust tooling, required repo paths, and dirty worktree state. Missing prerequisites exit as `UNCONFIGURED` or `FAIL`; the script does not create fake pass evidence.

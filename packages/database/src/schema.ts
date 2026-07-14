@@ -216,6 +216,7 @@ export const commands = pgTable(
       .references(() => users.id),
     intent: varchar("intent", { length: 40 }).notNull(),
     payload: jsonb("payload").notNull(),
+    metadata: jsonb("metadata").notNull().default({}),
     status: commandStatus("status").notNull().default("QUEUED"),
     idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -444,6 +445,8 @@ export const fileBrowseRequests = pgTable(
     relativeDirectory: text("relative_directory").notNull(),
     cursor: varchar("cursor", { length: 512 }),
     query: varchar("query", { length: 100 }),
+    extensions: jsonb("extensions").notNull().default([]),
+    limit: integer("limit").notNull().default(200),
     searchScope: varchar("search_scope", { length: 30 })
       .notNull()
       .default("CURRENT_DIRECTORY"),
@@ -583,6 +586,37 @@ export const affinityEvents = pgTable(
     ),
   ],
 );
+
+export const chatSessions = pgTable(
+  "chat_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    title: varchar("title", { length: 120 }).notNull(),
+    summary: text("summary"),
+    status: varchar("status", { length: 30 }).notNull().default("ACTIVE"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("chat_sessions_user_room_status_updated_idx").on(
+      t.userId,
+      t.roomId,
+      t.status,
+      t.updatedAt,
+    ),
+  ],
+);
 export const chatMessages = pgTable(
   "chat_messages",
   {
@@ -590,14 +624,92 @@ export const chatMessages = pgTable(
     roomId: uuid("room_id")
       .notNull()
       .references(() => rooms.id),
+    sessionId: uuid("session_id").references(() => chatSessions.id),
     senderType: varchar("sender_type", { length: 30 }).notNull(),
+    messageType: varchar("message_type", { length: 30 })
+      .notNull()
+      .default("TEXT"),
     content: text("content").notNull(),
+    structuredPayload: jsonb("structured_payload"),
     commandId: uuid("command_id").references(() => commands.id),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
-  (t) => [index("chat_room_time_idx").on(t.roomId, t.createdAt)],
+  (t) => [
+    index("chat_room_time_idx").on(t.roomId, t.createdAt),
+    index("chat_session_time_idx").on(t.sessionId, t.createdAt, t.id),
+  ],
+);
+
+export const commandDrafts = pgTable(
+  "command_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => chatSessions.id),
+    sourceMessageId: uuid("source_message_id")
+      .notNull()
+      .references(() => chatMessages.id),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    intent: varchar("intent", { length: 40 }).notNull(),
+    arguments: jsonb("arguments").notNull(),
+    confirmationSummary: text("confirmation_summary").notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("DRAFT"),
+    commandId: uuid("command_id").references(() => commands.id),
+    fileBrowseRequestId: uuid("file_browse_request_id").references(
+      () => fileBrowseRequests.id,
+    ),
+    fileTransferId: uuid("file_transfer_id").references(() => fileTransfers.id),
+    confirmIdempotencyKey: varchar("confirm_idempotency_key", { length: 128 }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("command_drafts_session_status_idx").on(t.sessionId, t.status),
+    index("command_drafts_room_status_idx").on(t.roomId, t.status),
+    index("command_drafts_user_status_idx").on(t.createdByUserId, t.status),
+  ],
+);
+
+export const ruleDrafts = pgTable(
+  "rule_drafts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    createdByUserId: uuid("created_by_user_id")
+      .notNull()
+      .references(() => users.id),
+    name: varchar("name", { length: 120 }).notNull(),
+    definition: jsonb("definition").notNull(),
+    explanation: text("explanation").notNull(),
+    ambiguities: jsonb("ambiguities").notNull().default([]),
+    status: varchar("status", { length: 30 }).notNull().default("DRAFT"),
+    ruleId: uuid("rule_id").references(() => rules.id),
+    confirmIdempotencyKey: varchar("confirm_idempotency_key", { length: 128 }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("rule_drafts_room_status_idx").on(t.roomId, t.status),
+    index("rule_drafts_user_status_idx").on(t.createdByUserId, t.status),
+    uniqueIndex("rule_drafts_confirm_key_idx").on(
+      t.createdByUserId,
+      t.confirmIdempotencyKey,
+    ),
+  ],
 );
 
 export const smartCachePolicies = pgTable("smart_cache_policies", {
@@ -693,6 +805,7 @@ export const cachedFiles = pgTable(
     objectKey: text("object_key").notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
     sha256: varchar("sha256", { length: 64 }),
+    encryptionMetadata: jsonb("encryption_metadata"),
     availabilityStatus: varchar("availability_status", { length: 30 })
       .notNull()
       .default("AVAILABLE"),

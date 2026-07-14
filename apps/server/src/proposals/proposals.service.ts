@@ -15,7 +15,7 @@ import {
   rooms,
   type Database,
 } from '@mousekeeper/database';
-import { and, eq } from 'drizzle-orm';
+import { and, count, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
@@ -113,6 +113,19 @@ export class ProposalsService {
         .update(commands)
         .set({ status: 'WAITING_APPROVAL' })
         .where(eq(commands.id, body.commandId));
+      const pendingProposalCount = Number(
+        (
+          await tx
+            .select({ value: count(proposals.id) })
+            .from(proposals)
+            .where(
+              and(
+                eq(proposals.roomId, body.roomId),
+                eq(proposals.status, 'OPEN'),
+              ),
+            )
+        )[0]?.value ?? 0,
+      );
       await this.sync.append(tx, {
         userId,
         deviceId: command.command.targetDeviceId,
@@ -120,7 +133,15 @@ export class ProposalsService {
         eventType: 'proposal.created',
         aggregateType: 'proposal',
         aggregateId: proposal.id,
-        payload: { commandId: body.commandId },
+        payload: proposalCreatedPayload({
+          proposalId: proposal.id,
+          roomId: proposal.roomId,
+          commandId: proposal.commandId,
+          status: proposal.status,
+          summary: proposal.summary,
+          itemCount: items.length,
+          pendingProposalCount,
+        }),
       });
       await tx.insert(auditEvents).values({
         userId,
@@ -174,4 +195,24 @@ export class ProposalsService {
     const { idempotencyKey: _, ...safe } = proposal;
     return safe;
   }
+}
+
+export function proposalCreatedPayload(input: {
+  proposalId: string;
+  roomId: string;
+  commandId: string;
+  status: string;
+  summary: unknown;
+  itemCount: number;
+  pendingProposalCount: number;
+}) {
+  return {
+    proposalId: input.proposalId,
+    roomId: input.roomId,
+    commandId: input.commandId,
+    status: input.status,
+    summary: input.summary,
+    itemCount: input.itemCount,
+    pendingProposalCount: input.pendingProposalCount,
+  };
 }

@@ -297,6 +297,41 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
       maxFileBytes: 100,
       excludedPatterns: ['excluded/**'],
     });
+    const staleTarget = (
+      await connection.db
+        .insert(cachedFiles)
+        .values({
+          roomId,
+          sourceRelativePath: 'stale-target.pdf',
+          sourceVersion: { revision: 'stale' },
+          sourceVersionHash: '6'.repeat(64),
+          usageScore: 300,
+          manualPin: true,
+          objectKey: `cache/${userId}/${roomId}/stale-target`,
+          sizeBytes: 10,
+          lastVerifiedAt: new Date(),
+        })
+        .returning()
+    )[0]!;
+    const staleResult = await service.markStale(userId, deviceId, {
+      roomId,
+      sourceRelativePath: 'stale-target.pdf',
+      reason: 'SOURCE_CHANGED',
+    });
+    expect(staleResult).toMatchObject({
+      roomId,
+      sourceRelativePath: 'stale-target.pdf',
+      reason: 'SOURCE_CHANGED',
+      staleCount: 1,
+    });
+    expect(
+      (
+        await connection.db
+          .select()
+          .from(cachedFiles)
+          .where(eq(cachedFiles.id, staleTarget.id))
+      )[0]!.freshnessStatus,
+    ).toBe('STALE');
     const removeTarget = (
       await connection.db
         .insert(cachedFiles)

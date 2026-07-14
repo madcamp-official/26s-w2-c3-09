@@ -4,6 +4,7 @@ pub mod browse;
 pub mod db;
 pub mod decision;
 pub mod execute;
+pub mod file_identity;
 pub mod file_index;
 pub mod file_ops;
 pub mod fs_safety;

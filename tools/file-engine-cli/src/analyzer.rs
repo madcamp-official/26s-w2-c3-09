@@ -13,6 +13,8 @@ use crate::path_guard::{PathGuard, PathGuardError};
 pub struct AnalyzeReport {
     pub root: String,
     pub files: Vec<FileEntry>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directories: Vec<String>,
     pub skipped_entries: Vec<SkippedEntry>,
 }
 
@@ -21,6 +23,10 @@ pub struct FileEntry {
     pub path: String,
     pub size_bytes: u64,
     pub modified_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -41,15 +47,24 @@ pub enum AnalyzeError {
 pub fn analyze_root(root: impl AsRef<Path>) -> Result<AnalyzeReport, AnalyzeError> {
     let guard = PathGuard::new(root).map_err(AnalyzeError::Guard)?;
     let mut files = Vec::new();
+    let mut directories = Vec::new();
     let mut skipped_entries = Vec::new();
 
-    collect_files(guard.root(), guard.root(), &mut files, &mut skipped_entries)?;
+    collect_files(
+        guard.root(),
+        guard.root(),
+        &mut files,
+        &mut directories,
+        &mut skipped_entries,
+    )?;
     files.sort_by(|left, right| left.path.cmp(&right.path));
+    directories.sort();
     skipped_entries.sort_by(|left, right| left.path.cmp(&right.path));
 
     Ok(AnalyzeReport {
         root: guard.root().display().to_string(),
         files,
+        directories,
         skipped_entries,
     })
 }
@@ -58,6 +73,7 @@ fn collect_files(
     root: &Path,
     current_dir: &Path,
     files: &mut Vec<FileEntry>,
+    directories: &mut Vec<String>,
     skipped_entries: &mut Vec<SkippedEntry>,
 ) -> Result<(), AnalyzeError> {
     let entries = match fs::read_dir(current_dir) {
@@ -106,7 +122,15 @@ fn collect_files(
         }
 
         if metadata.is_dir() {
-            collect_files(root, &path, files, skipped_entries)?;
+            if path != root {
+                match relative_path(root, &path) {
+                    Ok(relative_path) => directories.push(relative_path),
+                    Err(error) => {
+                        skipped_entries.push(skipped_entry(root, &path, error.to_string()))
+                    }
+                }
+            }
+            collect_files(root, &path, files, directories, skipped_entries)?;
             continue;
         }
 
@@ -116,6 +140,8 @@ fn collect_files(
                     path: relative_path,
                     size_bytes: metadata.len(),
                     modified_unix_ms: modified_unix_ms(&metadata),
+                    created_unix_ms: created_unix_ms(&metadata),
+                    file_id: crate::file_identity::file_id_for_path(&path),
                 }),
                 Err(error) => skipped_entries.push(skipped_entry(root, &path, error.to_string())),
             }
@@ -158,6 +184,15 @@ fn relative_path_lossy(root: &Path, path: &Path) -> String {
 fn modified_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
     metadata
         .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
+}
+
+fn created_unix_ms(metadata: &fs::Metadata) -> Option<u128> {
+    metadata
+        .created()
         .ok()?
         .duration_since(UNIX_EPOCH)
         .ok()

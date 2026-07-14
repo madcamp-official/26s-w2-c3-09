@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::cleanliness::CleanlinessSnapshot;
 use crate::command_processor::AgentProposalSubmission;
+use crate::smart_cache_crypto::SmartCacheEncryptionMetadata;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -118,6 +119,8 @@ pub struct AgentFileBrowseRequest {
     pub relative_directory: String,
     pub cursor: Option<String>,
     pub query: Option<String>,
+    pub extensions: Vec<String>,
+    pub limit: usize,
     pub search_scope: AgentFileSearchScope,
 }
 
@@ -252,6 +255,16 @@ pub struct AgentCachedFile {
     pub size_bytes: u64,
     pub sha256: String,
     pub freshness_status: String,
+    pub encryption_metadata: Option<SmartCacheEncryptionMetadata>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheStaleResult {
+    pub room_id: String,
+    pub source_relative_path: Option<String>,
+    pub reason: String,
+    pub stale_count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -1257,6 +1270,7 @@ impl AgentRuntime {
         sha256: String,
         usage_score: i64,
         manual_pin: bool,
+        encryption_metadata: SmartCacheEncryptionMetadata,
     ) -> Result<AgentCachedFile, AgentError> {
         validate_opaque_value("smart cache reservation id", &reservation_id, 200)?;
         validate_opaque_value(
@@ -1270,6 +1284,7 @@ impl AgentRuntime {
             ));
         }
         validate_sha256(&sha256)?;
+        validate_smart_cache_encryption_metadata(&encryption_metadata)?;
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
             .send_json::<CachedFileResponse>(
@@ -1284,10 +1299,67 @@ impl AgentRuntime {
                         "sha256": sha256,
                         "usageScore": usage_score,
                         "manualPin": manual_pin,
+                        "encryptionMetadata": encryption_metadata,
                     })),
             )
             .await
             .and_then(validate_cached_file_response);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn mark_smart_cache_stale(
+        &self,
+        idempotency_key: String,
+        room_id: String,
+        source_relative_path: Option<String>,
+        reason: String,
+    ) -> Result<AgentSmartCacheStaleResult, AgentError> {
+        validate_opaque_value("smart cache stale idempotency key", &idempotency_key, 128)?;
+        validate_opaque_value("room id", &room_id, 200)?;
+        validate_smart_cache_stale_reason(&reason)?;
+        match (&source_relative_path, reason.as_str()) {
+            (Some(path), "SOURCE_CHANGED" | "SOURCE_REMOVED") => {
+                validate_relative_path("smart cache stale source path", path)?;
+            }
+            (None, "REINDEXED") => {}
+            (None, _) => {
+                return Err(validation_error(
+                    "smart cache source changes must include sourceRelativePath",
+                ));
+            }
+            (Some(_), "REINDEXED") => {
+                return Err(validation_error(
+                    "smart cache REINDEXED stale reports must not include sourceRelativePath",
+                ));
+            }
+            _ => unreachable!("reason was validated above"),
+        }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<SmartCacheStaleResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/agent/cached-files/stale"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({
+                        "roomId": room_id.clone(),
+                        "sourceRelativePath": source_relative_path.clone(),
+                        "reason": reason.clone(),
+                    })),
+            )
+            .await
+            .and_then(|response| {
+                validate_smart_cache_stale_response(
+                    &room_id,
+                    source_relative_path.as_deref(),
+                    &reason,
+                    response,
+                )
+            });
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1666,8 +1738,16 @@ struct FileBrowseRequestResponse {
     #[serde(default)]
     query: Option<String>,
     #[serde(default)]
+    extensions: Vec<String>,
+    #[serde(default = "default_file_browse_limit")]
+    limit: usize,
+    #[serde(default)]
     search_scope: AgentFileSearchScope,
     status: String,
+}
+
+fn default_file_browse_limit() -> usize {
+    200
 }
 
 #[derive(Deserialize)]
@@ -1730,6 +1810,17 @@ struct CachedFileResponse {
     size_bytes: u64,
     sha256: String,
     freshness_status: String,
+    #[serde(default)]
+    encryption_metadata: Option<SmartCacheEncryptionMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheStaleResponse {
+    room_id: String,
+    source_relative_path: Option<String>,
+    reason: String,
+    stale_count: u64,
 }
 
 #[derive(Deserialize)]
@@ -1988,6 +2079,10 @@ fn validate_file_browse_request(
         || response.query.as_ref().is_some_and(|query| {
             !(2..=100).contains(&query.trim().chars().count()) || query != query.trim()
         })
+        || response.limit == 0
+        || response.limit > 200
+        || !file_browse_extensions_are_valid(&response.extensions)
+        || (response.query.is_none() && !response.extensions.is_empty())
         || response.status != "REQUESTED"
     {
         return Err(invalid_response_error(
@@ -2000,8 +2095,21 @@ fn validate_file_browse_request(
         relative_directory: response.relative_directory,
         cursor: response.cursor,
         query: response.query,
+        extensions: response.extensions,
+        limit: response.limit,
         search_scope: response.search_scope,
     })
+}
+
+fn file_browse_extensions_are_valid(extensions: &[String]) -> bool {
+    extensions.is_empty()
+        || (extensions.len() <= 50
+            && extensions.iter().all(|extension| {
+                let bytes = extension.as_bytes();
+                bytes.len() >= 2
+                    && bytes[0] == b'.'
+                    && bytes[1..].iter().all(|byte| byte.is_ascii_alphanumeric())
+            }))
 }
 
 fn validate_file_transfers(
@@ -2170,6 +2278,9 @@ fn validate_cached_file_response(
     validate_relative_path("cached file path", &response.source_relative_path)?;
     validate_sha256(&response.source_version_hash)?;
     validate_sha256(&response.sha256)?;
+    if let Some(metadata) = &response.encryption_metadata {
+        validate_smart_cache_encryption_metadata(metadata)?;
+    }
     if response.id.is_empty()
         || response.size_bytes == 0
         || !matches!(
@@ -2188,7 +2299,71 @@ fn validate_cached_file_response(
         size_bytes: response.size_bytes,
         sha256: response.sha256,
         freshness_status: response.freshness_status,
+        encryption_metadata: response.encryption_metadata,
     })
+}
+
+fn validate_smart_cache_stale_reason(reason: &str) -> Result<(), AgentError> {
+    if !matches!(reason, "SOURCE_CHANGED" | "SOURCE_REMOVED" | "REINDEXED") {
+        return Err(validation_error(
+            "smart cache stale reason must be SOURCE_CHANGED, SOURCE_REMOVED, or REINDEXED",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_smart_cache_stale_response(
+    expected_room_id: &str,
+    expected_source_relative_path: Option<&str>,
+    expected_reason: &str,
+    response: SmartCacheStaleResponse,
+) -> Result<AgentSmartCacheStaleResult, AgentError> {
+    validate_smart_cache_stale_reason(&response.reason)
+        .map_err(|_| invalid_response_error("smart cache stale response reason is invalid"))?;
+    if response.room_id != expected_room_id
+        || response.source_relative_path.as_deref() != expected_source_relative_path
+        || response.reason != expected_reason
+    {
+        return Err(invalid_response_error(
+            "smart cache stale response did not match the request",
+        ));
+    }
+    if let Some(path) = &response.source_relative_path {
+        validate_relative_path("smart cache stale response path", path)
+            .map_err(|_| invalid_response_error("smart cache stale response path is invalid"))?;
+    }
+    Ok(AgentSmartCacheStaleResult {
+        room_id: response.room_id,
+        source_relative_path: response.source_relative_path,
+        reason: response.reason,
+        stale_count: response.stale_count,
+    })
+}
+
+fn validate_smart_cache_encryption_metadata(
+    metadata: &SmartCacheEncryptionMetadata,
+) -> Result<(), AgentError> {
+    if metadata.algorithm != crate::smart_cache_crypto::SMART_CACHE_ENCRYPTION_ALGORITHM
+        || metadata.format != crate::smart_cache_crypto::SMART_CACHE_ENCRYPTION_FORMAT
+        || metadata.key_id.trim().len() < 16
+        || metadata.key_id.len() > 128
+        || metadata.nonce_hex.len() != 24
+        || !metadata
+            .nonce_hex
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        || metadata.plaintext_size_bytes == 0
+        || metadata.plaintext_sha256.len() != 64
+        || !metadata
+            .plaintext_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(invalid_response_error(
+            "smart cache encryption metadata failed response validation",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_cleanliness_snapshot(snapshot: &CleanlinessSnapshot) -> Result<(), AgentError> {
@@ -2299,7 +2474,7 @@ fn validate_proposal_item(
         || item.reason_code.is_empty()
         || !matches!(
             item.action_type.as_str(),
-            "MOVE" | "QUARANTINE" | "CREATE_DIR" | "README_WRITE"
+            "MOVE" | "QUARANTINE" | "CREATE_DIR" | "CREATE_FILE" | "README_WRITE"
         )
         || !matches!(
             item.conflict_state.as_str(),
@@ -2987,6 +3162,8 @@ mod tests {
                 "relativeDirectory":"docs",
                 "cursor":null,
                 "query":"report",
+                "extensions":[".pdf"],
+                "limit":25,
                 "searchScope":"MANAGED_ROOT",
                 "status":"REQUESTED"
             }]"#,
@@ -3012,6 +3189,8 @@ mod tests {
 
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].query.as_deref(), Some("report"));
+        assert_eq!(requests[0].extensions, vec![".pdf"]);
+        assert_eq!(requests[0].limit, 25);
         assert_eq!(requests[0].search_scope, AgentFileSearchScope::ManagedRoot);
     }
 
@@ -3025,6 +3204,8 @@ mod tests {
             relative_directory: String::new(),
             cursor: None,
             query: Some(query.clone()),
+            extensions: Vec::new(),
+            limit: 200,
             search_scope: AgentFileSearchScope::ManagedRoot,
             status: "REQUESTED".to_string(),
         })
@@ -3235,6 +3416,48 @@ mod tests {
             crate::cleanliness::CLEANLINESS_FORMULA_VERSION
         );
         assert_eq!(saved.score, 88);
+    }
+
+    #[tokio::test]
+    async fn smart_cache_stale_report_uses_the_agent_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/agent/cached-files/stale",
+            r#"{"roomId":"room-1","sourceRelativePath":"docs/a.pdf","reason":"SOURCE_CHANGED","staleCount":1}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/agent/cached-files/stale HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+                assert!(request.contains("idempotency-key: stale-1"));
+                assert!(request.contains(r#""roomId":"room-1""#));
+                assert!(request.contains(r#""sourceRelativePath":"docs/a.pdf""#));
+                assert!(request.contains(r#""reason":"SOURCE_CHANGED""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let result = runtime
+            .mark_smart_cache_stale(
+                "stale-1".to_string(),
+                "room-1".to_string(),
+                Some("docs/a.pdf".to_string()),
+                "SOURCE_CHANGED".to_string(),
+            )
+            .await
+            .expect("stale report");
+        server.join().expect("server thread");
+
+        assert_eq!(result.room_id, "room-1");
+        assert_eq!(result.source_relative_path.as_deref(), Some("docs/a.pdf"));
+        assert_eq!(result.reason, "SOURCE_CHANGED");
+        assert_eq!(result.stale_count, 1);
     }
 
     #[tokio::test]

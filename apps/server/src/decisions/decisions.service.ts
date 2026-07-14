@@ -17,7 +17,7 @@ import {
   rooms,
   type Database,
 } from '@mousekeeper/database';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
@@ -125,17 +125,32 @@ export class DecisionsService {
       }
       const decision = inserted;
       const approved = body.decisionType === 'APPROVE';
+      const finalProposalStatus = approved ? 'APPROVED' : 'REJECTED';
+      const finalCommandStatus = approved ? 'APPROVED' : 'REJECTED';
       await tx
         .update(proposals)
-        .set({ status: approved ? 'APPROVED' : 'REJECTED' })
+        .set({ status: finalProposalStatus })
         .where(eq(proposals.id, proposalId));
       await tx
         .update(commands)
         .set({
-          status: approved ? 'APPROVED' : 'REJECTED',
+          status: finalCommandStatus,
           ...(!approved ? { finishedAt: new Date() } : {}),
         })
         .where(eq(commands.id, owned.proposal.commandId));
+      const pendingProposalCount = Number(
+        (
+          await tx
+            .select({ value: count(proposals.id) })
+            .from(proposals)
+            .where(
+              and(
+                eq(proposals.roomId, owned.room.id),
+                eq(proposals.status, 'OPEN'),
+              ),
+            )
+        )[0]?.value ?? 0,
+      );
       await this.sync.append(tx, {
         userId,
         deviceId: owned.room.desktopDeviceId,
@@ -143,7 +158,16 @@ export class DecisionsService {
         eventType: 'decision.created',
         aggregateType: 'decision',
         aggregateId: decision.id,
-        payload: { proposalId, decisionType: decision.decisionType },
+        payload: decisionCreatedPayload({
+          decisionId: decision.id,
+          proposalId,
+          roomId: owned.room.id,
+          commandId: owned.proposal.commandId,
+          decisionType: decision.decisionType,
+          proposalStatus: finalProposalStatus,
+          commandStatus: finalCommandStatus,
+          pendingProposalCount,
+        }),
       });
       await tx.insert(auditEvents).values({
         userId,
@@ -232,4 +256,26 @@ export class DecisionsService {
     const { idempotencyKey: _, ...safe } = proposal;
     return safe;
   }
+}
+
+export function decisionCreatedPayload(input: {
+  decisionId: string;
+  proposalId: string;
+  roomId: string;
+  commandId: string;
+  decisionType: string;
+  proposalStatus: string;
+  commandStatus: string;
+  pendingProposalCount: number;
+}) {
+  return {
+    decisionId: input.decisionId,
+    proposalId: input.proposalId,
+    roomId: input.roomId,
+    commandId: input.commandId,
+    decisionType: input.decisionType,
+    proposalStatus: input.proposalStatus,
+    commandStatus: input.commandStatus,
+    pendingProposalCount: input.pendingProposalCount,
+  };
 }

@@ -130,6 +130,9 @@ export type BackgroundRuntimeStatus = {
   last_file_browse_count: number;
   last_file_browse_completed_count: number;
   last_file_browse_failed_count: number;
+  last_file_index_reconcile_unix_ms: number | null;
+  last_file_index_reconcile_root_count: number;
+  last_file_index_reconcile_failed_count: number;
   last_file_transfer_poll_unix_ms: number | null;
   last_file_transfer_count: number;
   last_file_transfer_uploaded_count: number;

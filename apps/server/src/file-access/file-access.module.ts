@@ -9,5 +9,6 @@ import { FileBrowseService } from './file-browse.service';
   imports: [DatabaseModule, AuthModule, SyncModule, RedisModule],
   controllers: [FileBrowseController],
   providers: [FileBrowseService],
+  exports: [FileBrowseService],
 })
 export class FileAccessModule {}

@@ -5,6 +5,7 @@ class ConnectionLifecycleEvent {
     required this.eventId,
     required this.eventType,
     this.deviceId,
+    this.device,
     this.roomId,
     this.sequence,
   });
@@ -12,6 +13,7 @@ class ConnectionLifecycleEvent {
   final String eventId;
   final String eventType;
   final String? deviceId;
+  final Map<String, dynamic>? device;
   final String? roomId;
   final int? sequence;
 }
@@ -57,6 +59,14 @@ ConnectionLifecycleEvent? connectionLifecycleEventFor(
   final deviceId = eventType.startsWith('device.')
       ? _requiredId(payload['deviceId'])
       : null;
+  Map<String, dynamic>? device;
+  if (eventType == 'device.paired') {
+    final rawDevice = payload['device'];
+    if (rawDevice != null) {
+      device = _activeDevicePayload(rawDevice, deviceId);
+      if (device == null) return null;
+    }
+  }
   final roomId = eventType == 'room.removed'
       ? _requiredId(payload['roomId'])
       : null;
@@ -68,6 +78,7 @@ ConnectionLifecycleEvent? connectionLifecycleEventFor(
     eventId: eventId,
     eventType: eventType,
     deviceId: deviceId,
+    device: device,
     roomId: roomId,
     sequence: sequence,
   );
@@ -79,6 +90,21 @@ final RegExp _canonicalUuid = RegExp(
 
 String? _requiredId(Object? value) =>
     value is String && _canonicalUuid.hasMatch(value) ? value : null;
+
+Map<String, dynamic>? _activeDevicePayload(Object? value, String? deviceId) {
+  if (deviceId == null || value is! Map) return null;
+  final device = Map<String, dynamic>.from(value);
+  if (device['id'] != deviceId || device['status'] != 'ACTIVE') {
+    return null;
+  }
+  if (device['platform'] is! String ||
+      device['deviceName'] is! String ||
+      device['createdAt'] is! String ||
+      !(device['lastSeenAt'] == null || device['lastSeenAt'] is String)) {
+    return null;
+  }
+  return device;
+}
 
 final connectionLifecycleEventProvider =
     NotifierProvider<

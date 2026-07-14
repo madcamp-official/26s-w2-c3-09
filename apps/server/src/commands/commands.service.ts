@@ -89,6 +89,7 @@ export class CommandsService {
             createdByUserId: userId,
             intent: body.intent,
             payload: body.payload,
+            metadata: body.metadata ?? {},
             idempotencyKey: key,
           })
           .onConflictDoNothing()
@@ -111,7 +112,9 @@ export class CommandsService {
         if (
           existing.roomId !== roomId ||
           existing.intent !== body.intent ||
-          canonicalJson(existing.payload) !== canonicalJson(body.payload)
+          canonicalJson(existing.payload) !== canonicalJson(body.payload) ||
+          canonicalJson(existing.metadata) !==
+            canonicalJson(body.metadata ?? {})
         )
           throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
         return this.publicCommand(existing);
@@ -251,7 +254,11 @@ export class CommandsService {
         eventType: 'command.updated',
         aggregateType: 'command',
         aggregateId: updated.id,
-        payload: { status: updated.status },
+        payload: commandUpdatedPayload({
+          commandId: updated.id,
+          roomId: updated.roomId,
+          status: updated.status,
+        }),
       });
       return this.publicCommand(updated);
     });
@@ -261,4 +268,16 @@ export class CommandsService {
     const { createdByUserId: _, idempotencyKey: __, ...safe } = command;
     return safe;
   }
+}
+
+export function commandUpdatedPayload(input: {
+  commandId: string;
+  roomId: string;
+  status: string;
+}) {
+  return {
+    commandId: input.commandId,
+    roomId: input.roomId,
+    status: input.status,
+  };
 }

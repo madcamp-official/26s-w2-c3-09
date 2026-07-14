@@ -5,9 +5,10 @@ use sha2::{Digest, Sha256};
 
 use crate::agent::{AgentRuntime, AgentSmartCacheCandidate, AgentSmartCacheReservation};
 use crate::file_transfer_processor::{
-    hash_source_payload, put_upload_file, validate_local_transfer_source, ValidatedTransferSource,
+    put_upload_bytes, validate_local_transfer_source, ValidatedTransferSource,
 };
 use crate::outbox_processor::{enqueue_smart_cache_completion, smart_cache_completion_key};
+use crate::smart_cache_crypto::{encrypt_smart_cache_file, encrypted_smart_cache_object_size};
 use crate::storage::managed_roots::ManagedRootStore;
 use crate::storage::outbox::OutboxStore;
 use crate::storage::smart_cache::{SmartCacheCandidate, SmartCacheStore};
@@ -234,7 +235,7 @@ fn server_candidate(
         source_version: serde_json::to_value(&candidate.source.source_version)
             .map_err(|error| format!("cannot encode source version: {error}"))?,
         source_version_hash: candidate.source_version_hash.clone(),
-        size_bytes: candidate.source.source_version.size_bytes,
+        size_bytes: encrypted_smart_cache_object_size(candidate.source.source_version.size_bytes)?,
         usage_score: candidate.local.score,
         manual_pin: candidate.local.pinned,
     })
@@ -260,21 +261,19 @@ async fn upload_reservation(
             .get(&key)
             .ok_or_else(|| "smart cache reservation did not match a local candidate".to_string())?;
         ensure_candidate_still_current(root, candidate)?;
-        let payload = hash_source_payload(&candidate.source).map_err(|error| error.message)?;
-        if payload.size_bytes != reservation.size_bytes {
+        let mut encrypted = encrypt_smart_cache_file(
+            &candidate.source.resolved_path,
+            candidate.source.source_version.size_bytes,
+        )?;
+        if encrypted.size_bytes != reservation.size_bytes {
             return Err("smart cache reservation size no longer matches local source".to_string());
         }
-        put_upload_file(
-            &upload_url,
-            &candidate.source.resolved_path,
-            payload.size_bytes,
-        )
-        .await?;
+        put_upload_bytes(&upload_url, std::mem::take(&mut encrypted.bytes)).await?;
         ensure_candidate_still_current(root, candidate)?;
-        Ok::<_, String>((payload, candidate.local.score, candidate.local.pinned))
+        Ok::<_, String>((encrypted, candidate.local.score, candidate.local.pinned))
     }
     .await;
-    let (payload, usage_score, manual_pin) = match prepared {
+    let (encrypted, usage_score, manual_pin) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             let _ = agent.cancel_smart_cache_reservation(reservation_id).await;
@@ -285,10 +284,11 @@ async fn upload_reservation(
     if let Err(error) = enqueue_smart_cache_completion(
         outbox,
         &reservation.reservation_id,
-        payload.size_bytes,
-        &payload.sha256,
+        encrypted.size_bytes,
+        &encrypted.sha256,
         usage_score,
         manual_pin,
+        encrypted.metadata.clone(),
     ) {
         let _ = agent.cancel_smart_cache_reservation(reservation_id).await;
         return Err(error);
@@ -297,10 +297,11 @@ async fn upload_reservation(
         .complete_smart_cache_upload(
             reservation.reservation_id.clone(),
             smart_cache_completion_key(&reservation.reservation_id),
-            payload.size_bytes,
-            payload.sha256,
+            encrypted.size_bytes,
+            encrypted.sha256,
             usage_score,
             manual_pin,
+            encrypted.metadata,
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -369,7 +370,7 @@ mod tests {
             source_relative_path: "docs/report.pdf".to_string(),
             source_version: json!({"fileId":"hm:1","sizeBytes":10,"modifiedAt":"2026-07-13T00:00:00.000Z"}),
             source_version_hash: "a".repeat(64),
-            size_bytes: 10,
+            size_bytes: 42,
             usage_score: 42,
             manual_pin: false,
         }];

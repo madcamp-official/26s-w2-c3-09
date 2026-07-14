@@ -86,6 +86,24 @@ class SyncCursors extends Table {
   Set<Column> get primaryKey => {ownerUid, stream};
 }
 
+class CachedSmartCacheFiles extends Table {
+  TextColumn get ownerUid => text()();
+  TextColumn get roomId => text()();
+  TextColumn get id => text()();
+  TextColumn get sourceRelativePath => text()();
+  TextColumn get payloadJson => text()();
+  TextColumn get availabilityStatus => text()();
+  TextColumn get freshnessStatus => text()();
+  TextColumn get localDownloadPath => text().nullable()();
+  TextColumn get sha256 => text().nullable()();
+  IntColumn get sizeBytes => integer().nullable()();
+  DateTimeColumn get lastVerifiedAt => dateTime().nullable()();
+  DateTimeColumn get downloadedAt => dateTime().nullable()();
+  DateTimeColumn get updatedAt => dateTime()();
+  @override
+  Set<Column> get primaryKey => {ownerUid, id};
+}
+
 @DriftDatabase(
   tables: [
     CachedDevices,
@@ -96,13 +114,14 @@ class SyncCursors extends Table {
     CachedRoomSnapshots,
     MutationOutbox,
     SyncCursors,
+    CachedSmartCacheFiles,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
   AppDatabase.forTesting(super.executor);
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -127,6 +146,11 @@ class AppDatabase extends _$AppDatabase {
         await migrator.createTable(cachedRoomSnapshots);
         await migrator.createTable(mutationOutbox);
         await migrator.createTable(syncCursors);
+        await migrator.createTable(cachedSmartCacheFiles);
+        return;
+      }
+      if (from < 4) {
+        await migrator.createTable(cachedSmartCacheFiles);
       }
     },
   );

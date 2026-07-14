@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -12,9 +14,10 @@ import '../files/files_page.dart';
 import '../files/smart_cache_page.dart';
 import '../chat/chat_page.dart';
 import '../rules/rules_page.dart';
+import 'file_command_page.dart';
 
-class _RoomContent {
-  const _RoomContent({
+class RoomContent {
+  const RoomContent({
     required this.commands,
     required this.proposals,
     required this.executions,
@@ -28,6 +31,281 @@ class _RoomContent {
   final List<Map<String, dynamic>> activity;
   final Map<String, dynamic>? snapshot;
   final bool isOffline;
+
+  RoomContent copyWith({
+    List<Map<String, dynamic>>? commands,
+    List<Map<String, dynamic>>? proposals,
+    List<Map<String, dynamic>>? executions,
+    Map<String, dynamic>? snapshot,
+  }) => RoomContent(
+    commands: commands ?? this.commands,
+    proposals: proposals ?? this.proposals,
+    executions: executions ?? this.executions,
+    activity: activity,
+    snapshot: snapshot ?? this.snapshot,
+    isOffline: isOffline,
+  );
+}
+
+typedef RoomListFetcher =
+    Future<List<Map<String, dynamic>>> Function(String path);
+
+typedef RoomNullableFetcher =
+    Future<Map<String, dynamic>?> Function(String path);
+
+final roomListFetcherProvider = Provider<RoomListFetcher>((ref) {
+  final api = ref.watch(apiClientProvider);
+  return api.getList;
+});
+
+final roomNullableFetcherProvider = Provider<RoomNullableFetcher>((ref) {
+  final api = ref.watch(apiClientProvider);
+  return api.getNullable;
+});
+
+final roomCommandListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) =>
+          ref.watch(roomListFetcherProvider)('/v1/rooms/$roomId/commands'),
+    );
+
+final roomProposalListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) => ref.watch(roomListFetcherProvider)(
+        '/v1/rooms/$roomId/proposals/open',
+      ),
+    );
+
+final roomExecutionListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) =>
+          ref.watch(roomListFetcherProvider)('/v1/rooms/$roomId/executions'),
+    );
+
+final roomActivityListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) => ref.watch(roomListFetcherProvider)(
+        '/v1/rooms/$roomId/activity?limit=20',
+      ),
+    );
+
+final roomSnapshotProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>?, String>(
+      (ref, roomId) => ref.watch(roomNullableFetcherProvider)(
+        '/v1/rooms/$roomId/snapshots/latest',
+      ),
+    );
+
+List<Map<String, dynamic>> patchCommandItemsForRealtimeUpdate({
+  required List<Map<String, dynamic>> commands,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  final commandId = switch (update.kind) {
+    RealtimeHomeUpdateKind.commandStatus ||
+    RealtimeHomeUpdateKind.decisionCreated => update.commandId,
+    _ => null,
+  };
+  final status = switch (update.kind) {
+    RealtimeHomeUpdateKind.commandStatus ||
+    RealtimeHomeUpdateKind.decisionCreated => update.commandStatus,
+    _ => null,
+  };
+  if (update.roomId != roomId || commandId == null || status == null) {
+    return commands;
+  }
+  var changed = false;
+  var matched = false;
+  final next = commands
+      .map((command) {
+        if (command['id'] != commandId) return command;
+        matched = true;
+        if (command['status'] == status) return command;
+        changed = true;
+        return {...command, 'status': status};
+      })
+      .toList(growable: true);
+  if (matched) return changed ? List.unmodifiable(next) : commands;
+  return List.unmodifiable([
+    {'id': commandId, 'status': status},
+    ...commands,
+  ]);
+}
+
+List<Map<String, dynamic>> patchProposalItemsForRealtimeUpdate({
+  required List<Map<String, dynamic>> proposals,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  if (update.roomId != roomId ||
+      update.proposalId == null ||
+      update.proposalStatus == null ||
+      (update.kind != RealtimeHomeUpdateKind.proposalCreated &&
+          update.kind != RealtimeHomeUpdateKind.decisionCreated)) {
+    return proposals;
+  }
+  final proposalId = update.proposalId!;
+  final status = update.proposalStatus!;
+  if (update.kind == RealtimeHomeUpdateKind.decisionCreated &&
+      status != 'OPEN') {
+    final next = proposals
+        .where((proposal) => proposal['id'] != proposalId)
+        .toList(growable: false);
+    return next.length == proposals.length ? proposals : next;
+  }
+  Map<String, dynamic> patch(Map<String, dynamic> proposal) {
+    final next = {...proposal, 'status': status};
+    if (update.commandId != null) next['commandId'] = update.commandId!;
+    if (update.proposalSummary != null) {
+      next['summary'] = update.proposalSummary!;
+    }
+    if (update.proposalItemCount != null) {
+      next['itemCount'] = update.proposalItemCount!;
+    }
+    return next;
+  }
+
+  var changed = false;
+  var matched = false;
+  final next = proposals
+      .map((proposal) {
+        if (proposal['id'] != proposalId) return proposal;
+        matched = true;
+        final patched = patch(proposal);
+        if (_mapShallowEquals(proposal, patched)) return proposal;
+        changed = true;
+        return patched;
+      })
+      .toList(growable: true);
+  if (matched) return changed ? List.unmodifiable(next) : proposals;
+  return List.unmodifiable([
+    patch({'id': proposalId, 'roomId': roomId}),
+    ...proposals,
+  ]);
+}
+
+bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
+  if (left.length != right.length) return false;
+  for (final key in left.keys) {
+    if (!right.containsKey(key) || left[key] != right[key]) return false;
+  }
+  return true;
+}
+
+Map<String, dynamic>? patchRoomSnapshotForRealtimeUpdate({
+  required Map<String, dynamic>? snapshot,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  if (update.kind != RealtimeHomeUpdateKind.roomSnapshotUpdated ||
+      update.roomId != roomId ||
+      update.roomSnapshot == null) {
+    return snapshot;
+  }
+  final next = update.roomSnapshot!;
+  if (!_snapshotIsNewer(
+    currentCalculatedAt: snapshot?['calculatedAt'],
+    nextCalculatedAt: next['calculatedAt'],
+  )) {
+    return snapshot;
+  }
+  return Map<String, dynamic>.unmodifiable(next);
+}
+
+RoomContent reduceRoomContentForRealtimeUpdate({
+  required RoomContent current,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  final commands = patchCommandItemsForRealtimeUpdate(
+    commands: current.commands,
+    update: update,
+    roomId: roomId,
+  );
+  final proposals = patchProposalItemsForRealtimeUpdate(
+    proposals: current.proposals,
+    update: update,
+    roomId: roomId,
+  );
+  final executions = patchExecutionItemsForRealtimeUpdate(
+    executions: current.executions,
+    update: update,
+    roomId: roomId,
+  );
+  final snapshot = patchRoomSnapshotForRealtimeUpdate(
+    snapshot: current.snapshot,
+    update: update,
+    roomId: roomId,
+  );
+  if (identical(commands, current.commands) &&
+      identical(proposals, current.proposals) &&
+      identical(executions, current.executions) &&
+      identical(snapshot, current.snapshot)) {
+    return current;
+  }
+  return current.copyWith(
+    commands: commands,
+    proposals: proposals,
+    executions: executions,
+    snapshot: snapshot,
+  );
+}
+
+bool _snapshotIsNewer({
+  required Object? currentCalculatedAt,
+  required Object? nextCalculatedAt,
+}) {
+  if (nextCalculatedAt is! String || nextCalculatedAt.isEmpty) return false;
+  final next = DateTime.tryParse(nextCalculatedAt);
+  if (next == null) return false;
+  if (currentCalculatedAt is! String || currentCalculatedAt.isEmpty) {
+    return true;
+  }
+  final current = DateTime.tryParse(currentCalculatedAt);
+  return current == null || next.isAfter(current);
+}
+
+List<Map<String, dynamic>> patchExecutionItemsForRealtimeUpdate({
+  required List<Map<String, dynamic>> executions,
+  required RealtimeHomeUpdate update,
+  required String roomId,
+}) {
+  if (update.kind != RealtimeHomeUpdateKind.executionStatus ||
+      update.roomId != roomId ||
+      update.executionId == null ||
+      update.executionStatus == null) {
+    return executions;
+  }
+  final executionId = update.executionId!;
+  final status = update.executionStatus!;
+  var changed = false;
+  var matched = false;
+  final next = executions
+      .map((item) {
+        final rawExecution = item['execution'];
+        if (rawExecution is! Map || rawExecution['id'] != executionId) {
+          return item;
+        }
+        matched = true;
+        if (rawExecution['status'] == status) return item;
+        changed = true;
+        return {
+          ...item,
+          'execution': {
+            ...Map<String, dynamic>.from(rawExecution),
+            'status': status,
+          },
+        };
+      })
+      .toList(growable: true);
+  if (matched) return changed ? List.unmodifiable(next) : executions;
+  return List.unmodifiable([
+    {
+      'execution': {'id': executionId, 'status': status},
+      'proposal': null,
+    },
+    ...executions,
+  ]);
 }
 
 class RoomPage extends ConsumerStatefulWidget {
@@ -38,7 +316,9 @@ class RoomPage extends ConsumerStatefulWidget {
 }
 
 class _RoomPageState extends ConsumerState<RoomPage> {
-  late Future<_RoomContent> _content;
+  late Future<RoomContent> _content;
+  RoomContent? _latestContent;
+  bool _suppressNextRealtimeRevisionReload = false;
   bool _submitting = false;
   @override
   void initState() {
@@ -46,18 +326,17 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     _reload();
   }
 
-  Future<_RoomContent> _load() async {
-    final api = ref.read(apiClientProvider);
+  Future<RoomContent> _load() async {
     final cache = ref.read(displayCacheProvider);
     final id = widget.room['id'] as String;
     try {
       final lists = await Future.wait([
-        api.getList('/v1/rooms/$id/commands'),
-        api.getList('/v1/rooms/$id/proposals/open'),
-        api.getList('/v1/rooms/$id/executions'),
-        api.getList('/v1/rooms/$id/activity?limit=20'),
+        ref.read(roomCommandListProvider(id).future),
+        ref.read(roomProposalListProvider(id).future),
+        ref.read(roomExecutionListProvider(id).future),
+        ref.read(roomActivityListProvider(id).future),
       ]);
-      final snapshot = await api.getNullable('/v1/rooms/$id/snapshots/latest');
+      final snapshot = await ref.read(roomSnapshotProvider(id).future);
       if (!_roomIsActive(id)) throw StateError('ROOM_REMOVED');
       await Future.wait([
         cache.replaceCommands(id, lists[0]),
@@ -66,7 +345,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         cache.saveSnapshot(id, snapshot),
       ]);
       if (!_roomIsActive(id)) throw StateError('ROOM_REMOVED');
-      return _RoomContent(
+      return RoomContent(
         commands: lists[0],
         proposals: lists[1],
         executions: lists[2],
@@ -82,7 +361,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         cache.executions(id),
         cache.snapshot(id),
       ]);
-      return _RoomContent(
+      return RoomContent(
         commands: cached[0] as List<Map<String, dynamic>>,
         proposals: cached[1] as List<Map<String, dynamic>>,
         executions: cached[2] as List<Map<String, dynamic>>,
@@ -109,7 +388,51 @@ class _RoomPageState extends ConsumerState<RoomPage> {
   }
 
   void _reload() {
-    _content = _load();
+    final roomId = widget.room['id'] as String;
+    ref.invalidate(roomCommandListProvider(roomId));
+    ref.invalidate(roomProposalListProvider(roomId));
+    ref.invalidate(roomExecutionListProvider(roomId));
+    ref.invalidate(roomActivityListProvider(roomId));
+    ref.invalidate(roomSnapshotProvider(roomId));
+    _content = _load().then((content) {
+      if (mounted) _latestContent = content;
+      return content;
+    });
+  }
+
+  bool _applyRealtimeUpdate(RealtimeHomeUpdate update) {
+    final current = _latestContent;
+    if (current == null) return false;
+    final roomId = widget.room['id'] as String;
+    final patched = reduceRoomContentForRealtimeUpdate(
+      current: current,
+      update: update,
+      roomId: roomId,
+    );
+    if (identical(patched, current)) {
+      return false;
+    }
+    _latestContent = patched;
+    _content = Future.value(patched);
+    final cache = ref.read(displayCacheProvider);
+    final commands = patched.commands;
+    final proposals = patched.proposals;
+    final executions = patched.executions;
+    final snapshot = patched.snapshot;
+    if (!identical(commands, current.commands)) {
+      unawaited(cache.replaceCommands(roomId, commands));
+    }
+    if (!identical(proposals, current.proposals)) {
+      unawaited(cache.replaceProposals(roomId, proposals));
+    }
+    if (!identical(executions, current.executions)) {
+      unawaited(cache.replaceExecutions(roomId, executions));
+    }
+    if (!identical(snapshot, current.snapshot)) {
+      unawaited(cache.saveSnapshot(roomId, snapshot));
+    }
+    setState(() {});
+    return true;
   }
 
   Future<void> _createCommand() async {
@@ -179,8 +502,19 @@ class _RoomPageState extends ConsumerState<RoomPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(realtimeHomeUpdateProvider, (previous, next) {
+      if (next == null || identical(previous, next) || !mounted) return;
+      if (_applyRealtimeUpdate(next)) {
+        _suppressNextRealtimeRevisionReload = true;
+      }
+    });
     ref.listen(realtimeRevisionProvider, (previous, next) {
-      if (previous != null && mounted) setState(_reload);
+      if (previous == null || !mounted) return;
+      if (_suppressNextRealtimeRevisionReload) {
+        _suppressNextRealtimeRevisionReload = false;
+        return;
+      }
+      setState(_reload);
     });
     final roomId = widget.room['id'] as String;
     ref.listen(connectionGateControllerProvider, (previous, next) {
@@ -238,6 +572,24 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                 : null,
           ),
           IconButton(
+            tooltip: '파일 명령',
+            icon: const Icon(Icons.pending_actions_outlined),
+            onPressed: disconnect == null
+                ? () => Navigator.of(context)
+                      .push<bool>(
+                        MaterialPageRoute(
+                          builder: (_) => FileCommandPage(
+                            roomId: roomId,
+                            rootId: widget.room['rootAlias'] as String? ?? '',
+                          ),
+                        ),
+                      )
+                      .then((changed) {
+                        if (changed == true && mounted) setState(_reload);
+                      })
+                : null,
+          ),
+          IconButton(
             tooltip: '온라인 파일',
             icon: const Icon(Icons.folder_open),
             onPressed: disconnect == null
@@ -268,7 +620,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         icon: const Icon(Icons.auto_fix_high),
         label: const Text('정리 제안 요청'),
       ),
-      body: FutureBuilder<_RoomContent>(
+      body: FutureBuilder<RoomContent>(
         future: _content,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {

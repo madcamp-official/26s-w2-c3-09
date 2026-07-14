@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use file_engine_cli::file_identity::file_id_for_path;
 use file_engine_cli::fs_safety::is_link_or_reparse_point;
 use file_engine_cli::path_guard::{PathGuard, PathGuardError};
 use serde::Serialize;
@@ -403,8 +404,12 @@ pub fn validate_local_transfer_source(
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis());
+    let file_id = file_id_for_path(&resolved).ok_or_else(|| TransferSourceValidationError {
+        failure_code: AgentFileTransferFailureCode::SourceChanged,
+        message: "source file identity is unavailable".to_string(),
+    })?;
     let source_version = AgentFileTransferSourceVersion {
-        file_id: stable_file_id(source_relative_path, metadata.len(), modified_unix_ms),
+        file_id,
         size_bytes: metadata.len(),
         modified_at: unix_ms_to_rfc3339(modified_unix_ms),
     };
@@ -499,9 +504,47 @@ pub(crate) async fn put_upload_file(
     Ok(())
 }
 
+pub(crate) async fn put_upload_bytes(upload_url: &str, bytes: Vec<u8>) -> Result<(), String> {
+    let size_bytes = bytes.len();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(UPLOAD_TIMEOUT_SECONDS))
+        .build()
+        .map_err(|error| format!("cannot configure upload client: {error}"))?;
+    let response = client
+        .put(upload_url)
+        .header("Content-Length", size_bytes.to_string())
+        .body(bytes)
+        .send()
+        .await
+        .map_err(|error| format!("cannot upload encrypted smart cache object: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "upload target rejected encrypted smart cache object with HTTP {}",
+            response.status()
+        ));
+    }
+    Ok(())
+}
+
 fn ensure_source_unchanged(
     source: &ValidatedTransferSource,
 ) -> Result<(), TransferUploadExecutionError> {
+    let symlink_metadata = fs::symlink_metadata(&source.resolved_path).map_err(|error| {
+        TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: format!("cannot re-read source path metadata: {error}"),
+        }
+    })?;
+    if is_link_or_reparse_point(&symlink_metadata, symlink_metadata.file_type()) {
+        return Err(TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: "source path became a symlink, junction, or reparse point".to_string(),
+        });
+    }
     let metadata =
         fs::metadata(&source.resolved_path).map_err(|error| TransferUploadExecutionError {
             transfer_id: source.transfer_id.clone(),
@@ -522,12 +565,15 @@ fn ensure_source_unchanged(
         .ok()
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis());
+    let file_id =
+        file_id_for_path(&source.resolved_path).ok_or_else(|| TransferUploadExecutionError {
+            transfer_id: source.transfer_id.clone(),
+            failure_code: Some(AgentFileTransferFailureCode::SourceChanged),
+            failure_reported: false,
+            message: "source file identity is unavailable before upload completion".to_string(),
+        })?;
     let current = AgentFileTransferSourceVersion {
-        file_id: stable_file_id(
-            &source.source_relative_path,
-            metadata.len(),
-            modified_unix_ms,
-        ),
+        file_id,
         size_bytes: metadata.len(),
         modified_at: unix_ms_to_rfc3339(modified_unix_ms),
     };
@@ -600,34 +646,6 @@ fn outside_root(message: &str) -> TransferSourceValidationError {
         failure_code: AgentFileTransferFailureCode::OutsideManagedRoot,
         message: message.to_string(),
     }
-}
-
-fn stable_file_id(relative_path: &str, size_bytes: u64, modified_unix_ms: Option<u128>) -> String {
-    let modified = modified_unix_ms
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    format!(
-        "hm:{:016x}",
-        fnv1a_64(
-            format!(
-                "{}|{}|{}|{}",
-                normalize_relative_path(relative_path),
-                false,
-                size_bytes,
-                modified
-            )
-            .as_bytes()
-        )
-    )
-}
-
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -718,7 +736,8 @@ mod tests {
         assert_eq!(source.room_id, "room-1");
         assert_eq!(source.source_relative_path, "docs/report.pdf");
         assert_eq!(source.source_version.size_bytes, 5);
-        assert!(source.source_version.file_id.starts_with("hm:"));
+        assert!(!source.source_version.file_id.starts_with("hm:"));
+        assert!(!source.source_version.file_id.is_empty());
         assert!(source.resolved_path.ends_with("report.pdf"));
     }
 
@@ -875,6 +894,26 @@ mod tests {
 
         fs::write(root.join("report.txt"), "new content").expect("change file");
         let error = ensure_source_unchanged(&source).expect_err("source changed");
+
+        assert_eq!(
+            error.failure_code,
+            Some(AgentFileTransferFailureCode::SourceChanged)
+        );
+    }
+
+    #[test]
+    fn source_identity_change_is_detected_before_upload_completion() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("report.txt"), "same-size").expect("file");
+        let mut source =
+            validate_local_transfer_source(root.to_str().expect("root"), "report.txt", None, None)
+                .expect("source");
+        source.source_version.file_id =
+            "test:identity-that-does-not-match-current-file".to_string();
+
+        let error = ensure_source_unchanged(&source).expect_err("source identity changed");
 
         assert_eq!(
             error.failure_code,

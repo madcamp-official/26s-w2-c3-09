@@ -10,5 +10,6 @@ import { TransfersService } from './transfers.service';
   imports: [DatabaseModule, AuthModule, SyncModule, RedisModule],
   controllers: [TransfersController],
   providers: [TransfersService, ObjectStorageService],
+  exports: [TransfersService],
 })
 export class TransfersModule {}

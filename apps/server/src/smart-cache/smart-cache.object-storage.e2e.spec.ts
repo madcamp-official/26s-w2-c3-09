@@ -110,11 +110,25 @@ describeObjectStorage('Smart cache production object lifecycle', () => {
     const iv = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', key, iv);
     const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const ciphertext = Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
+    const ciphertext = Buffer.concat([
+      Buffer.from('MKS1'),
+      iv,
+      encrypted,
+      cipher.getAuthTag(),
+    ]);
     const sha256 = createHash('sha256').update(ciphertext).digest('hex');
+    const plaintextSha256 = createHash('sha256').update(plaintext).digest('hex');
     const sourceVersionHash = createHash('sha256')
       .update(plaintext)
       .digest('hex');
+    const encryptionMetadata = {
+      algorithm: 'AES-256-GCM' as const,
+      format: 'MKS1_NONCE_CIPHERTEXT_TAG' as const,
+      keyId: `mks1-${randomBytes(16).toString('hex')}`,
+      nonceHex: iv.toString('hex'),
+      plaintextSizeBytes: plaintext.length,
+      plaintextSha256,
+    };
 
     const batch = await service.submit(userId, deviceId, randomUUID(), {
       roomId,
@@ -148,23 +162,28 @@ describeObjectStorage('Smart cache production object lifecycle', () => {
         sha256,
         usageScore: 100,
         manualPin: false,
+        encryptionMetadata,
       },
     );
     const serialized = JSON.stringify(cached);
     expect(serialized).not.toContain(key.toString('hex'));
     expect(serialized).not.toContain(plaintext.toString('utf8'));
+    expect(cached.encryptionMetadata).toEqual(encryptionMetadata);
 
     const target = await service.download(userId, cached.id);
+    expect(target.encryptionMetadata).toEqual(encryptionMetadata);
     const downloadResponse = await fetch(target.downloadUrl);
     expect(downloadResponse.status).toBe(200);
     const downloaded = Buffer.from(await downloadResponse.arrayBuffer());
     expect(createHash('sha256').update(downloaded).digest('hex')).toBe(sha256);
-    const downloadedIv = downloaded.subarray(0, 12);
-    const tag = downloaded.subarray(12, 28);
+    expect(downloaded.subarray(0, 4).toString('utf8')).toBe('MKS1');
+    const downloadedIv = downloaded.subarray(4, 16);
+    const encryptedBody = downloaded.subarray(16, downloaded.length - 16);
+    const tag = downloaded.subarray(downloaded.length - 16);
     const decipher = createDecipheriv('aes-256-gcm', key, downloadedIv);
     decipher.setAuthTag(tag);
     expect(
-      Buffer.concat([decipher.update(downloaded.subarray(28)), decipher.final()]),
+      Buffer.concat([decipher.update(encryptedBody), decipher.final()]),
     ).toEqual(plaintext);
 
     await service.updatePolicy(userId, roomId, {

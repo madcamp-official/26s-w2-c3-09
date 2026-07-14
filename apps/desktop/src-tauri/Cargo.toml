@@ -9,6 +9,7 @@ default = []
 tauri-commands = ["dep:tauri", "dep:tauri-plugin-autostart", "dep:tauri-plugin-dialog", "tauri/tray-icon", "dep:rust_socketio", "dep:futures-util"]
 
 [dependencies]
+aes-gcm = "0.10"
 file-engine-cli = { path = "../../../tools/file-engine-cli" }
 futures-util = { version = "0.3", optional = true }
 keyring = "4.1.4"

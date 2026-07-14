@@ -148,24 +148,61 @@ String disconnectErrorMessage(Object error) {
 }
 
 abstract interface class ConnectionControlApi {
-  Future<List<Map<String, dynamic>>> listDevices();
-  Future<List<Map<String, dynamic>>> listRooms();
+  Future<ConnectionGateData> summary();
   Future<void> claimPairing(String code);
   Future<void> revokeDevice(String deviceId, String idempotencyKey);
   Future<void> removeRoom(String roomId, String idempotencyKey);
+}
+
+const connectionGateSummaryPath = '/v1/connections/summary';
+
+List<Map<String, dynamic>> connectionItemsFromSummary(
+  Map<String, dynamic> summary,
+  String key,
+) {
+  final raw = summary[key];
+  if (raw is! List) {
+    throw FormatException('INVALID_CONNECTION_SUMMARY_${key.toUpperCase()}');
+  }
+  return raw
+      .map((item) {
+        if (item is! Map) {
+          throw FormatException(
+            'INVALID_CONNECTION_SUMMARY_${key.toUpperCase()}',
+          );
+        }
+        return Map<String, dynamic>.from(item);
+      })
+      .toList(growable: false);
 }
 
 class ApiConnectionControl implements ConnectionControlApi {
   ApiConnectionControl(this._api);
 
   final ApiClient _api;
+  Future<ConnectionGateData>? _connectionSummaryInFlight;
 
   @override
-  Future<List<Map<String, dynamic>>> listDevices() =>
-      _api.getList('/v1/devices');
-
-  @override
-  Future<List<Map<String, dynamic>>> listRooms() => _api.getList('/v1/rooms');
+  Future<ConnectionGateData> summary() {
+    final existing = _connectionSummaryInFlight;
+    if (existing != null) return existing;
+    late final Future<ConnectionGateData> request;
+    request = _api
+        .get(connectionGateSummaryPath)
+        .then(
+          (summary) => ConnectionGateData(
+            devices: connectionItemsFromSummary(summary, 'devices'),
+            rooms: connectionItemsFromSummary(summary, 'rooms'),
+          ),
+        )
+        .whenComplete(() {
+          if (identical(_connectionSummaryInFlight, request)) {
+            _connectionSummaryInFlight = null;
+          }
+        });
+    _connectionSummaryInFlight = request;
+    return request;
+  }
 
   @override
   Future<void> claimPairing(String code) async {
@@ -425,8 +462,8 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
 
   Future<ConnectionGateData> _readAuthoritative() async {
     final api = ref.read(connectionControlApiProvider);
-    final results = await Future.wait([api.listDevices(), api.listRooms()]);
-    final devices = results[0]
+    final summary = await api.summary();
+    final devices = summary.devices
         .where(isActiveConnectionItem)
         .map((value) => Map<String, dynamic>.from(value))
         .toList(growable: false);
@@ -434,7 +471,7 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
         .map((device) => device['id'])
         .whereType<String>()
         .toSet();
-    final rooms = results[1]
+    final rooms = summary.rooms
         .where(isActiveConnectionItem)
         .where((room) {
           final desktopDeviceId = room['desktopDeviceId'];
@@ -481,8 +518,40 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
       return;
     }
     if (event.eventType == 'device.paired') {
-      await reconcile();
+      final device = event.device;
+      if (device != null) {
+        await _upsertDevice(device);
+      } else {
+        await reconcile();
+      }
     }
+  }
+
+  Future<void> _upsertDevice(Map<String, dynamic> device) async {
+    if (!isActiveConnectionItem(device)) return;
+    final deviceId = device['id'];
+    if (deviceId is! String) return;
+    _stateRevision++;
+    await _serializeMutation(() async {
+      final current =
+          state.asData?.value ??
+          ConnectionGateData(devices: const [], rooms: const []);
+      final sanitizedDevice = Map<String, dynamic>.from(device);
+      final devices = <Map<String, dynamic>>[
+        for (final item in current.devices)
+          if (item['id'] != deviceId) item,
+        sanitizedDevice,
+      ];
+      final nextOperations = Map<String, DisconnectOperation>.from(
+        current.operations,
+      )..remove(_operationKey(DisconnectKind.device, deviceId));
+      final next = current.copyWith(
+        devices: devices,
+        operations: nextOperations,
+      );
+      await _replaceAuthoritativeCache(next);
+      state = AsyncData(next);
+    });
   }
 
   Future<void> _removeDevice(String deviceId) async {

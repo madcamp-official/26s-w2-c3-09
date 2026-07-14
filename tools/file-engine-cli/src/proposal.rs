@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -27,6 +28,8 @@ pub struct Proposal {
     pub content: Option<String>,
     pub source_size_bytes: u64,
     pub source_modified_unix_ms: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_file_id: Option<String>,
     pub reason: String,
     pub status: ProposalStatus,
 }
@@ -36,6 +39,8 @@ pub struct Proposal {
 pub enum ProposalAction {
     Move,
     Trash,
+    CreateDir,
+    CreateFile,
     ReadmeWrite,
 }
 
@@ -90,20 +95,28 @@ fn propose_for_analysis_with_rule_set(
     rule_set: RuleSet,
 ) -> Result<ProposalReport, ProposalError> {
     rule_set.validate().map_err(ProposalError::Rule)?;
-    let existing_paths = report
+    let mut existing_paths = report
         .files
         .iter()
         .map(|file| normalize_relative_path(&file.path))
-        .collect();
+        .collect::<HashSet<_>>();
+    existing_paths.extend(
+        report
+            .directories
+            .iter()
+            .map(|directory| normalize_relative_path(directory)),
+    );
     let context = RuleContext {
         existing_paths,
         now_unix_ms: unix_ms(),
     };
 
+    let mut seen_proposal_ids = HashSet::new();
     let proposals = report
         .files
         .iter()
         .filter_map(|file| rule_set.propose(file, &context))
+        .filter(|proposal| seen_proposal_ids.insert(proposal.proposal_id.clone()))
         .collect::<Vec<_>>();
 
     Ok(ProposalReport {
@@ -150,6 +163,8 @@ impl ProposalAction {
         match self {
             ProposalAction::Move => "move",
             ProposalAction::Trash => "trash",
+            ProposalAction::CreateDir => "create_dir",
+            ProposalAction::CreateFile => "create_file",
             ProposalAction::ReadmeWrite => "readme_write",
         }
     }
@@ -197,7 +212,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        propose_for_root, propose_for_root_with_rule_set, read_proposal_file, ProposalStatus,
+        propose_for_root, propose_for_root_with_rule_set, read_proposal_file, ProposalAction,
+        ProposalStatus,
     };
 
     #[test]
@@ -252,11 +268,71 @@ mod tests {
                 then: crate::rules::Action {
                     move_to: None,
                     trash: true,
+                    create_dir: None,
                 },
             }],
         };
 
         assert!(propose_for_root_with_rule_set(&root, invalid).is_err());
+    }
+
+    #[test]
+    fn create_dir_contract_rule_produces_one_deduplicated_proposal() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("downloads")).expect("create downloads");
+        fs::write(root.join("downloads").join("old.pdf"), "pdf").expect("write pdf");
+        fs::write(root.join("downloads").join("report.pdf"), "pdf").expect("write pdf");
+
+        let rule_set = crate::rules::RuleSet::from_contract_definition(
+            "create-archive",
+            0,
+            serde_json::json!({
+                "match": "ALL",
+                "conditions": [
+                    {"field": "extension", "operator": "IN", "value": [".pdf"]}
+                ],
+                "action": {"type": "CREATE_DIR", "relativePath": "Archive/PDF"}
+            }),
+        )
+        .expect("contract rule");
+
+        let report = propose_for_root_with_rule_set(&root, rule_set).expect("propose");
+
+        assert_eq!(report.proposals.len(), 1);
+        assert_eq!(report.proposals[0].action, ProposalAction::CreateDir);
+        assert_eq!(report.proposals[0].to, "Archive/PDF");
+        assert_eq!(report.proposals[0].status, ProposalStatus::Ready);
+    }
+
+    #[test]
+    fn create_dir_contract_rule_detects_existing_directory() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("downloads")).expect("create downloads");
+        fs::create_dir_all(root.join("Archive").join("PDF")).expect("create existing archive");
+        fs::write(root.join("downloads").join("old.pdf"), "pdf").expect("write pdf");
+
+        let rule_set = crate::rules::RuleSet::from_contract_definition(
+            "create-archive",
+            0,
+            serde_json::json!({
+                "match": "ALL",
+                "conditions": [
+                    {"field": "extension", "operator": "IN", "value": [".pdf"]}
+                ],
+                "action": {"type": "CREATE_DIR", "relativePath": "Archive/PDF"}
+            }),
+        )
+        .expect("contract rule");
+
+        let report = propose_for_root_with_rule_set(&root, rule_set).expect("propose");
+
+        assert_eq!(report.proposals.len(), 1);
+        assert_eq!(
+            report.proposals[0].status,
+            ProposalStatus::DestinationExists
+        );
     }
 
     #[test]
@@ -297,6 +373,7 @@ mod tests {
         assert!(root.join("inbox").join("photo.png").exists());
         assert!(report.proposals[0].proposal_id.starts_with("move:"));
         assert_eq!(report.proposals[0].proposal_id.len(), 21);
+        assert!(report.proposals[0].source_file_id.is_some());
     }
 
     #[test]

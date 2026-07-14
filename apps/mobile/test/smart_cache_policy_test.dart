@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mousekeeper/features/files/smart_cache_page.dart';
 
 void main() {
@@ -27,6 +29,137 @@ void main() {
         excludedPatterns: '',
         enabled: true,
       ),
+      throwsFormatException,
+    );
+  });
+
+  test(
+    'download completion access event is explicit and scoped to one file',
+    () {
+      expect(
+        smartCacheFilesPath('room-1'),
+        '/v1/rooms/room-1/smart-cache/files',
+      );
+      expect(
+        smartCacheAccessEventPath('cached-file-1'),
+        '/v1/cached-files/cached-file-1/access-events',
+      );
+      expect(smartCacheDownloadCompletedAccessEvent(), {
+        'eventType': 'DOWNLOAD_COMPLETED',
+      });
+    },
+  );
+
+  test(
+    'smart-cache read providers request policy and file projections',
+    () async {
+      final paths = <String>[];
+      final container = ProviderContainer(
+        overrides: [
+          smartCacheGetProvider.overrideWithValue((path) async {
+            paths.add(path);
+            if (path.endsWith('/smart-cache-policy')) {
+              return {'enabled': true};
+            }
+            return {'files': const []};
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final policy = await container.read(
+        smartCachePolicyProvider('room-1').future,
+      );
+      final files = await container.read(
+        smartCacheFilesProvider('room-1').future,
+      );
+
+      expect(policy, {'enabled': true});
+      expect(files, {'files': const []});
+      expect(paths, [
+        '/v1/rooms/room-1/smart-cache-policy',
+        '/v1/rooms/room-1/smart-cache/files',
+      ]);
+    },
+  );
+
+  test('encrypted cached files fail closed until key sync exists', () {
+    expect(
+      () => ensureSmartCacheDownloadDecryptable({
+        'downloadUrl': 'https://storage.example/cache/object',
+        'sha256': List.filled(64, 'a').join(),
+        'encryptionMetadata': {
+          'algorithm': 'AES-256-GCM',
+          'format': 'MKS1_NONCE_CIPHERTEXT_TAG',
+          'keyId': 'mks1-test-key-1234',
+        },
+      }),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('UNCONFIGURED'),
+        ),
+      ),
+    );
+    expect(
+      () => ensureSmartCacheDownloadDecryptable({
+        'downloadUrl': 'https://storage.example/cache/object',
+        'sha256': List.filled(64, 'a').join(),
+      }),
+      returnsNormally,
+    );
+  });
+
+  test('offline fallback payload preserves verified local cache metadata', () {
+    final files = [
+      {
+        'id': 'cached-file-1',
+        'sourceRelativePath': 'reports/final.pdf',
+        'availabilityStatus': 'AVAILABLE',
+        'freshnessStatus': 'UNVERIFIED_OFFLINE',
+        'localDownloadPath': '/local/reports/final.pdf',
+        'sha256': List.filled(64, 'a').join(),
+        'lastVerifiedAt': '2026-07-14T02:03:04.000Z',
+      },
+    ];
+
+    expect(smartCacheFilesFromPayload({'files': files}), files);
+    expect(smartCacheOfflineFallbackPayload(files), {
+      'files': files,
+      'pendingCommandWarning': false,
+      'desktopOnline': false,
+      'offlineFallback': true,
+    });
+  });
+
+  test('smart-cache offline fallback is limited to transport failures', () {
+    final connectionError = DioException(
+      requestOptions: RequestOptions(
+        path: '/v1/rooms/room-a/smart-cache/files',
+      ),
+      type: DioExceptionType.connectionError,
+    );
+    final serverError = DioException(
+      requestOptions: RequestOptions(
+        path: '/v1/rooms/room-a/smart-cache/files',
+      ),
+      response: Response<Map<String, dynamic>>(
+        requestOptions: RequestOptions(
+          path: '/v1/rooms/room-a/smart-cache/files',
+        ),
+        statusCode: 500,
+        data: const {'code': 'INTERNAL_SERVER_ERROR'},
+      ),
+      type: DioExceptionType.badResponse,
+    );
+
+    expect(isSmartCacheOfflineFallbackError(connectionError), isTrue);
+    expect(isSmartCacheOfflineFallbackError(serverError), isFalse);
+    expect(
+      () => smartCacheFilesFromPayload({
+        'files': ['not-a-file-map'],
+      }),
       throwsFormatException,
     );
   });
