@@ -180,7 +180,7 @@ fn build_house_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWi
         tauri::WebviewUrl::App("index.html".into()),
     )
     .title("MouseKeeper House")
-    .inner_size(590.0, 590.0)
+    .inner_size(820.0, 590.0)
     .resizable(false)
     .decorations(false)
     .transparent(true)

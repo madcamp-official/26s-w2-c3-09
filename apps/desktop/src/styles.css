@@ -1093,8 +1093,8 @@ body.house-overlay-body #root {
 }
 
 body.house-overlay-body .house-overlay {
-  display: grid;
-  place-items: center;
+  position: relative;
+  display: block;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -1103,9 +1103,12 @@ body.house-overlay-body .house-overlay {
 }
 
 body.house-overlay-body .house-drag-surface {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: grid;
   place-items: center;
-  width: min(590px, 100vw);
+  width: min(590px, 72vw);
   height: min(590px, 100vh);
   min-height: 0;
   border: 0;
@@ -2937,11 +2940,11 @@ html.overlay-root .house-detail-panel {
 }
 
 html.overlay-root .house-quick-menu {
-  top: 78px;
-  right: 34px;
+  top: 72px;
+  left: 18px;
   display: grid;
   gap: 6px;
-  width: 188px;
+  width: 198px;
   padding: 8px;
 }
 

@@ -35,7 +35,7 @@ const HOUSE_REFRESH_MS = 2000;
 const HOUSE_INSET = 0.2;
 // How long the mouse stays put after the user deliberately drags it into the house and lets go —
 // distinct from the brief REST_MS pause it takes when it wanders home on its own.
-const USER_PLACED_HOME_REST_MS = 5 * 60 * 1000;
+const USER_PLACED_HOME_REST_MS = 1600;
 
 type Point = { x: number; y: number };
 type Size = { w: number; h: number };
@@ -56,6 +56,7 @@ type WanderState = {
   // Set when the most recent hand-off back to the wander loop followed an actual user drag (as
   // opposed to just opening the chat bubble); consumed the next time the loop resyncs position.
   justDragEnded: boolean;
+  confinedToHouse: boolean;
 };
 
 function randRange([min, max]: readonly [number, number]) {
@@ -92,7 +93,8 @@ export function useCharacterWander(
     house: null,
     houseCheckedAt: 0,
     needResync: true,
-    justDragEnded: false
+    justDragEnded: false,
+    confinedToHouse: false
   });
   const dragReleaseSeenRef = useRef(dragReleaseSignal);
 
@@ -160,11 +162,14 @@ export function useCharacterWander(
           return;
         }
         const [position, size] = await Promise.all([house.outerPosition(), house.outerSize()]);
+        const houseSide = Math.min(size.width, size.height);
+        const houseX = position.x + Math.max(0, size.width - houseSide);
+        const houseY = position.y + Math.max(0, size.height - houseSide);
         s.house = {
-          x: position.x + size.width * HOUSE_INSET,
-          y: position.y + size.height * HOUSE_INSET,
-          w: size.width * (1 - HOUSE_INSET * 2),
-          h: size.height * (1 - HOUSE_INSET * 2)
+          x: houseX + houseSide * HOUSE_INSET,
+          y: houseY + houseSide * HOUSE_INSET,
+          w: houseSide * (1 - HOUSE_INSET * 2),
+          h: houseSide * (1 - HOUSE_INSET * 2)
         };
       } catch {
         s.house = null;
@@ -187,6 +192,18 @@ export function useCharacterWander(
         if (!s.house || !centerInside(candidate, s.size, s.house)) return candidate;
       }
       return randomTarget();
+    }
+
+    function randomTargetInHouse(): Point {
+      if (!s.house) return randomTarget();
+      const minX = s.house.x - s.size.w / 2;
+      const maxX = s.house.x + s.house.w - s.size.w / 2;
+      const minY = s.house.y - s.size.h / 2;
+      const maxY = s.house.y + s.house.h - s.size.h / 2;
+      return {
+        x: minX + Math.random() * Math.max(1, maxX - minX),
+        y: minY + Math.random() * Math.max(1, maxY - minY)
+      };
     }
 
     function beginWalk(now: number, target: Point) {
@@ -230,6 +247,9 @@ export function useCharacterWander(
         const justDragEnded = s.justDragEnded;
         s.justDragEnded = false;
         const droppedAtHome = s.house ? centerInside(s.pos, s.size, s.house) : false;
+        if (justDragEnded) {
+          s.confinedToHouse = droppedAtHome;
+        }
         if (justDragEnded && droppedAtHome) {
           // The user just dragged the mouse into the house and let go — keep it home for a long
           // cooldown instead of the brief natural rest.
@@ -245,7 +265,9 @@ export function useCharacterWander(
       const insideHouse = s.house ? centerInside(s.pos, s.size, s.house) : false;
 
       if (s.phase === "resting") {
-        if (now >= s.phaseUntil) beginWalk(now, randomTargetOutsideHouse());
+        if (now >= s.phaseUntil) {
+          beginWalk(now, s.confinedToHouse && s.house ? randomTargetInHouse() : randomTargetOutsideHouse());
+        }
         return;
       }
 
@@ -255,7 +277,7 @@ export function useCharacterWander(
             applyPhase("resting");
             s.phaseUntil = now + randRange(REST_MS);
           } else {
-            beginWalk(now, randomTarget());
+            beginWalk(now, s.confinedToHouse && s.house ? randomTargetInHouse() : randomTarget());
           }
         }
         return;
