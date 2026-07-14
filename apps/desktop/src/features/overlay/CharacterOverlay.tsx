@@ -114,6 +114,7 @@ export function CharacterOverlay() {
   const [chatMessages, setChatMessages] = useState<AgentChatMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [answerPending, setAnswerPending] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [bubbleOpen, setBubbleOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -199,7 +200,7 @@ export function CharacterOverlay() {
   }, [activeRoomId, activeRoomName, chatOpen]);
 
   useEffect(() => {
-    if (!chatOpen || !chatSession) return;
+    if (!chatOpen || !chatSession || answerPending) return;
     const timer = window.setInterval(() => {
       void listAgentChatMessages(chatSession.session_id)
         .then(async (messages) => {
@@ -209,7 +210,7 @@ export function CharacterOverlay() {
         .catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [chatOpen, chatSession]);
+  }, [answerPending, chatOpen, chatSession]);
 
   async function setHouseDropTarget(active: boolean) {
     if (houseDropActive.current === active) return;
@@ -339,24 +340,47 @@ export function CharacterOverlay() {
 
   async function submitDraft() {
     const trimmed = draft.trim();
+    if (!trimmed || !activeRoomId) {
+      setNotice("먼저 관리 폴더를 서버 room과 연결해야 채팅을 보낼 수 있어요.");
+      return;
+    }
+    const optimisticId = `local-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
+    const optimisticMessage: AgentChatMessage = {
+      message_id: optimisticId,
+      room_id: activeRoomId,
+      session_id: chatSession?.session_id ?? null,
+      sender_type: "USER",
+      message_type: "TEXT",
+      content: trimmed,
+      structured_payload: null,
+      command_id: null,
+      created_at: new Date().toISOString()
+    };
     setNotice(null);
     setBusy(true);
+    setAnswerPending(true);
+    setDraft("");
+    setChatMessages((items) => appendUniqueMessages(items, [optimisticMessage]));
     try {
-      if (!activeRoomId) {
-        throw new Error("먼저 관리 폴더를 서버 room과 연결해야 채팅을 보낼 수 있어요.");
-      }
       const session = chatSession ?? (await ensureRoomChatSession(activeRoomId, activeRoomName));
       if (!chatSession) setChatSession(session);
       const result = await sendAgentChatMessage(session.session_id, trimmed);
       const sentMessages = [result.message, result.assistant].filter(isChatMessage);
       await markAgentChatSessionRead(session.session_id, lastAgentChatMessageId(sentMessages)).catch(() => undefined);
-      setChatMessages((items) => appendUniqueMessages(items, sentMessages));
-      setDraft("");
+      setChatMessages((items) =>
+        appendUniqueMessages(
+          items.filter((message) => message.message_id !== optimisticId),
+          sentMessages
+        )
+      );
       setNotice(aiNotice(result.ai_status));
     } catch (cause) {
+      setChatMessages((items) => items.filter((message) => message.message_id !== optimisticId));
+      setDraft((current) => current || trimmed);
       setNotice(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
+      setAnswerPending(false);
     }
   }
 
@@ -409,6 +433,7 @@ export function CharacterOverlay() {
           {chatOpen ? (
             <RoomChatPanel
               avatarUrl={chatAvatarUrl}
+              answerPending={answerPending}
               busy={busy}
               draft={draft}
               event={event}
@@ -631,6 +656,7 @@ function aiNotice(status: string) {
 
 function RoomChatPanel({
   avatarUrl,
+  answerPending,
   busy,
   draft,
   event,
@@ -648,6 +674,7 @@ function RoomChatPanel({
   onSubmit
 }: {
   avatarUrl: string;
+  answerPending: boolean;
   busy: boolean;
   draft: string;
   event: CharacterEvent;
@@ -736,6 +763,8 @@ function RoomChatPanel({
         ))}
       </div>
 
+      {answerPending ? <p className="character-thinking">답을 만들고 있어요!</p> : null}
+
       {notice ? <p className="character-notice">{notice}</p> : null}
 
       <form
@@ -754,7 +783,7 @@ function RoomChatPanel({
           autoFocus
         />
         <button type="submit" disabled={busy || draft.trim().length === 0}>
-          {busy ? "전송 중" : "전송"}
+          전송
         </button>
       </form>
     </div>

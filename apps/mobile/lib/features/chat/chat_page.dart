@@ -375,7 +375,6 @@ Map<String, dynamic> optimisticUserChatMessage({
   'structuredPayload': null,
   'commandId': null,
   'createdAt': DateTime.now().toUtc().toIso8601String(),
-  'localStatus': 'SENDING',
 };
 
 List<Map<String, dynamic>> removeChatMessageById(
@@ -1202,8 +1201,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       maxLength: 2000,
                       enabled:
                           _conversation.selectedSessionId != null &&
-                          !selectedIsPendingApproval &&
-                          !_sending,
+                          !selectedIsPendingApproval,
                       decoration: const InputDecoration(
                         hintText: 'AI에게 파일 정리 요청을 말로 입력하세요',
                         border: OutlineInputBorder(),
@@ -1280,41 +1278,58 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         ),
       );
     }
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.all(16),
-      itemCount:
-          _conversation.messages.length +
-          (_conversation.hasMoreMessages ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == _conversation.messages.length) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: OutlinedButton.icon(
-              key: const ValueKey('chat-load-more-messages'),
-              onPressed: _loadingMore
-                  ? null
-                  : () => unawaited(_loadMoreMessages()),
-              icon: _loadingMore
-                  ? const SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.expand_more),
-              label: const Text('다음 메시지 더 보기'),
+    return Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _scrollController,
+            padding: const EdgeInsets.all(16),
+            itemCount:
+                _conversation.messages.length +
+                (_conversation.hasMoreMessages ? 1 : 0),
+            itemBuilder: (context, index) {
+              if (index == _conversation.messages.length) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('chat-load-more-messages'),
+                    onPressed: _loadingMore
+                        ? null
+                        : () => unawaited(_loadMoreMessages()),
+                    icon: _loadingMore
+                        ? const SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.expand_more),
+                    label: const Text('다음 메시지 더 보기'),
+                  ),
+                );
+              }
+              return _ChatBubble(
+                message: _conversation.messages[index],
+                busyDraftIds: _draftingIds,
+                onConfirmDraft: (draftId) =>
+                    unawaited(_confirmCommandDraft(draftId)),
+                onRejectDraft: (draftId) =>
+                    unawaited(_rejectCommandDraft(draftId)),
+                onConfirmRuleDraft: (draftId) =>
+                    unawaited(_confirmRuleDraft(draftId)),
+                onRejectRuleDraft: (draftId) =>
+                    unawaited(_rejectRuleDraft(draftId)),
+              );
+            },
+          ),
+        ),
+        if (_sending)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('답을 만들고 있어요!', key: ValueKey('chat-answer-pending')),
             ),
-          );
-        }
-        return _ChatBubble(
-          message: _conversation.messages[index],
-          busyDraftIds: _draftingIds,
-          onConfirmDraft: (draftId) => unawaited(_confirmCommandDraft(draftId)),
-          onRejectDraft: (draftId) => unawaited(_rejectCommandDraft(draftId)),
-          onConfirmRuleDraft: (draftId) =>
-              unawaited(_confirmRuleDraft(draftId)),
-          onRejectRuleDraft: (draftId) => unawaited(_rejectRuleDraft(draftId)),
-        );
-      },
+          ),
+      ],
     );
   }
 }
@@ -1593,7 +1608,6 @@ class _ChatBubble extends StatelessWidget {
     final draftStatus = actionDraftStatusFromMessage(message);
     final draftBusy = draftId != null && busyDraftIds.contains(draftId);
     final keyPrefix = isRuleDraft ? 'chat-rule-draft' : 'chat-command-draft';
-    final localStatus = message['localStatus'] as String?;
     return Align(
       alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Card(
@@ -1610,15 +1624,6 @@ class _ChatBubble extends StatelessWidget {
               if (isDraft)
                 Text('확인 카드', style: Theme.of(context).textTheme.labelMedium),
               Text(message['content'] as String? ?? ''),
-              if (localStatus == 'SENDING') ...[
-                const SizedBox(height: 4),
-                Text(
-                  '보내는 중…',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-                ),
-              ],
               if (isDraft && draftId != null) ...[
                 const SizedBox(height: 8),
                 if (draftStatus == 'DRAFT')

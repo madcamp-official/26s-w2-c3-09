@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -192,6 +194,40 @@ void main() {
     );
     expect(gateway.messageLoads, {'s1': 1});
     expect(gateway.sentMessages, ['정리해줘']);
+  });
+
+  testWidgets('sending is optimistic and shows only the AI pending notice', (
+    tester,
+  ) async {
+    final pending = Completer<Map<String, dynamic>>();
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화')],
+      messagesBySession: {'s1': []},
+      sendCompleter: pending,
+    );
+
+    await _pumpChat(tester, gateway);
+    await tester.enterText(
+      find.byKey(const ValueKey('chat-message-field')),
+      '바로 보이는 메시지',
+    );
+    await tester.tap(find.byKey(const ValueKey('chat-send-button')));
+    await tester.pump();
+
+    expect(find.text('바로 보이는 메시지'), findsOneWidget);
+    expect(find.text('보내는 중…'), findsNothing);
+    expect(find.byKey(const ValueKey('chat-answer-pending')), findsOneWidget);
+
+    pending.complete({
+      'message': _message('m-user', 's1', 'USER', '바로 보이는 메시지'),
+      'assistant': _message('m-ai', 's1', 'ASSISTANT', '답변 완료'),
+      'aiStatus': 'READY',
+      'ai': {'status': 'READY', 'kind': 'NO_ACTION'},
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.text('답변 완료'), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-answer-pending')), findsNothing);
   });
 
   testWidgets('confirming a command draft patches the message without reload', (
@@ -517,6 +553,7 @@ class _FakeChatGateway implements ChatGateway {
     required this.sessions,
     required this.messagesBySession,
     this.sendResult,
+    this.sendCompleter,
     this.createError,
   });
 
@@ -524,6 +561,7 @@ class _FakeChatGateway implements ChatGateway {
   final Map<String, List<Map<String, dynamic>>> messagesBySession;
   final List<Map<String, dynamic>> pendingProposals = const [];
   final Map<String, dynamic>? sendResult;
+  final Completer<Map<String, dynamic>>? sendCompleter;
   final Object? createError;
   final Map<String, int> messageLoads = {};
   final List<Map<String, Object?>> messageRequests = [];
@@ -627,6 +665,8 @@ class _FakeChatGateway implements ChatGateway {
     String content,
   ) async {
     sentMessages.add(content);
+    final pending = sendCompleter;
+    if (pending != null) return pending.future;
     return sendResult ??
         {
           'message': _message(
