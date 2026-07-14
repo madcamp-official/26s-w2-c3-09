@@ -117,7 +117,12 @@ export class AuthService {
         .where(eq(devices.id, subject))
         .limit(1)
     )[0];
-    if (!row) throw this.invalidDeviceToken();
+    if (!row) {
+      throw new UnauthorizedException({
+        code: 'DEVICE_NOT_REGISTERED',
+        message: 'Desktop device pairing no longer exists',
+      });
+    }
     return {
       status: row.device.status,
       principal: {

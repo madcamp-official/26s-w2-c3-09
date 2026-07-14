@@ -84,7 +84,7 @@ describe('AuthService desktop device status', () => {
     ).resolves.toMatchObject({ deviceId });
   });
 
-  it('does not label an invalid signature or missing subject as revoked', async () => {
+  it('distinguishes an invalid signature from a removed device row', async () => {
     const { database, select } = databaseWithStatus(null);
     const service = new AuthService(database as never);
     jest.mocked(verify).mockImplementationOnce(() => {
@@ -100,7 +100,7 @@ describe('AuthService desktop device status', () => {
     jest.mocked(verify).mockReturnValueOnce({ sub: deviceId } as never);
     await expectUnauthorizedCode(
       service.authenticateDevice('unknown-device'),
-      'UNAUTHENTICATED',
+      'DEVICE_NOT_REGISTERED',
     );
   });
 });
