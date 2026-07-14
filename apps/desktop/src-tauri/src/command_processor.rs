@@ -25,6 +25,9 @@ const RENAME: &str = "RENAME";
 const MOVE: &str = "MOVE";
 const TRASH: &str = "TRASH";
 const CREATE: &str = "CREATE";
+const FIND: &str = "FIND";
+const DOWNLOAD: &str = "DOWNLOAD";
+const UPLOAD: &str = "UPLOAD";
 const ORGANIZE: &str = "ORGANIZE";
 const ORGANIZE_FILES: &str = "organize_files";
 const ORGANIZE_ROOT: &str = "ORGANIZE_ROOT";
@@ -207,7 +210,43 @@ pub async fn process_commands(
     };
 
     for command in commands {
-        if !is_supported_command(&command) || command.status != "QUEUED" {
+        if command.status != "QUEUED" {
+            report.skipped_count += 1;
+            report.results.push(CommandProcessingResult {
+                command_id: command.command_id,
+                command_type: command.command_type,
+                status: CommandProcessingStatus::Skipped,
+                message: Some(
+                    "command type or status is not handled by the desktop proposal processor"
+                        .to_string(),
+                ),
+                proposal_item_count: 0,
+            });
+            continue;
+        }
+
+        if is_contract_command_without_desktop_handler(&command) {
+            report.processed_count += 1;
+            report.failed_count += 1;
+            let sync_error = enqueue_command_status(outbox, &command.command_id, "FAILED").err();
+            report.results.push(CommandProcessingResult {
+                command_id: command.command_id,
+                command_type: command.command_type,
+                status: CommandProcessingStatus::Failed,
+                message: Some(match sync_error {
+                    Some(error) => format!(
+                        "command intent is not yet handled by the desktop processor; additionally failed to queue FAILED status: {error}"
+                    ),
+                    None => {
+                        "command intent is not yet handled by the desktop processor".to_string()
+                    }
+                }),
+                proposal_item_count: 0,
+            });
+            continue;
+        }
+
+        if !is_supported_command(&command) {
             report.skipped_count += 1;
             report.results.push(CommandProcessingResult {
                 command_id: command.command_id,
@@ -1061,6 +1100,10 @@ fn is_supported_command(command: &AgentCommand) -> bool {
     )
 }
 
+fn is_contract_command_without_desktop_handler(command: &AgentCommand) -> bool {
+    matches!(command.command_type.as_str(), FIND | DOWNLOAD | UPLOAD)
+}
+
 fn unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1081,9 +1124,9 @@ mod tests {
         build_agent_proposal_submission, build_create_proposal_report, build_move_proposal_report,
         build_rename_proposal_report, build_trash_proposal_report, parse_organize_payload,
         process_commands, resolve_proposal, validate_relative_scope, AgentCommand,
-        AgentProposalActionType, AgentProposalConflictState, CreateCommandPayload,
-        MoveCommandPayload, OrganizeFilesPayload, RenameCommandPayload, TrashCommandPayload,
-        USER_REQUESTED_CREATE_DIR_REASON, USER_REQUESTED_CREATE_FILE_REASON,
+        AgentProposalActionType, AgentProposalConflictState, CommandProcessingStatus,
+        CreateCommandPayload, MoveCommandPayload, OrganizeFilesPayload, RenameCommandPayload,
+        TrashCommandPayload, USER_REQUESTED_CREATE_DIR_REASON, USER_REQUESTED_CREATE_FILE_REASON,
         USER_REQUESTED_MOVE_REASON, USER_REQUESTED_RENAME_REASON, USER_REQUESTED_TRASH_REASON,
     };
 
@@ -1680,6 +1723,70 @@ mod tests {
         assert_eq!(report.processed_count, 0);
         assert_eq!(report.skipped_count, 3);
         assert_eq!(report.submitted_proposal_count, 0);
+    }
+
+    #[tokio::test]
+    async fn fails_contract_commands_that_are_not_wired_yet() {
+        let runtime = AgentRuntime::default();
+        let roots = ManagedRootStore::default();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let outbox = OutboxStore::default();
+        outbox
+            .load_from_db(temp.path().join("outbox.db"))
+            .expect("outbox");
+        let commands = vec![
+            AgentCommand {
+                command_id: "find-command".to_string(),
+                command_type: "FIND".to_string(),
+                room_id: "room-1".to_string(),
+                status: "QUEUED".to_string(),
+                payload: json!({
+                    "rootId": "root:docs",
+                    "query": "report",
+                    "limit": 20
+                }),
+            },
+            AgentCommand {
+                command_id: "download-command".to_string(),
+                command_type: "DOWNLOAD".to_string(),
+                room_id: "room-1".to_string(),
+                status: "QUEUED".to_string(),
+                payload: json!({
+                    "rootId": "root:docs",
+                    "sourceRelativePath": "reports/final.pdf"
+                }),
+            },
+            AgentCommand {
+                command_id: "upload-command".to_string(),
+                command_type: "UPLOAD".to_string(),
+                room_id: "room-1".to_string(),
+                status: "QUEUED".to_string(),
+                payload: json!({
+                    "rootId": "root:docs",
+                    "destinationRelativePath": "incoming/photo.png",
+                    "transferId": "00000000-0000-4000-8000-000000000001",
+                    "expectedSha256": "a".repeat(64),
+                    "expectedSize": 10
+                }),
+            },
+        ];
+
+        let report = process_commands(&runtime, &roots, &outbox, commands)
+            .await
+            .expect("unwired commands fail visibly");
+
+        assert_eq!(report.processed_count, 3);
+        assert_eq!(report.failed_count, 3);
+        assert_eq!(report.skipped_count, 0);
+        assert!(report
+            .results
+            .iter()
+            .all(|result| result.status == CommandProcessingStatus::Failed));
+        let batch = outbox.pending_batch(10).expect("pending status rows");
+        assert_eq!(batch.len(), 3);
+        assert!(batch
+            .iter()
+            .all(|item| item.kind == "command_status" && item.payload_json.contains("FAILED")));
     }
 
     #[test]
