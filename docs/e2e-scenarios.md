@@ -21,6 +21,10 @@ missing API URL, Android device, `adb`, `flutter`, `cargo`, `/health`, or
 `/ready` is reported as `UNCONFIGURED` or `FAIL`, and the scenarios below must
 not be marked passed until those blockers are resolved.
 
+When `-RunLocalChecks` is set, preflight also runs focused contract, desktop
+cadence, and mobile smart-cache regression checks, including encrypted download
+tag/plaintext verification and owner-scoped local cache metadata.
+
 This document defines repeatable end-to-end checks for MouseKeeper. It is a
 checklist, not proof that a scenario has passed. Record the command output,
 device IDs, room IDs, screenshots, and server logs in the release notes when a
@@ -159,8 +163,9 @@ Goal: prove smart-cache remains explicit, encrypted, quota-bound, and stale-awar
 Pass evidence:
 
 - Feature remains opt-in.
-- Mobile plaintext handoff stays `UNCONFIGURED` until key sync/tag verification
-  is implemented.
+- Mobile plaintext handoff verifies the encrypted object only after a real
+  synced key is available; without key sync it remains
+  `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`.
 - Quota/LRU deletion does not remove unrelated room objects.
 
 ## Release evidence template

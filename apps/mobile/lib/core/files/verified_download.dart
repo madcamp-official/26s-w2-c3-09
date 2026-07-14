@@ -33,6 +33,26 @@ Future<File> saveVerifiedDownloadAndAck({
 }
 
 class VerifiedDownload {
+  static Future<Digest> sha256(File file, {CancelToken? cancelToken}) =>
+      _sha256File(file, cancelToken);
+
+  static void throwIfCancelled(CancelToken? cancelToken) =>
+      _throwIfCancelled(cancelToken);
+
+  static Future<File> copyTemporaryWithoutOverwrite({
+    required File temporary,
+    required Directory directory,
+    required String fileName,
+    required String expectedSha256,
+    CancelToken? cancelToken,
+  }) => _copyVerifiedWithoutOverwrite(
+    temporary,
+    directory,
+    fileName,
+    expectedSha256,
+    cancelToken,
+  );
+
   static Future<File> save({
     ApiClient? api,
     required String url,

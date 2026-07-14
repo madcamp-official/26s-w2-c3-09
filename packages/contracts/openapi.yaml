@@ -1842,6 +1842,10 @@ components:
           type: array
           maxItems: 100
           items: { type: string, minLength: 1, maxLength: 255 }
+        pinnedPatterns:
+          type: array
+          maxItems: 100
+          items: { type: string, minLength: 1, maxLength: 255 }
     CacheCandidate:
       type: object
       additionalProperties: false

@@ -1,0 +1,1 @@
+ALTER TABLE "smart_cache_policies" ADD COLUMN "pinned_patterns" jsonb DEFAULT '[]'::jsonb NOT NULL;

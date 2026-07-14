@@ -965,12 +965,15 @@ export const rejectRuleDraftResponseSchema = z
     draft: ruleDraftSummarySchema,
   })
   .strict();
+const smartCachePatternListSchema = z.array(z.string().min(1).max(255)).max(100);
+
 export const updateSmartCachePolicySchema = z
   .object({
     enabled: z.boolean(),
     quotaBytes: z.number().int().positive(),
     maxFileBytes: z.number().int().positive(),
-    excludedPatterns: z.array(z.string().min(1).max(255)).max(100),
+    excludedPatterns: smartCachePatternListSchema,
+    pinnedPatterns: smartCachePatternListSchema.default([]),
   })
   .strict()
   .refine(

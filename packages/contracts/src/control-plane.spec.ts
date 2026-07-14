@@ -24,6 +24,7 @@ import {
   createChatSessionSchema,
   createCommandDraftSchema,
   markCachedFilesStaleSchema,
+  updateSmartCachePolicySchema,
   updateChatSessionSchema,
   createRuleDraftRequestSchema,
   confirmRuleDraftResponseSchema,
@@ -76,6 +77,41 @@ describe("push notification token contract", () => {
 });
 
 describe("smart cache contracts", () => {
+  it("normalizes optional pinned policy patterns without widening exclusions", () => {
+    expect(
+      updateSmartCachePolicySchema.parse({
+        enabled: true,
+        quotaBytes: 500,
+        maxFileBytes: 50,
+        excludedPatterns: ["private/**"],
+      }),
+    ).toEqual({
+      enabled: true,
+      quotaBytes: 500,
+      maxFileBytes: 50,
+      excludedPatterns: ["private/**"],
+      pinnedPatterns: [],
+    });
+    expect(
+      updateSmartCachePolicySchema.parse({
+        enabled: true,
+        quotaBytes: 500,
+        maxFileBytes: 50,
+        excludedPatterns: [],
+        pinnedPatterns: ["important/**"],
+      }).pinnedPatterns,
+    ).toEqual(["important/**"]);
+    expect(
+      updateSmartCachePolicySchema.safeParse({
+        enabled: true,
+        quotaBytes: 50,
+        maxFileBytes: 500,
+        excludedPatterns: [],
+        pinnedPatterns: [],
+      }).success,
+    ).toBe(false);
+  });
+
   it("validates source-change stale reports without broadening their scope", () => {
     const targeted = {
       roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",

@@ -125,6 +125,11 @@ async fn process_smart_cache_for_known_room(
 
     let local_candidates = smart_cache.list_candidates(room.root_id.clone(), limit)?;
     let inspected_count = local_candidates.len();
+    let (local_candidates, policy_skipped_count) = apply_policy_candidate_preferences(
+        local_candidates,
+        &policy.excluded_patterns,
+        &policy.pinned_patterns,
+    );
     let mut prepared = Vec::new();
     let mut failed_count = 0;
 
@@ -142,8 +147,10 @@ async fn process_smart_cache_for_known_room(
             approved_count: 0,
             uploaded_count: 0,
             failed_count,
-            skipped_count: 0,
-            message: Some("no smart cache candidates survived local validation".to_string()),
+            skipped_count: policy_skipped_count,
+            message: Some(
+                "no smart cache candidates survived local policy or validation".to_string(),
+            ),
         });
     }
 
@@ -190,7 +197,8 @@ async fn process_smart_cache_for_known_room(
         approved_count,
         uploaded_count,
         failed_count,
-        skipped_count: usize::try_from(batch.rejected_count).unwrap_or(usize::MAX),
+        skipped_count: policy_skipped_count
+            .saturating_add(usize::try_from(batch.rejected_count).unwrap_or(usize::MAX)),
         message: None,
     })
 }
@@ -225,6 +233,112 @@ fn prepare_candidate(
         source,
         source_version_hash,
     })
+}
+
+fn apply_policy_candidate_preferences(
+    candidates: Vec<SmartCacheCandidate>,
+    excluded_patterns: &[String],
+    pinned_patterns: &[String],
+) -> (Vec<SmartCacheCandidate>, usize) {
+    if excluded_patterns.is_empty() && pinned_patterns.is_empty() {
+        return (candidates, 0);
+    }
+
+    let inspected_count = candidates.len();
+    let filtered = candidates
+        .into_iter()
+        .filter_map(|mut candidate| {
+            if matches_policy_pattern(&candidate.relative_path, excluded_patterns) {
+                return None;
+            }
+            if matches_policy_pattern(&candidate.relative_path, pinned_patterns) {
+                candidate.pinned = true;
+            }
+            Some(candidate)
+        })
+        .collect::<Vec<_>>();
+    let skipped_count = inspected_count.saturating_sub(filtered.len());
+    (filtered, skipped_count)
+}
+
+fn matches_policy_pattern(relative_path: &str, patterns: &[String]) -> bool {
+    let normalized_path = relative_path.replace('\\', "/");
+    patterns
+        .iter()
+        .any(|pattern| glob_matches(&normalize_policy_pattern(pattern), &normalized_path))
+}
+
+fn normalize_policy_pattern(pattern: &str) -> String {
+    pattern.trim().replace('\\', "/")
+}
+
+fn glob_matches(pattern: &str, value: &str) -> bool {
+    let tokens = parse_policy_glob(pattern);
+    let value = value.chars().collect::<Vec<_>>();
+    let mut reachable = vec![vec![false; value.len() + 1]; tokens.len() + 1];
+    reachable[0][0] = true;
+
+    for token_index in 0..tokens.len() {
+        for value_index in 0..=value.len() {
+            if !reachable[token_index][value_index] {
+                continue;
+            }
+            match tokens[token_index] {
+                PolicyGlobToken::Literal(expected) => {
+                    if value_index < value.len() && value[value_index] == expected {
+                        reachable[token_index + 1][value_index + 1] = true;
+                    }
+                }
+                PolicyGlobToken::AnySegment => {
+                    reachable[token_index + 1][value_index] = true;
+                    let mut next_index = value_index;
+                    while next_index < value.len() && value[next_index] != '/' {
+                        next_index += 1;
+                        reachable[token_index + 1][next_index] = true;
+                    }
+                }
+                PolicyGlobToken::OneSegment => {
+                    if value_index < value.len() && value[value_index] != '/' {
+                        reachable[token_index + 1][value_index + 1] = true;
+                    }
+                }
+                PolicyGlobToken::AnyDeep => {
+                    reachable[token_index + 1][value_index] = true;
+                    for next_index in value_index..value.len() {
+                        reachable[token_index + 1][next_index + 1] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    reachable[tokens.len()][value.len()]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PolicyGlobToken {
+    Literal(char),
+    AnySegment,
+    OneSegment,
+    AnyDeep,
+}
+
+fn parse_policy_glob(pattern: &str) -> Vec<PolicyGlobToken> {
+    let mut tokens = Vec::new();
+    let mut chars = pattern.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '*' && chars.peek() == Some(&'*') {
+            let _ = chars.next();
+            tokens.push(PolicyGlobToken::AnyDeep);
+        } else if character == '*' {
+            tokens.push(PolicyGlobToken::AnySegment);
+        } else if character == '?' {
+            tokens.push(PolicyGlobToken::OneSegment);
+        } else {
+            tokens.push(PolicyGlobToken::Literal(character));
+        }
+    }
+    tokens
 }
 
 fn server_candidate(
@@ -360,8 +474,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::candidate_batch_idempotency_key;
+    use super::{
+        apply_policy_candidate_preferences, candidate_batch_idempotency_key, matches_policy_pattern,
+    };
     use crate::agent::AgentSmartCacheCandidate;
+    use crate::storage::smart_cache::SmartCacheCandidate;
     use serde_json::json;
 
     #[test]
@@ -379,5 +496,57 @@ mod tests {
             candidate_batch_idempotency_key("room-1", &candidates).expect("key"),
             candidate_batch_idempotency_key("room-1", &candidates).expect("key again")
         );
+    }
+
+    #[test]
+    fn policy_exclusion_globs_match_server_contract() {
+        let patterns = vec![
+            "private/**".to_string(),
+            "*.tmp".to_string(),
+            "literal[1].txt".to_string(),
+            "notes/??.md".to_string(),
+        ];
+
+        assert!(matches_policy_pattern("private/report.pdf", &patterns));
+        assert!(matches_policy_pattern("notes.tmp", &patterns));
+        assert!(matches_policy_pattern("literal[1].txt", &patterns));
+        assert!(matches_policy_pattern("notes/ab.md", &patterns));
+        assert!(!matches_policy_pattern("nested/notes.tmp", &patterns));
+        assert!(!matches_policy_pattern("literal1.txt", &patterns));
+        assert!(!matches_policy_pattern("notes/abc.md", &patterns));
+    }
+
+    #[test]
+    fn policy_preferences_count_skips_and_mark_pinned_candidates() {
+        let candidates = vec![
+            candidate("private/report.pdf", 30),
+            candidate("docs/keep.pdf", 20),
+            candidate("important/keep.pdf", 15),
+            candidate("notes.tmp", 10),
+        ];
+
+        let (allowed, skipped_count) = apply_policy_candidate_preferences(
+            candidates,
+            &["private/**".to_string(), "*.tmp".to_string()],
+            &["important/**".to_string()],
+        );
+
+        assert_eq!(skipped_count, 2);
+        assert_eq!(allowed.len(), 2);
+        assert_eq!(allowed[0].relative_path, "docs/keep.pdf");
+        assert!(!allowed[0].pinned);
+        assert_eq!(allowed[1].relative_path, "important/keep.pdf");
+        assert!(allowed[1].pinned);
+    }
+
+    fn candidate(relative_path: &str, score: i64) -> SmartCacheCandidate {
+        SmartCacheCandidate {
+            root_id: "root-1".to_string(),
+            relative_path: relative_path.to_string(),
+            score,
+            event_count: 1,
+            last_used_unix_ms: 100,
+            pinned: false,
+        }
     }
 }

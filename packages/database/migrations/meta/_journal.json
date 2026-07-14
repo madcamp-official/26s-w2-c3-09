@@ -169,6 +169,13 @@
       "when": 1784007911140,
       "tag": "0023_groovy_scarecrow",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1784015621500,
+      "tag": "0024_luxuriant_gambit",
+      "breakpoints": true
     }
   ]
 }

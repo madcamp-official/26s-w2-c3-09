@@ -3,12 +3,16 @@
 ## Recent implementation notes (2026-07-13/14)
 
 - Release E2E preflight is now available through `pnpm e2e:preflight`. It checks the API base URL, `/health`, `/ready`, Android tooling/device presence, desktop Rust tooling, required repo paths, and dirty worktree state without creating fake pass evidence.
+- Release E2E preflight `-RunLocalChecks` now also runs the mobile smart-cache encrypted download, verified download, and owner-scoped display-cache regression tests so encrypted plaintext handoff changes cannot skip the release gate.
+- Smart-cache policy now supports `pinnedPatterns`: mobile can save pinned path globs, the server stores and returns them with the room policy, and Desktop marks matching local candidates as `manualPin` before reservation submission.
+- Desktop smart-cache candidate processing now applies the server-provided `excludedPatterns` policy before local file validation or batch submission. This keeps the server as the final enforcement layer while avoiding preparing and submitting files the policy will reject anyway.
 - Chat `FIND` command drafts now materialize as read-only file-browse requests instead of queued write-capable commands. The server stores the browse request idempotently, Desktop validates `query`/`extensions`/`limit`, and the local SQLite file index filters extensions before applying page limits.
 - Chat `DOWNLOAD` command drafts now materialize as idempotent FileTransfer requests instead of queued write-capable commands. The draft records `fileTransferId`, emits the same durable file-transfer event flow as manual downloads, and fails closed with `EXPECTED_IDENTITY_UNSUPPORTED` when a draft includes file identity preconditions that the current desktop transfer contract cannot yet carry.
 - Chat `UPLOAD` command drafts now fail closed at confirmation with `UPLOAD_TRANSFER_UNCONFIGURED` instead of entering the desktop command queue. The current FileTransfer state machine is desktop-to-mobile only, so mobile-to-desktop uploads must wait for an explicit inverse transfer contract rather than pretending to work.
 - Desktop command processing now fails contract-level `FIND`, `DOWNLOAD`, and `UPLOAD` commands visibly instead of silently skipping them. Until those intent-specific handlers are wired, the agent queues a durable `FAILED` command status so server/mobile state can leave `QUEUED` rather than polling forever.
 - Mobile Room now exposes an approval-first manual file command form for `RENAME`, `MOVE`, `TRASH`, and `CREATE`. The form validates obvious unsafe relative paths locally, sends the existing server command contract with `requiresApproval`, and relies on the desktop agent to create proposals before any file mutation.
 - Mobile Smart Cache reads now use `smartCachePolicyProvider(roomId)`, `smartCacheFilesProvider(roomId)`, and `smartCacheStatusProvider(roomId)`, preserving the existing transport-only offline fallback while keeping policy/file projections behind provider-backed reads.
+- Mobile encrypted smart-cache downloads now have a real fail-closed plaintext handoff path: ciphertext SHA-256 verification, `MKS1_NONCE_CIPHERTEXT_TAG` envelope parsing, matching 32-byte key validation, AES-256-GCM tag/nonce verification, plaintext SHA-256 verification, and `.part`/no-overwrite final save. The default key store still returns `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC` until an actual key-sync provider is wired.
 - Mobile rules now expose `ruleGatewayProvider` and `ruleListProvider(roomId)` for provider-backed reads; RulesPage still applies successful create/update/draft confirmations by local upsert instead of reloading the entire list.
 - Mobile connection gate loading now delays the pixel-fill mouse for 200ms to avoid flicker, then shows a long-wait message after 10 seconds and an explicit retry action after 20 seconds.
 - Mobile file browse transport is now provider-backed through `fileBrowseGatewayProvider`, `fileDirectoryBrowseRequesterProvider`, and `fileBrowseStatusFetcherProvider`; FilesPage still keeps the WebSocket-first wait path and only uses REST status as the 5-second safety fallback.
@@ -55,7 +59,7 @@
 - Desktop file transfer sourceVersion now uses the same OS-backed file identity instead of the older `hm:` hash fallback, and revalidates identity/size/mtime before hashing, after hashing, and after streaming so source swaps are reported as `SOURCE_CHANGED`.
 - Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
 - Desktop scan, write, and transfer work now share explicit per-kind gates across manual Tauri commands and background runtime passes; overlapping same-kind work fails fast with `BUSY` instead of racing file scans, journaled writes, or object uploads.
-- Smart-cache uploads now use Desktop-side AES-256-GCM before signed PUT; the server stores ciphertext size/checksum plus encryption metadata, and mobile fails closed with `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC` until key sync/decryption is implemented.
+- Smart-cache uploads now use Desktop-side AES-256-GCM before signed PUT; the server stores ciphertext size/checksum plus encryption metadata, and mobile can decrypt only when a matching synced key is provided. Without that real key-sync provider, it still fails closed with `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`.
 - Desktop watcher source changes now enqueue durable smart-cache STALE reports; the server marks only the affected available cached files stale and emits `smart-cache.updated` without forcing a mobile Home summary reload.
 - Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.
 - Rule draft preview now has an explicit `/v1/rule-drafts/:draftId/preview` contract and server route. Until a Desktop dry-run transport is wired, it fails closed with `RULE_DRAFT_PREVIEW_UNCONFIGURED` instead of returning fake match results.
@@ -170,7 +174,7 @@ Tauri Desktop
 - Android release signing, updater signing과 rename 이후 Windows installer 재검증
 - 실제 Rive animation/interaction과 schema-validated 자연어 command provider
 - Release-grade three-party E2E automation for delegated create operations and identity-checked transfer regressions
-- Mobile smart-cache decryption key sync, tag verification, and local plaintext handoff
+- Mobile smart-cache decryption key sync provider and encrypted-download E2E
 - Android ↔ server ↔ Desktop 전체 P0 release E2E 자동화
 
 서버 URL 또는 pairing이 없으면 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. pairing 뒤에도 heartbeat나 인증 요청이 성공하기 전에는 `offline`이며, device token은 React 계층으로 전달되지 않는다.
@@ -201,7 +205,7 @@ AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`
 | 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI·cursor pagination, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
 | 6 오프라인·재접속 | 양쪽 outbox·cursor replay, pairing gate pixel-fill loading 구현 | 강제 종료·서버 재시작 E2E |
 | 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill | rename migration, signed release, Sentry DSN |
-| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle, Desktop AES-256-GCM ciphertext upload, server encryption metadata | Mobile key sync/decryption/tag verification |
+| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle, Desktop AES-256-GCM ciphertext upload, server encryption metadata, Mobile AES-GCM tag/plaintext verification and safe local save when a key is supplied | Mobile key sync provider and physical E2E |
 
 ### v1.4 — 청결도·연결 해제·모바일 파일 접근
 
@@ -250,7 +254,7 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 ## 다음 구현 순서
 
 1. Android USB를 다시 연결해 새 package 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
-2. Mobile smart-cache 복호화 key sync, AES-GCM tag verification, 안전한 로컬 plaintext 저장 경로를 구현한다.
+2. Mobile smart-cache 복호화 key sync provider를 설계·연결하고, 구현된 AES-GCM tag verification/안전한 로컬 plaintext 저장 경로를 실제 Android·Desktop·서버 E2E로 검증한다.
 3. Indexed file ID 기반 proposal/precondition/transfer 회귀를 유지하고, 추가된 CREATE_DIR/CREATE_FILE Desktop batch journal/no-overwrite/undo 회귀를 실제 3자 release E2E로 확장한다.
 4. command/proposal/execute/undo와 browse/transfer를 한 managed root·실기기에서 왕복 검증한다.
 5. 새 EC2 unit/path와 Firebase package로 rename migration을 실행하고 rollback을 확인한다.

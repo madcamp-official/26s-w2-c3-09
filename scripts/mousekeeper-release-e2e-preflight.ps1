@@ -182,6 +182,25 @@ try {
       Add-Check 'pnpm check:contracts' 'FAIL' $_.Exception.Message
     }
 
+    $flutterLocal = Get-Command flutter -ErrorAction SilentlyContinue
+    if (-not $flutterLocal) {
+      Add-Check 'mobile smart-cache regression tests' 'UNCONFIGURED' 'flutter is not available on PATH'
+    } else {
+      Push-Location (Join-Path $repoRoot 'apps/mobile')
+      try {
+        flutter test test/smart_cache_policy_test.dart test/verified_download_test.dart test/display_cache_test.dart
+        if ($LASTEXITCODE -eq 0) {
+          Add-Check 'mobile smart-cache regression tests' 'PASS' ''
+        } else {
+          Add-Check 'mobile smart-cache regression tests' 'FAIL' "exit code $LASTEXITCODE"
+        }
+      } catch {
+        Add-Check 'mobile smart-cache regression tests' 'FAIL' $_.Exception.Message
+      } finally {
+        Pop-Location
+      }
+    }
+
     if (-not $SkipDesktop) {
       try {
         cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --features tauri-commands scheduled_ticks_keep_heartbeats_frequent_and_split_rest_reconcile

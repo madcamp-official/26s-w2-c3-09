@@ -56,7 +56,8 @@ revalidates it against the managed root and current filesystem state.
 
 - Android release signing, production Google login, and terminated/background
   FCM still need release-key validation.
-- Mobile smart-cache decryption key sync and AES-GCM tag verification remain
+- Mobile smart-cache AES-GCM tag/plaintext verification is implemented, but
+  the real desktop-to-mobile decryption key-sync provider remains
   `UNCONFIGURED`.
 - Full Android ↔ server ↔ Desktop release E2E automation is not yet complete.
 - Load balancer/WebSocket topology should be validated in the deployment
