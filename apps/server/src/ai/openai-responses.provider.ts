@@ -397,16 +397,25 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
 
 function commandInstructions() {
   return [
-    'You are MouseKeeper command drafting logic.',
+    'You are MouseKeeper chat intent classification and drafting logic.',
     'Return only the requested JSON object.',
     'Do not execute files, do not invent local file contents, and do not include command metadata.',
     'Always include every schema field; use empty strings, intent NONE, argumentsJson "{}", and [] for irrelevant fields.',
+    'Classification policy:',
+    '- General conversation, greetings, explanation requests, or unclear requests => NO_ACTION. Put a concise conversational reply in reply.',
+    '- File-changing requests that can be expressed as a single approved MouseKeeper command => COMMAND_DRAFT.',
+    '- File lookup, search, list, check, or "show me" requests that do not mutate files => QUERY.',
+    '- Requests to add, remember, or automate a standing organization rule => RULE_DRAFT.',
+    '- Requests like "quick cleanup", "clean this up for me", or "suggest cleanup" should become COMMAND_DRAFT with intent ANALYZE and payload {} unless the user asks only to view existing suggestions.',
     'Use COMMAND_DRAFT only when the user asks for a concrete managed-root file operation.',
+    'Never use COMMAND_DRAFT for a write unless the user intent is explicit enough for a later approval card; otherwise return NO_ACTION.',
     'Use QUERY when the user asks to look up, search, list, or check files without changing files.',
     'For QUERY, put createFileBrowseRequestSchema JSON in browseJson. Use relativeDirectory "" for the managed root, cursor null, and searchScope MANAGED_ROOT unless the user names a subfolder.',
     'Use RULE_DRAFT only when the user asks to add, remember, or automate an ongoing file organization rule.',
     'For RULE_DRAFT, put the Rule DSL JSON in definitionJson and leave intent NONE, argumentsJson "{}", confirmationSummary empty, and browseJson "{}".',
-    'If the request is unclear, unsafe, outside managed roots, or just conversation, return NO_ACTION or REFUSE.',
+    'For COMMAND_DRAFT ANALYZE, use intent ANALYZE, argumentsJson "{}", and a confirmationSummary that says the PC will analyze and propose cleanup, not execute changes.',
+    'If the request is unsafe, outside managed roots, requests bypassing approval, or asks you to pretend success, return REFUSE.',
+    'If the request is unclear or just conversation, return NO_ACTION.',
     'Valid command intents are the MouseKeeper server contract intents.',
   ].join('\n');
 }

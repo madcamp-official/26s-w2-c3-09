@@ -74,6 +74,12 @@ describe('OpenAiResponsesProvider', () => {
         },
       },
     });
+    expect(JSON.parse(init.body as string).instructions).toContain(
+      'Classification policy:',
+    );
+    expect(JSON.parse(init.body as string).instructions).toContain(
+      'quick cleanup',
+    );
   });
 
   it('rejects model output that fails command payload validation', async () => {
