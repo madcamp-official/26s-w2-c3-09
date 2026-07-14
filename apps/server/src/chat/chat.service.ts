@@ -8,6 +8,8 @@ import {
 import {
   createCommandDraftSchema,
   createFileBrowseRequestSchema,
+  createFileTransferSchema,
+  downloadCommandPayloadSchema,
   findCommandPayloadSchema,
 } from '@mousekeeper/contracts';
 import {
@@ -17,6 +19,7 @@ import {
   commands,
   devices,
   fileBrowseRequests,
+  fileTransfers,
   rooms,
   type Database,
 } from '@mousekeeper/database';
@@ -28,6 +31,7 @@ import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
 import { FileBrowseService } from '../file-access/file-browse.service';
 import { SyncService } from '../sync/sync.service';
+import { TransfersService } from '../transfers/transfers.service';
 
 const CHAT_SESSION_LIMIT = 5;
 const DEFAULT_CHAT_TITLE = 'New chat';
@@ -53,6 +57,7 @@ export class ChatService {
     private readonly sync: SyncService,
     @Inject(AI_PROVIDER) private readonly ai: AiProvider,
     @Optional() private readonly browse?: FileBrowseService,
+    @Optional() private readonly transfers?: TransfersService,
   ) {}
 
   async listSessions(userId: string, roomId: string) {
@@ -296,6 +301,17 @@ export class ChatService {
             fileBrowseRequest: this.publicFileBrowseRequest(fileBrowseRequest),
           };
         }
+        if (draft.fileTransferId) {
+          this.requireMaterializedDraftKey(draft, key);
+          const fileTransfer = await this.requireMaterializedFileTransferIn(
+            tx,
+            draft.fileTransferId,
+          );
+          return {
+            draft: this.publicDraft(draft),
+            fileTransfer: this.publicFileTransfer(fileTransfer),
+          };
+        }
       }
       if (draft.status === 'REJECTED') {
         throw new ConflictException({
@@ -330,6 +346,9 @@ export class ChatService {
       await this.ensureConfirmKeyAvailableIn(tx, userId, key, draft.id);
       if (draft.intent === 'FIND') {
         return this.materializeFindDraftIn(tx, userId, owned, key);
+      }
+      if (draft.intent === 'DOWNLOAD') {
+        return this.materializeDownloadDraftIn(tx, userId, owned, key);
       }
       const device = await this.requireActiveRoomDeviceIn(
         tx,
@@ -475,6 +494,76 @@ export class ChatService {
     return {
       draft: this.publicDraft(updated),
       fileBrowseRequest: this.publicFileBrowseRequest(fileBrowseRequest),
+    };
+  }
+
+  private async materializeDownloadDraftIn(
+    tx: Transaction,
+    userId: string,
+    owned: {
+      draft: typeof commandDrafts.$inferSelect;
+      session: typeof chatSessions.$inferSelect;
+    },
+    key: string,
+  ) {
+    if (!this.transfers) {
+      throw new ConflictException({ code: 'FILE_TRANSFER_UNCONFIGURED' });
+    }
+    const parsed = downloadCommandPayloadSchema.safeParse(
+      owned.draft.arguments,
+    );
+    if (!parsed.success) {
+      throw new ConflictException({ code: 'INVALID_DRAFT_ARGUMENTS' });
+    }
+    const room = await this.requireOwnedRoomIn(
+      tx,
+      userId,
+      owned.session.roomId,
+    );
+    if (parsed.data.rootId !== room.rootAlias) {
+      throw new ConflictException({ code: 'ROOT_MISMATCH' });
+    }
+    if (parsed.data.expectedIdentity) {
+      throw new ConflictException({ code: 'EXPECTED_IDENTITY_UNSUPPORTED' });
+    }
+
+    const transferBody = createFileTransferSchema.parse({
+      sourceRelativePath: parsed.data.sourceRelativePath,
+    });
+    const fileTransfer = await this.transfers.createInTransaction(
+      tx,
+      userId,
+      owned.session.roomId,
+      key,
+      transferBody,
+    );
+    const updated = (
+      await tx
+        .update(commandDrafts)
+        .set({
+          status: 'MATERIALIZED',
+          fileTransferId: fileTransfer.id,
+          confirmIdempotencyKey: key,
+        })
+        .where(eq(commandDrafts.id, owned.draft.id))
+        .returning()
+    )[0]!;
+    await this.sync.append(tx, {
+      userId,
+      deviceId: null,
+      roomId: owned.session.roomId,
+      eventType: 'command.draft.updated',
+      aggregateType: 'command_draft',
+      aggregateId: owned.draft.id,
+      payload: {
+        commandDraftId: owned.draft.id,
+        status: updated.status,
+        fileTransferId: fileTransfer.id,
+      },
+    });
+    return {
+      draft: this.publicDraft(updated),
+      fileTransfer,
     };
   }
 
@@ -874,6 +963,21 @@ export class ChatService {
     return request;
   }
 
+  private async requireMaterializedFileTransferIn(
+    tx: Transaction,
+    transferId: string,
+  ) {
+    const transfer = (
+      await tx
+        .select()
+        .from(fileTransfers)
+        .where(eq(fileTransfers.id, transferId))
+        .limit(1)
+    )[0];
+    if (!transfer) throw new ConflictException({ code: 'CONFLICT' });
+    return transfer;
+  }
+
   private async ensureConfirmKeyAvailableIn(
     tx: Transaction,
     userId: string,
@@ -893,6 +997,21 @@ export class ChatService {
         .limit(1)
     )[0];
     if (existingCommand) {
+      throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+    }
+    const existingTransfer = (
+      await tx
+        .select({ id: fileTransfers.id })
+        .from(fileTransfers)
+        .where(
+          and(
+            eq(fileTransfers.requestedByUserId, userId),
+            eq(fileTransfers.idempotencyKey, key),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (existingTransfer) {
       throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
     }
     const existingDraft = (
@@ -978,6 +1097,7 @@ export class ChatService {
       expiresAt: draft.expiresAt,
       commandId: draft.commandId,
       fileBrowseRequestId: draft.fileBrowseRequestId,
+      fileTransferId: draft.fileTransferId,
     };
   }
 
@@ -990,6 +1110,21 @@ export class ChatService {
     request: typeof fileBrowseRequests.$inferSelect,
   ) {
     return request;
+  }
+
+  private publicFileTransfer(transfer: typeof fileTransfers.$inferSelect) {
+    const {
+      objectKey: _,
+      idempotencyKey: __,
+      uploadCompletionIdempotencyKey: ___,
+      requestedByUserId: ____,
+      ...safe
+    } = transfer;
+    void _;
+    void __;
+    void ___;
+    void ____;
+    return safe;
   }
 }
 

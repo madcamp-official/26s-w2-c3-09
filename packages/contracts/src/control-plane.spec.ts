@@ -889,6 +889,8 @@ describe("chat session contracts", () => {
       status: "DRAFT",
       expiresAt: "2026-07-13T01:02:03.000Z",
       commandId: null,
+      fileBrowseRequestId: null,
+      fileTransferId: null,
     };
 
     expect(commandDraftSummarySchema.parse(draft)).toEqual(draft);

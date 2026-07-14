@@ -666,6 +666,7 @@ export const commandDrafts = pgTable(
     fileBrowseRequestId: uuid("file_browse_request_id").references(
       () => fileBrowseRequests.id,
     ),
+    fileTransferId: uuid("file_transfer_id").references(() => fileTransfers.id),
     confirmIdempotencyKey: varchar("confirm_idempotency_key", { length: 128 }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

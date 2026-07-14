@@ -929,6 +929,7 @@ export const commandDraftSummarySchema = z
     expiresAt: z.iso.datetime(),
     commandId: uuidSchema.nullable(),
     fileBrowseRequestId: uuidSchema.nullable().optional(),
+    fileTransferId: uuidSchema.nullable().optional(),
   })
   .strict();
 export const confirmCommandDraftSchema = z.object({}).strict();

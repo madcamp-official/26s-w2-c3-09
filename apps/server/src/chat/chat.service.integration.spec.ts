@@ -7,6 +7,7 @@ import {
   createDatabase,
   devices,
   fileBrowseRequests,
+  fileTransfers,
   rooms,
   syncEvents,
   users,
@@ -22,6 +23,7 @@ import type {
 import { UnconfiguredAiProvider } from '../ai/unconfigured-ai.provider';
 import { FileBrowseService } from '../file-access/file-browse.service';
 import { SyncService } from '../sync/sync.service';
+import { TransfersService } from '../transfers/transfers.service';
 import { ChatService } from './chat.service';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -44,12 +46,20 @@ describeDatabase('ChatService PostgreSQL integration', () => {
       status: 'ready',
       connect: jest.fn(async () => undefined),
       get: jest.fn(async () => 'ONLINE_IDLE'),
+      exists: jest.fn(async () => 1),
     };
+    const storage = { assertConfigured: jest.fn() };
     service = new ChatService(
       connection.db,
       sync,
       new UnconfiguredAiProvider(),
       new FileBrowseService(connection.db, redis as never, sync),
+      new TransfersService(
+        connection.db,
+        redis as never,
+        sync,
+        storage as never,
+      ),
     );
     const user = (
       await connection.db
@@ -402,6 +412,127 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     );
   });
 
+  it('materializes DOWNLOAD drafts as file transfer requests without creating commands', async () => {
+    const session = await service.createSession(userId, roomId);
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Download current report',
+    );
+    const draftResult = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'DOWNLOAD',
+        payload: {
+          rootId: 'Downloads',
+          sourceRelativePath: 'reports/current.pdf',
+        },
+      },
+      confirmationSummary: 'Download reports/current.pdf',
+    });
+
+    const materialized = await service.confirmCommandDraft(
+      userId,
+      draftResult.draft.id,
+      'download-draft-key',
+    );
+    const fileTransfer = materialized.fileTransfer;
+    if (!fileTransfer) {
+      throw new Error('DOWNLOAD draft did not create a file transfer');
+    }
+
+    expect(materialized).not.toHaveProperty('command');
+    expect(materialized.draft).toMatchObject({
+      id: draftResult.draft.id,
+      status: 'MATERIALIZED',
+      commandId: null,
+      fileTransferId: fileTransfer.id,
+    });
+    expect(fileTransfer).toMatchObject({
+      roomId,
+      desktopDeviceId: deviceId,
+      sourceRelativePath: 'reports/current.pdf',
+      status: 'REQUESTED',
+    });
+    expect(fileTransfer).not.toHaveProperty('objectKey');
+    expect(fileTransfer).not.toHaveProperty('idempotencyKey');
+    expect(fileTransfer).not.toHaveProperty('requestedByUserId');
+    expect(
+      await connection.db
+        .select()
+        .from(commands)
+        .where(eq(commands.roomId, roomId)),
+    ).toHaveLength(0);
+    expect(
+      await connection.db
+        .select()
+        .from(fileTransfers)
+        .where(eq(fileTransfers.roomId, roomId)),
+    ).toHaveLength(1);
+
+    const replay = await service.confirmCommandDraft(
+      userId,
+      draftResult.draft.id,
+      'download-draft-key',
+    );
+    const replayFileTransfer = replay.fileTransfer;
+    if (!replayFileTransfer) {
+      throw new Error('DOWNLOAD draft replay did not return a file transfer');
+    }
+    expect(replayFileTransfer.id).toBe(fileTransfer.id);
+    await expect(
+      service.confirmCommandDraft(userId, draftResult.draft.id, 'another-key'),
+    ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_CONFLICT' } });
+
+    const events = await connection.db
+      .select()
+      .from(syncEvents)
+      .where(eq(syncEvents.roomId, roomId));
+    expect(events.map((event) => event.eventType)).toEqual(
+      expect.arrayContaining([
+        'file.transfer.requested',
+        'command.draft.updated',
+      ]),
+    );
+  });
+
+  it('rejects DOWNLOAD drafts with unsupported expected identity instead of ignoring it', async () => {
+    const session = await service.createSession(userId, roomId);
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Download exact report',
+    );
+    const draftResult = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'DOWNLOAD',
+        payload: {
+          rootId: 'Downloads',
+          sourceRelativePath: 'reports/current.pdf',
+          expectedIdentity: { sizeBytes: 1024 },
+        },
+      },
+      confirmationSummary: 'Download reports/current.pdf if unchanged',
+    });
+
+    await expect(
+      service.confirmCommandDraft(
+        userId,
+        draftResult.draft.id,
+        'download-identity-key',
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'EXPECTED_IDENTITY_UNSUPPORTED' },
+    });
+    expect(
+      await connection.db
+        .select()
+        .from(fileTransfers)
+        .where(eq(fileTransfers.roomId, roomId)),
+    ).toHaveLength(0);
+  });
+
   it('rejects and expires command drafts without creating commands', async () => {
     const session = await service.createSession(userId, roomId);
     const source = await service.createMessage(
@@ -462,6 +593,9 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     await connection.db
       .delete(fileBrowseRequests)
       .where(eq(fileBrowseRequests.roomId, roomId));
+    await connection.db
+      .delete(fileTransfers)
+      .where(eq(fileTransfers.roomId, roomId));
     await connection.db
       .delete(chatMessages)
       .where(eq(chatMessages.roomId, roomId));

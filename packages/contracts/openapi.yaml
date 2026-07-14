@@ -2105,6 +2105,8 @@ components:
           }
         expiresAt: { type: string, format: date-time }
         commandId: { type: [string, "null"], format: uuid }
+        fileBrowseRequestId: { type: [string, "null"], format: uuid }
+        fileTransferId: { type: [string, "null"], format: uuid }
     EventEnvelope:
       type: object
       additionalProperties: false

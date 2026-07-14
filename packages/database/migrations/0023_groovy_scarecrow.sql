@@ -1,0 +1,2 @@
+ALTER TABLE "command_drafts" ADD COLUMN "file_transfer_id" uuid;--> statement-breakpoint
+ALTER TABLE "command_drafts" ADD CONSTRAINT "command_drafts_file_transfer_id_file_transfers_id_fk" FOREIGN KEY ("file_transfer_id") REFERENCES "public"."file_transfers"("id") ON DELETE no action ON UPDATE no action;
