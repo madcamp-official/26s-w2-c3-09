@@ -200,8 +200,13 @@ String chatSendNotice(Map<String, dynamic> result) {
   if (status == 'INVALID') {
     return 'AI 응답이 계약 검증을 통과하지 못해 실행하지 않았습니다.';
   }
-  if (ai is Map && ai['kind'] == 'COMMAND_DRAFT') {
-    return '확인 카드가 생성되었습니다. 내용을 보고 수락 또는 거절해 주세요.';
+  if (ai is Map) {
+    return switch (ai['kind']) {
+      'COMMAND_DRAFT' => '확인 카드가 생성되었습니다. 내용을 보고 수락 또는 거절해 주세요.',
+      'RULE_DRAFT' => '정리 규칙 초안이 생성되었습니다. 내용을 보고 수락 또는 거절해 주세요.',
+      'QUERY' => 'AI가 파일 조회 요청을 만들었습니다. 결과가 채팅에 표시됩니다.',
+      _ => '',
+    };
   }
   return '';
 }
@@ -355,6 +360,71 @@ List<Map<String, dynamic>> mergeChatMessages(
     }
   }
   return changed ? List.unmodifiable(next) : existing;
+}
+
+Map<String, dynamic> optimisticUserChatMessage({
+  required String sessionId,
+  required String content,
+}) => {
+  'id': 'local-${const Uuid().v4()}',
+  'roomId': null,
+  'sessionId': sessionId,
+  'senderType': 'USER',
+  'messageType': 'TEXT',
+  'content': content,
+  'structuredPayload': null,
+  'commandId': null,
+  'createdAt': DateTime.now().toUtc().toIso8601String(),
+  'localStatus': 'SENDING',
+};
+
+List<Map<String, dynamic>> removeChatMessageById(
+  List<Map<String, dynamic>> messages,
+  String messageId,
+) {
+  var changed = false;
+  final next = <Map<String, dynamic>>[];
+  for (final message in messages) {
+    if (message['id'] == messageId) {
+      changed = true;
+      continue;
+    }
+    next.add(message);
+  }
+  return changed ? List.unmodifiable(next) : messages;
+}
+
+List<Map<String, dynamic>> reconcileOptimisticChatMessage({
+  required List<Map<String, dynamic>> messages,
+  required String optimisticId,
+  required Map<String, dynamic> authoritative,
+}) {
+  final authoritativeId = authoritative['id'];
+  if (authoritativeId is String &&
+      messages.any(
+        (message) =>
+            message['id'] == authoritativeId && message['id'] != optimisticId,
+      )) {
+    return removeChatMessageById(messages, optimisticId);
+  }
+
+  var changed = false;
+  var replaced = false;
+  final next = [
+    for (final message in messages)
+      if (message['id'] == optimisticId)
+        (() {
+          changed = true;
+          replaced = true;
+          return authoritative;
+        })()
+      else
+        message,
+  ];
+  if (!replaced) {
+    return mergeChatMessages(messages, [authoritative]);
+  }
+  return changed ? List.unmodifiable(next) : messages;
 }
 
 List<Map<String, dynamic>> patchActionDraftMessages(
@@ -758,42 +828,75 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _sending) {
       return;
     }
-    setState(() => _sending = true);
+    final optimistic = optimisticUserChatMessage(
+      sessionId: sessionId,
+      content: content,
+    );
+    final optimisticId = optimistic['id'] as String;
+    input.clear();
+    setState(() {
+      _sending = true;
+      _conversation = _conversation.copyWith(
+        messages: [..._conversation.messages, optimistic],
+        sessions: touchChatSessionPreview(
+          _conversation.sessions,
+          sessionId,
+          content,
+        ),
+      );
+    });
+    _scrollToBottom();
     try {
       final result = await _gateway.sendMessage(sessionId, content);
       if (_disposed) return;
       _invalidateChatReadModels(sessionId: sessionId);
-      input.clear();
-      final newMessages = <Map<String, dynamic>>[
-        ..._conversation.messages,
-        if (result['message'] is Map<String, dynamic>)
-          result['message'] as Map<String, dynamic>,
-        if (result['assistant'] is Map<String, dynamic>)
-          result['assistant'] as Map<String, dynamic>,
-      ];
+      var newMessages = _conversation.messages;
+      final resultMessage = result['message'];
+      if (resultMessage is Map<String, dynamic>) {
+        newMessages = reconcileOptimisticChatMessage(
+          messages: newMessages,
+          optimisticId: optimisticId,
+          authoritative: resultMessage,
+        );
+      } else {
+        newMessages = removeChatMessageById(newMessages, optimisticId);
+      }
+      final assistant = result['assistant'];
+      if (assistant is Map<String, dynamic>) {
+        newMessages = mergeChatMessages(newMessages, [assistant]);
+      }
       setState(() {
         _conversation = _conversation.copyWith(
           messages: newMessages,
           messageCursor: lastChatMessageId(newMessages),
           clearMessageCursor: newMessages.isEmpty,
-          sessions: touchChatSessionPreview(
-            _conversation.sessions,
-            sessionId,
-            content,
-          ),
         );
       });
       unawaited(_markVisibleSessionRead());
       _scrollToBottom();
       final notice = chatSendNotice(result);
       if (notice.isNotEmpty) _showSnack(notice);
-      if (result['assistant'] is Map<String, dynamic>) {
-        final assistant = result['assistant'] as Map<String, dynamic>;
-        if (assistant['messageType'] == 'COMMAND_DRAFT') {
+      if (assistant is Map<String, dynamic>) {
+        if (isActionDraftMessage(assistant)) {
           unawaited(_refreshPendingProposals());
         }
       }
     } catch (error) {
+      if (!_disposed) {
+        final failedMessages = removeChatMessageById(
+          _conversation.messages,
+          optimisticId,
+        );
+        setState(() {
+          _conversation = _conversation.copyWith(
+            messages: failedMessages,
+            messageCursor: lastChatMessageId(failedMessages),
+            clearMessageCursor: failedMessages.isEmpty,
+          );
+          input.text = content;
+          input.selection = TextSelection.collapsed(offset: input.text.length);
+        });
+      }
       _showSnack('메시지 저장 실패: ${chatErrorMessage(error)}');
     } finally {
       if (!_disposed) setState(() => _sending = false);
@@ -1490,6 +1593,7 @@ class _ChatBubble extends StatelessWidget {
     final draftStatus = actionDraftStatusFromMessage(message);
     final draftBusy = draftId != null && busyDraftIds.contains(draftId);
     final keyPrefix = isRuleDraft ? 'chat-rule-draft' : 'chat-command-draft';
+    final localStatus = message['localStatus'] as String?;
     return Align(
       alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Card(
@@ -1506,6 +1610,15 @@ class _ChatBubble extends StatelessWidget {
               if (isDraft)
                 Text('확인 카드', style: Theme.of(context).textTheme.labelMedium),
               Text(message['content'] as String? ?? ''),
+              if (localStatus == 'SENDING') ...[
+                const SizedBox(height: 4),
+                Text(
+                  '보내는 중…',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
+                ),
+              ],
               if (isDraft && draftId != null) ...[
                 const SizedBox(height: 8),
                 if (draftStatus == 'DRAFT')

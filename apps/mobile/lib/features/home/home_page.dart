@@ -11,12 +11,14 @@ import '../auth/auth_controller.dart';
 import '../auth/connection_gate_controller.dart';
 import '../chat/chat_page.dart';
 import '../files/files_page.dart';
+import '../settings/settings_page.dart';
 import 'home_controller.dart';
 
 const maxManagedFolderCount = 5;
 const _mouseMoveDuration = Duration(milliseconds: 720);
 const _mouseMoveCurve = Curves.easeInOutCubic;
-const _mouseDisplaySize = 376.0;
+const _mouseDisplaySize = 263.0;
+const _mouseFixedYAlignment = 0.22;
 
 enum _SpeechBubbleStage { hidden, ellipsis, menu }
 
@@ -89,7 +91,7 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   late final HomeAuthoritativeReconcileLoop _reconcileLoop;
   final _random = math.Random();
-  Offset _mouseAlignment = const Offset(-0.08, 0.22);
+  Offset _mouseAlignment = const Offset(-0.08, _mouseFixedYAlignment);
   _SpeechBubbleStage _bubbleStage = _SpeechBubbleStage.hidden;
   String? _selectedRoomId;
   bool _mouseWalking = false;
@@ -183,7 +185,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                     left: constraints.maxWidth * 0.05,
                     right: constraints.maxWidth * 0.05,
                     child: Align(
-                      alignment: Alignment.topCenter,
+                      alignment: Alignment.topLeft,
                       child: _ManagedFolderSelector(
                         rooms: rooms,
                         selectedRoomId: selectedRoom?['id'] as String?,
@@ -236,14 +238,13 @@ class _HomePageState extends ConsumerState<HomePage> {
                       onChat: selectedRoom == null
                           ? null
                           : () => _openChat(selectedRoom),
+                      onSettings: () =>
+                          _openSettings(devices: devices, rooms: rooms),
                     ),
                   ),
                   Align(
-                    alignment: Alignment.bottomCenter,
-                    child: SafeArea(
-                      minimum: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-                      child: _DummyBottomMenu(),
-                    ),
+                    alignment: const Alignment(0, 0.90),
+                    child: _DummyBottomMenu(),
                   ),
                   if (devices.isEmpty && rooms.isEmpty)
                     const Positioned(
@@ -263,12 +264,8 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _handleStageTap(TapUpDetails details, Size size) {
     final dx = (details.localPosition.dx / size.width) * 2 - 1;
-    final dy = (details.localPosition.dy / size.height) * 2 - 1;
     _startMouseWalk(
-      Offset(
-        dx.clamp(-0.72, 0.72).toDouble(),
-        dy.clamp(-0.16, 0.58).toDouble(),
-      ),
+      Offset(dx.clamp(-0.72, 0.72).toDouble(), _mouseFixedYAlignment),
       hideBubble: true,
     );
   }
@@ -336,10 +333,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         (_mouseAlignment.dx + (shouldMoveRight ? distance : -distance))
             .clamp(-0.72, 0.72)
             .toDouble();
-    final nextDy = (_mouseAlignment.dy + (_random.nextDouble() - 0.5) * 0.28)
-        .clamp(-0.16, 0.58)
-        .toDouble();
-    return Offset(nextDx, nextDy);
+    return Offset(nextDx, _mouseFixedYAlignment);
   }
 
   Map<String, dynamic>? _selectedRoom(List<Map<String, dynamic>> rooms) {
@@ -378,6 +372,17 @@ class _HomePageState extends ConsumerState<HomePage> {
   void _openChat(Map<String, dynamic> room) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ChatPage(roomId: room['id'] as String)),
+    );
+  }
+
+  void _openSettings({
+    required List<Map<String, dynamic>> devices,
+    required List<Map<String, dynamic>> rooms,
+  }) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => MouseKeeperSettingsPage(devices: devices, rooms: rooms),
+      ),
     );
   }
 }
@@ -455,7 +460,7 @@ class _RoomPanningBackground extends StatelessWidget {
         final imageWidth = constraints.maxWidth * 1.28;
         final extraWidth = imageWidth - constraints.maxWidth;
         final progress = ((mouseAlignment.dx + 1) / 2).clamp(0.0, 1.0);
-        final left = -extraWidth * (1 - progress);
+        final left = -extraWidth * progress;
         return Stack(
           fit: StackFit.expand,
           children: [
@@ -579,6 +584,7 @@ class _MousePlayground extends StatelessWidget {
     required this.onBubbleTap,
     required this.onFiles,
     required this.onChat,
+    required this.onSettings,
   });
 
   final Offset mouseAlignment;
@@ -591,6 +597,7 @@ class _MousePlayground extends StatelessWidget {
   final VoidCallback onBubbleTap;
   final VoidCallback? onFiles;
   final VoidCallback? onChat;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) => Stack(
@@ -604,6 +611,7 @@ class _MousePlayground extends StatelessWidget {
           onTap: onBubbleTap,
           onFiles: onFiles,
           onChat: onChat,
+          onSettings: onSettings,
         ),
       AnimatedAlign(
         duration: _mouseMoveDuration,
@@ -643,6 +651,7 @@ class _MouseSpeechBubble extends StatelessWidget {
     required this.onTap,
     required this.onFiles,
     required this.onChat,
+    required this.onSettings,
   });
 
   final Offset alignment;
@@ -651,6 +660,7 @@ class _MouseSpeechBubble extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onFiles;
   final VoidCallback? onChat;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) => AnimatedAlign(
@@ -685,19 +695,25 @@ class _MouseSpeechBubble extends StatelessWidget {
                     fontWeight: FontWeight.w900,
                   ),
                 )
-              : Row(
-                  mainAxisSize: MainAxisSize.min,
+              : Wrap(
+                  alignment: WrapAlignment.center,
+                  runSpacing: 8,
+                  spacing: 10,
                   children: [
                     FilledButton.icon(
                       onPressed: onFiles,
                       icon: const Icon(Icons.folder_open),
                       label: const Text('파일 목록'),
                     ),
-                    const SizedBox(width: 10),
                     FilledButton.tonalIcon(
                       onPressed: onChat,
                       icon: const Icon(Icons.chat_bubble_outline),
                       label: const Text('대화'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: onSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                      label: const Text('설정'),
                     ),
                   ],
                 ),
