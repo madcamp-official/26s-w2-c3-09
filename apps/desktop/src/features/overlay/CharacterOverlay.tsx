@@ -11,13 +11,15 @@ import {
 import { listManagedRoots } from "../files/fileEngineApi";
 import type { ManagedRoot } from "../files/fileEngineApi";
 import {
+  createAgentChatQuickCleanup,
   createAgentChatSession,
+  getAgentChatQuickView,
   listAgentChatMessages,
   listAgentChatSessions,
   markAgentChatSessionRead,
   sendAgentChatMessage
 } from "../agent/agentApi";
-import type { AgentChatMessage, AgentChatSession } from "../agent/agentApi";
+import type { AgentChatMessage, AgentChatQuickView, AgentChatSession } from "../agent/agentApi";
 import {
   CharacterEvent,
   CharacterEventKind,
@@ -102,6 +104,7 @@ export function CharacterOverlay() {
   const [draft, setDraft] = useState("");
   const [rooms, setRooms] = useState<ManagedRoot[]>([]);
   const [chatSession, setChatSession] = useState<AgentChatSession | null>(null);
+  const [quickView, setQuickView] = useState<AgentChatQuickView | null>(null);
   const [chatMessages, setChatMessages] = useState<AgentChatMessage[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -148,6 +151,7 @@ export function CharacterOverlay() {
     if (!chatOpen) return;
     if (!activeRoomId) {
       setChatSession(null);
+      setQuickView(null);
       setChatMessages([]);
       setNotice("먼저 데스크탑에서 관리 폴더를 서버 room과 연결해야 채팅을 이어서 기록할 수 있어요.");
       return;
@@ -158,15 +162,20 @@ export function CharacterOverlay() {
     setNotice(null);
     void ensureRoomChatSession(activeRoomId, activeRoomName)
       .then(async (session) => {
-        const messages = await listAgentChatMessages(session.session_id);
+        const [messages, quick] = await Promise.all([
+          listAgentChatMessages(session.session_id),
+          getAgentChatQuickView(activeRoomId).catch(() => null)
+        ]);
         await markAgentChatSessionRead(session.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
         if (cancelled) return;
         setChatSession(session);
+        setQuickView(quick);
         setChatMessages(messages);
       })
       .catch((cause) => {
         if (cancelled) return;
         setChatSession(null);
+        setQuickView(null);
         setChatMessages([]);
         setNotice(cause instanceof Error ? cause.message : String(cause));
       })
@@ -340,6 +349,28 @@ export function CharacterOverlay() {
     }
   }
 
+  async function runQuickCleanup() {
+    setNotice(null);
+    setBusy(true);
+    try {
+      if (!activeRoomId) {
+        throw new Error("관리 폴더를 서버 room과 연결해야 빠른 정리 제안을 만들 수 있어요.");
+      }
+      const result = await createAgentChatQuickCleanup(activeRoomId);
+      setChatSession(result.session);
+      const sentMessages = [result.message, result.assistant].filter(isChatMessage);
+      setChatMessages((items) => appendUniqueMessages(items, sentMessages));
+      await markAgentChatSessionRead(result.session.session_id, lastAgentChatMessageId(sentMessages)).catch(() => undefined);
+      const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
+      setQuickView(quick);
+      setNotice("빠른 정리 제안 카드가 추가됐어요. 승인하면 PC 분석이 시작됩니다.");
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className={`character-overlay character-${event.kind.toLowerCase()}`}>
       <button
@@ -376,11 +407,14 @@ export function CharacterOverlay() {
               messages={chatMessages}
               loading={chatLoading}
               sessionTitle={chatSession?.title ?? null}
+              quickView={quickView}
               onChangeDraft={setDraft}
               onClose={() => {
                 setChatOpen(false);
                 setNotice(null);
               }}
+              onQuickCleanup={() => void runQuickCleanup()}
+              onUsePrompt={setDraft}
               onSubmit={() => void submitDraft()}
             />
           ) : (
@@ -571,11 +605,14 @@ function RoomChatPanel({
   loading,
   messages,
   notice,
+  quickView,
   roomId,
   roomName,
   sessionTitle,
   onChangeDraft,
   onClose,
+  onQuickCleanup,
+  onUsePrompt,
   onSubmit
 }: {
   avatarUrl: string;
@@ -585,13 +622,19 @@ function RoomChatPanel({
   loading: boolean;
   messages: AgentChatMessage[];
   notice: string | null;
+  quickView: AgentChatQuickView | null;
   roomId: string | null;
   roomName: string;
   sessionTitle: string | null;
   onChangeDraft: (value: string) => void;
   onClose: () => void;
+  onQuickCleanup: () => void;
+  onUsePrompt: (value: string) => void;
   onSubmit: () => void;
 }) {
+  const prompts = quickView?.prompts.slice(0, 4) ?? [];
+  const pendingCount = quickView?.pending_action_count ?? 0;
+  const unreadCount = quickView?.unread_count ?? 0;
   return (
     <div className="room-chat-panel" data-room-id={roomId ?? "unbound"}>
       <header className="room-chat-header">
@@ -604,6 +647,24 @@ function RoomChatPanel({
         </div>
         <span className="room-chat-status" title={event.kind} aria-label={event.kind} />
       </header>
+
+      <div className="room-chat-quickbar" aria-label="Chat quick actions">
+        <button type="button" onClick={onQuickCleanup} disabled={busy || roomId == null}>
+          빠른 정리
+        </button>
+        {prompts.map((prompt) => (
+          <button key={prompt.id} type="button" onClick={() => onUsePrompt(prompt.prompt)} title={prompt.prompt}>
+            {prompt.label}
+          </button>
+        ))}
+      </div>
+
+      {pendingCount > 0 || unreadCount > 0 ? (
+        <div className="room-chat-quickmeta" aria-label="Chat quick counts">
+          {pendingCount > 0 ? <span>제안 {pendingCount}</span> : null}
+          {unreadCount > 0 ? <span>새 메시지 {unreadCount}</span> : null}
+        </div>
+      ) : null}
 
       <div className="room-chat-thread" aria-live="polite">
         {loading ? (

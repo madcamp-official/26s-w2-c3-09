@@ -1,7 +1,7 @@
 use crate::agent::{
-    AgentChatMessage, AgentChatSendResult, AgentChatSession, AgentCommand, AgentConnectionStatus,
-    AgentRoomSnapshot, AgentRoomSync, AgentRuntime, HeartbeatResult, PairingSession, PairingStatus,
-    SyncEvent,
+    AgentChatMessage, AgentChatQuickCleanupResult, AgentChatQuickView, AgentChatSendResult,
+    AgentChatSession, AgentCommand, AgentConnectionStatus, AgentRoomSnapshot, AgentRoomSync,
+    AgentRuntime, HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
 };
 use crate::cleanliness::{calculate_cleanliness_snapshot, CleanlinessSnapshot};
 use crate::command_processor::{process_pending_commands, CommandProcessingReport};
@@ -389,6 +389,52 @@ pub async fn create_agent_chat_session(
 ) -> Result<AgentChatSession, String> {
     runtime
         .create_chat_session(room_id, title)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn get_agent_chat_quick_view(
+    room_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentChatQuickView, String> {
+    runtime
+        .chat_quick_view(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn get_agent_chat_quick_view(
+    runtime: &AgentRuntime,
+    room_id: String,
+) -> Result<AgentChatQuickView, String> {
+    runtime
+        .chat_quick_view(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn create_agent_chat_quick_cleanup(
+    room_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentChatQuickCleanupResult, String> {
+    runtime
+        .create_quick_cleanup_suggestion(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn create_agent_chat_quick_cleanup(
+    runtime: &AgentRuntime,
+    room_id: String,
+) -> Result<AgentChatQuickCleanupResult, String> {
+    runtime
+        .create_quick_cleanup_suggestion(room_id)
         .await
         .map_err(|error| error.to_string())
 }

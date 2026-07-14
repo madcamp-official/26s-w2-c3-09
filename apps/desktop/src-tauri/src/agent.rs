@@ -124,6 +124,56 @@ pub struct AgentChatSendResult {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatQuickPrompt {
+    pub id: String,
+    pub label: String,
+    pub prompt: String,
+    pub category: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatQuickHistoryItem {
+    pub message_id: String,
+    pub session_id: String,
+    pub session_title: String,
+    pub sender_type: String,
+    pub message_type: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatQuickSuggestion {
+    pub message_id: String,
+    pub session_id: String,
+    pub session_title: String,
+    pub message_type: String,
+    pub content: String,
+    pub draft_id: String,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatQuickView {
+    pub prompts: Vec<AgentChatQuickPrompt>,
+    pub sessions: Vec<AgentChatSession>,
+    pub history: Vec<AgentChatQuickHistoryItem>,
+    pub pending_suggestions: Vec<AgentChatQuickSuggestion>,
+    pub unread_count: u64,
+    pub pending_action_count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatQuickCleanupResult {
+    pub session: AgentChatSession,
+    pub message: AgentChatMessage,
+    pub assistant: Option<AgentChatMessage>,
+    pub ai_status: String,
+    pub ai: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct AgentProposalItemRecord {
     pub item_order: i64,
     pub action_type: String,
@@ -822,6 +872,49 @@ impl AgentRuntime {
             )
             .await
             .and_then(|sessions| validate_chat_sessions(&room_id, sessions));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn chat_quick_view(
+        &self,
+        room_id: String,
+    ) -> Result<AgentChatQuickView, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ChatQuickViewResponse>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/chat/quick-view"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|view| validate_chat_quick_view(&room_id, view));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn create_quick_cleanup_suggestion(
+        &self,
+        room_id: String,
+    ) -> Result<AgentChatQuickCleanupResult, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ChatQuickCleanupResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms/{room_id}/chat/quick-cleanup"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({})),
+            )
+            .await
+            .and_then(|response| validate_chat_quick_cleanup(&room_id, response));
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1855,6 +1948,61 @@ struct ChatSendResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ChatQuickPromptResponse {
+    id: String,
+    label: String,
+    prompt: String,
+    category: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatQuickHistoryResponse {
+    message_id: String,
+    session_id: String,
+    session_title: String,
+    sender_type: String,
+    message_type: String,
+    content: String,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatQuickSuggestionResponse {
+    message_id: String,
+    session_id: String,
+    session_title: String,
+    message_type: String,
+    content: String,
+    draft_id: String,
+    status: String,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatQuickViewResponse {
+    prompts: Vec<ChatQuickPromptResponse>,
+    sessions: Vec<ChatSessionResponse>,
+    history: Vec<ChatQuickHistoryResponse>,
+    pending_suggestions: Vec<ChatQuickSuggestionResponse>,
+    unread_count: u64,
+    pending_action_count: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatQuickCleanupResponse {
+    session: ChatSessionResponse,
+    message: ChatMessageResponse,
+    assistant: Option<ChatMessageResponse>,
+    ai_status: String,
+    ai: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SyncEventResponse {
     event_id: String,
     event_type: String,
@@ -2214,7 +2362,10 @@ fn validate_chat_message(
         || response.room_id.is_empty()
         || !session_matches
         || !matches!(response.sender_type.as_str(), "USER" | "ASSISTANT")
-        || !matches!(response.message_type.as_str(), "TEXT" | "COMMAND_DRAFT")
+        || !matches!(
+            response.message_type.as_str(),
+            "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT"
+        )
         || response.content.chars().count() > 2_000
         || response.created_at.is_empty()
     {
@@ -2254,6 +2405,158 @@ fn validate_chat_send_result(
         assistant,
         ai_status: response.ai_status,
         ai: response.ai,
+    })
+}
+
+fn validate_chat_quick_view(
+    expected_room_id: &str,
+    response: ChatQuickViewResponse,
+) -> Result<AgentChatQuickView, AgentError> {
+    if response.prompts.is_empty()
+        || response.prompts.len() > 12
+        || response.sessions.len() > 5
+        || response.history.len() > 12
+        || response.pending_suggestions.len() > 12
+    {
+        return Err(invalid_response_error(
+            "chat quick view failed response validation",
+        ));
+    }
+    let prompts = response
+        .prompts
+        .into_iter()
+        .map(validate_chat_quick_prompt)
+        .collect::<Result<Vec<_>, _>>()?;
+    let sessions = validate_chat_sessions(expected_room_id, response.sessions)?;
+    let history = response
+        .history
+        .into_iter()
+        .map(validate_chat_quick_history)
+        .collect::<Result<Vec<_>, _>>()?;
+    let pending_suggestions = response
+        .pending_suggestions
+        .into_iter()
+        .map(validate_chat_quick_suggestion)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(AgentChatQuickView {
+        prompts,
+        sessions,
+        history,
+        pending_suggestions,
+        unread_count: response.unread_count,
+        pending_action_count: response.pending_action_count,
+    })
+}
+
+fn validate_chat_quick_cleanup(
+    expected_room_id: &str,
+    response: ChatQuickCleanupResponse,
+) -> Result<AgentChatQuickCleanupResult, AgentError> {
+    let session = validate_chat_session(expected_room_id, response.session)?;
+    let message = validate_chat_message(Some(&session.session_id), response.message)?;
+    let assistant = response
+        .assistant
+        .map(|message| validate_chat_message(Some(&session.session_id), message))
+        .transpose()?;
+    if response.ai_status != "READY" || !response.ai.is_object() {
+        return Err(invalid_response_error(
+            "chat quick cleanup failed response validation",
+        ));
+    }
+    Ok(AgentChatQuickCleanupResult {
+        session,
+        message,
+        assistant,
+        ai_status: response.ai_status,
+        ai: response.ai,
+    })
+}
+
+fn validate_chat_quick_prompt(
+    response: ChatQuickPromptResponse,
+) -> Result<AgentChatQuickPrompt, AgentError> {
+    if response.id.trim().is_empty()
+        || response.id.chars().count() > 80
+        || response.label.trim().is_empty()
+        || response.label.chars().count() > 80
+        || response.prompt.trim().is_empty()
+        || response.prompt.chars().count() > 500
+        || !matches!(
+            response.category.as_str(),
+            "QUERY" | "COMMAND" | "RULE" | "CLEANUP"
+        )
+    {
+        return Err(invalid_response_error(
+            "chat quick prompt failed response validation",
+        ));
+    }
+    Ok(AgentChatQuickPrompt {
+        id: response.id,
+        label: response.label,
+        prompt: response.prompt,
+        category: response.category,
+    })
+}
+
+fn validate_chat_quick_history(
+    response: ChatQuickHistoryResponse,
+) -> Result<AgentChatQuickHistoryItem, AgentError> {
+    if response.message_id.trim().is_empty()
+        || response.session_id.trim().is_empty()
+        || response.session_title.trim().is_empty()
+        || response.session_title.chars().count() > 120
+        || !matches!(response.sender_type.as_str(), "USER" | "ASSISTANT" | "SYSTEM")
+        || !matches!(
+            response.message_type.as_str(),
+            "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT"
+        )
+        || response.content.trim().is_empty()
+        || response.content.chars().count() > 2_000
+        || response.created_at.trim().is_empty()
+    {
+        return Err(invalid_response_error(
+            "chat quick history failed response validation",
+        ));
+    }
+    Ok(AgentChatQuickHistoryItem {
+        message_id: response.message_id,
+        session_id: response.session_id,
+        session_title: response.session_title,
+        sender_type: response.sender_type,
+        message_type: response.message_type,
+        content: response.content,
+        created_at: response.created_at,
+    })
+}
+
+fn validate_chat_quick_suggestion(
+    response: ChatQuickSuggestionResponse,
+) -> Result<AgentChatQuickSuggestion, AgentError> {
+    if response.message_id.trim().is_empty()
+        || response.session_id.trim().is_empty()
+        || response.session_title.trim().is_empty()
+        || response.session_title.chars().count() > 120
+        || !matches!(response.message_type.as_str(), "COMMAND_DRAFT" | "RULE_DRAFT")
+        || response.content.trim().is_empty()
+        || response.content.chars().count() > 2_000
+        || response.draft_id.trim().is_empty()
+        || response.status.trim().is_empty()
+        || response.status.chars().count() > 40
+        || response.created_at.trim().is_empty()
+    {
+        return Err(invalid_response_error(
+            "chat quick suggestion failed response validation",
+        ));
+    }
+    Ok(AgentChatQuickSuggestion {
+        message_id: response.message_id,
+        session_id: response.session_id,
+        session_title: response.session_title,
+        message_type: response.message_type,
+        content: response.content,
+        draft_id: response.draft_id,
+        status: response.status,
+        created_at: response.created_at,
     })
 }
 

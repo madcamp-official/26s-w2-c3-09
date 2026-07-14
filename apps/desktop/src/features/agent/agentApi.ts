@@ -79,7 +79,7 @@ export type AgentChatMessage = {
   room_id: string;
   session_id: string | null;
   sender_type: "USER" | "ASSISTANT";
-  message_type: "TEXT" | "COMMAND_DRAFT";
+  message_type: "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT";
   content: string;
   structured_payload: unknown;
   command_id: string | null;
@@ -91,6 +91,47 @@ export type AgentChatSendResult = {
   assistant: AgentChatMessage | null;
   ai_status: string;
   ai: unknown;
+};
+
+export type AgentChatQuickPrompt = {
+  id: string;
+  label: string;
+  prompt: string;
+  category: "QUERY" | "COMMAND" | "RULE" | "CLEANUP";
+};
+
+export type AgentChatQuickHistoryItem = {
+  message_id: string;
+  session_id: string;
+  session_title: string;
+  sender_type: "USER" | "ASSISTANT" | "SYSTEM";
+  message_type: AgentChatMessage["message_type"];
+  content: string;
+  created_at: string;
+};
+
+export type AgentChatQuickSuggestion = {
+  message_id: string;
+  session_id: string;
+  session_title: string;
+  message_type: "COMMAND_DRAFT" | "RULE_DRAFT";
+  content: string;
+  draft_id: string;
+  status: string;
+  created_at: string;
+};
+
+export type AgentChatQuickView = {
+  prompts: AgentChatQuickPrompt[];
+  sessions: AgentChatSession[];
+  history: AgentChatQuickHistoryItem[];
+  pending_suggestions: AgentChatQuickSuggestion[];
+  unread_count: number;
+  pending_action_count: number;
+};
+
+export type AgentChatQuickCleanupResult = AgentChatSendResult & {
+  session: AgentChatSession;
 };
 
 export type CleanlinessSnapshot = {
@@ -371,6 +412,14 @@ export function createAgentChatSession(roomId: string, title?: string) {
     roomId,
     title: title ?? null
   });
+}
+
+export function getAgentChatQuickView(roomId: string) {
+  return invokeAgentCommand<AgentChatQuickView>("get_agent_chat_quick_view", { roomId });
+}
+
+export function createAgentChatQuickCleanup(roomId: string) {
+  return invokeAgentCommand<AgentChatQuickCleanupResult>("create_agent_chat_quick_cleanup", { roomId });
 }
 
 export function listAgentChatMessages(sessionId: string) {
