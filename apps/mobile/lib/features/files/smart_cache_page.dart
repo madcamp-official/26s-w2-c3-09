@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import '../../core/files/verified_download.dart';
 import '../../core/network/api_client.dart';
 import '../../storage/display_cache.dart';
@@ -65,6 +66,60 @@ Future<void> recordSmartCacheDownloadCompleted(
   );
 }
 
+List<Map<String, dynamic>> smartCacheFilesFromPayload(
+  Map<String, dynamic> cache,
+) {
+  final raw = cache['files'];
+  if (raw == null) return const [];
+  if (raw is! List) {
+    throw const FormatException('INVALID_SMART_CACHE_FILES');
+  }
+  return raw
+      .map((item) {
+        if (item is! Map) {
+          throw const FormatException('INVALID_SMART_CACHE_FILES');
+        }
+        return Map<String, dynamic>.from(item);
+      })
+      .toList(growable: false);
+}
+
+Map<String, dynamic> smartCacheOfflineFallbackPayload(
+  List<Map<String, dynamic>> files,
+) {
+  return {
+    'files': files,
+    'pendingCommandWarning': false,
+    'desktopOnline': false,
+    'offlineFallback': true,
+  };
+}
+
+bool isSmartCacheOfflineFallbackError(Object error) {
+  if (error is! DioException) return false;
+  return switch (error.type) {
+    DioExceptionType.connectionError ||
+    DioExceptionType.connectionTimeout ||
+    DioExceptionType.receiveTimeout ||
+    DioExceptionType.sendTimeout => true,
+    _ => false,
+  };
+}
+
+class SmartCachePageContent {
+  const SmartCachePageContent({
+    required this.cache,
+    this.policy,
+    this.offlineFallbackError,
+  });
+
+  final Map<String, dynamic>? policy;
+  final Map<String, dynamic> cache;
+  final Object? offlineFallbackError;
+
+  bool get isOfflineFallback => offlineFallbackError != null;
+}
+
 class SmartCachePage extends ConsumerStatefulWidget {
   const SmartCachePage({super.key, required this.roomId});
   final String roomId;
@@ -73,7 +128,7 @@ class SmartCachePage extends ConsumerStatefulWidget {
 }
 
 class _SmartCachePageState extends ConsumerState<SmartCachePage> {
-  late Future<List<Map<String, dynamic>>> content;
+  late Future<SmartCachePageContent> content;
   String? downloadingId;
   double? downloadProgress;
   @override
@@ -86,20 +141,27 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
     content = loadContent();
   }
 
-  Future<List<Map<String, dynamic>>> loadContent() async {
-    final api = ref.read(apiClientProvider);
-    final results = await Future.wait([
-      api.get('/v1/rooms/${widget.roomId}/smart-cache-policy'),
-      api.get(smartCacheFilesPath(widget.roomId)),
-    ]);
-    final cache = results[1];
-    final files = (cache['files'] as List<dynamic>? ?? const [])
-        .map((raw) => Map<String, dynamic>.from(raw as Map))
-        .toList(growable: false);
-    await ref
-        .read(displayCacheProvider)
-        .replaceSmartCacheFiles(widget.roomId, files);
-    return results;
+  Future<SmartCachePageContent> loadContent() async {
+    final displayCache = ref.read(displayCacheProvider);
+    try {
+      final api = ref.read(apiClientProvider);
+      final results = await Future.wait([
+        api.get('/v1/rooms/${widget.roomId}/smart-cache-policy'),
+        api.get(smartCacheFilesPath(widget.roomId)),
+      ]);
+      final cache = results[1];
+      final files = smartCacheFilesFromPayload(cache);
+      await displayCache.replaceSmartCacheFiles(widget.roomId, files);
+      return SmartCachePageContent(policy: results[0], cache: cache);
+    } catch (error) {
+      if (!isSmartCacheOfflineFallbackError(error)) rethrow;
+      final localFiles = await displayCache.smartCacheFiles(widget.roomId);
+      if (localFiles.isEmpty) rethrow;
+      return SmartCachePageContent(
+        cache: smartCacheOfflineFallbackPayload(localFiles),
+        offlineFallbackError: error,
+      );
+    }
   }
 
   Future<void> setEnabled(Map<String, dynamic> policy, bool enabled) async {
@@ -363,7 +425,7 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('오프라인 스마트 캐시')),
-    body: FutureBuilder<List<Map<String, dynamic>>>(
+    body: FutureBuilder<SmartCachePageContent>(
       future: content,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
@@ -377,28 +439,35 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
             ),
           );
         }
-        final policy = snapshot.data![0];
-        final cache = snapshot.data![1];
-        final files = cache['files'] as List<dynamic>? ?? const [];
+        final data = snapshot.data!;
+        final policy = data.policy;
+        final cache = data.cache;
+        final files = smartCacheFilesFromPayload(cache);
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            SwitchListTile(
-              title: const Text('스마트 캐시 사용'),
-              subtitle: Text('방 용량 한도: ${policy['quotaBytes']} bytes'),
-              value: policy['enabled'] == true,
-              onChanged: (value) => setEnabled(policy, value),
-            ),
-            ListTile(
-              leading: const Icon(Icons.tune),
-              title: const Text('용량·제외 범위 설정'),
-              subtitle: Text(
-                '파일 한도: ${policy['maxFileBytes']} bytes · '
-                '제외 패턴 ${(policy['excludedPatterns'] as List<dynamic>? ?? const []).length}개',
+            if (data.isOfflineFallback)
+              SmartCacheOfflineFallbackWarning(
+                error: data.offlineFallbackError,
               ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => configurePolicy(policy),
-            ),
+            if (policy != null) ...[
+              SwitchListTile(
+                title: const Text('스마트 캐시 사용'),
+                subtitle: Text('방 용량 한도: ${policy['quotaBytes']} bytes'),
+                value: policy['enabled'] == true,
+                onChanged: (value) => setEnabled(policy, value),
+              ),
+              ListTile(
+                leading: const Icon(Icons.tune),
+                title: const Text('용량·제외 범위 설정'),
+                subtitle: Text(
+                  '파일 한도: ${policy['maxFileBytes']} bytes · '
+                  '제외 패턴 ${(policy['excludedPatterns'] as List<dynamic>? ?? const []).length}개',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => configurePolicy(policy),
+              ),
+            ],
             if (cache['pendingCommandWarning'] == true)
               const PendingCommandWarning(),
             if (cache['desktopOnline'] == false)
@@ -407,8 +476,7 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
             if (files.isEmpty)
               const ListTile(title: Text('오프라인에서 사용할 수 있는 캐시 파일이 없습니다'))
             else
-              ...files.map((raw) {
-                final file = raw as Map<String, dynamic>;
+              ...files.map((file) {
                 final isDownloading = downloadingId == file['id'];
                 return CachedFileTile(
                   file: file,
@@ -434,6 +502,25 @@ class PendingCommandWarning extends StatelessWidget {
     child: ListTile(
       leading: Icon(Icons.warning_amber),
       title: Text('명령 처리 후 파일 위치나 목록이 변경될 수 있습니다.'),
+    ),
+  );
+}
+
+class SmartCacheOfflineFallbackWarning extends StatelessWidget {
+  const SmartCacheOfflineFallbackWarning({super.key, this.error});
+
+  final Object? error;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: const Color(0xFFFFF3E0),
+    child: ListTile(
+      leading: const Icon(Icons.cloud_off_outlined),
+      title: const Text('Offline smart-cache metadata'),
+      subtitle: Text(
+        'Showing the last verified local cache metadata because the server is unreachable.'
+        '${error == null ? '' : '\n$error'}',
+      ),
     ),
   );
 }

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:dio/dio.dart';
 import 'package:mousekeeper/features/files/smart_cache_page.dart';
 
 void main() {
@@ -73,6 +74,59 @@ void main() {
         'sha256': List.filled(64, 'a').join(),
       }),
       returnsNormally,
+    );
+  });
+
+  test('offline fallback payload preserves verified local cache metadata', () {
+    final files = [
+      {
+        'id': 'cached-file-1',
+        'sourceRelativePath': 'reports/final.pdf',
+        'availabilityStatus': 'AVAILABLE',
+        'freshnessStatus': 'UNVERIFIED_OFFLINE',
+        'localDownloadPath': '/local/reports/final.pdf',
+        'sha256': List.filled(64, 'a').join(),
+        'lastVerifiedAt': '2026-07-14T02:03:04.000Z',
+      },
+    ];
+
+    expect(smartCacheFilesFromPayload({'files': files}), files);
+    expect(smartCacheOfflineFallbackPayload(files), {
+      'files': files,
+      'pendingCommandWarning': false,
+      'desktopOnline': false,
+      'offlineFallback': true,
+    });
+  });
+
+  test('smart-cache offline fallback is limited to transport failures', () {
+    final connectionError = DioException(
+      requestOptions: RequestOptions(
+        path: '/v1/rooms/room-a/smart-cache/files',
+      ),
+      type: DioExceptionType.connectionError,
+    );
+    final serverError = DioException(
+      requestOptions: RequestOptions(
+        path: '/v1/rooms/room-a/smart-cache/files',
+      ),
+      response: Response<Map<String, dynamic>>(
+        requestOptions: RequestOptions(
+          path: '/v1/rooms/room-a/smart-cache/files',
+        ),
+        statusCode: 500,
+        data: const {'code': 'INTERNAL_SERVER_ERROR'},
+      ),
+      type: DioExceptionType.badResponse,
+    );
+
+    expect(isSmartCacheOfflineFallbackError(connectionError), isTrue);
+    expect(isSmartCacheOfflineFallbackError(serverError), isFalse);
+    expect(
+      () => smartCacheFilesFromPayload({
+        'files': ['not-a-file-map'],
+      }),
+      throwsFormatException,
     );
   });
 }

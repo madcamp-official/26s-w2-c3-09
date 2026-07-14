@@ -103,6 +103,7 @@
 - [x] Socket.IO foreground event와 REST replay 복구
 - [x] FCM foreground/background handler와 token 등록 경로
 - [x] smart-cache opt-in policy, quota/file limit, freshness·last verified·pending command 경고
+- [x] smart-cache 목록 조회가 네트워크/타임아웃 오류일 때만 Drift의 검증된 로컬 metadata로 fallback하며, 서버·인증 오류는 숨기지 않고 실패로 유지한다.
 - [x] affinity 숫자·ledger 표시와 animation off 설정, 고정 기본 외형·테마
 - [x] 8종 PNG 상태 이미지가 모바일과 Desktop build에 포함됨
 
