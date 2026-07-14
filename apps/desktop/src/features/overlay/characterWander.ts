@@ -40,6 +40,7 @@ const USER_PLACED_HOME_REST_MS = 1600;
 type Point = { x: number; y: number };
 type Size = { w: number; h: number };
 type Rect = { x: number; y: number; w: number; h: number };
+type Polygon = readonly Point[];
 
 type WanderState = {
   phase: WanderPhase;
@@ -67,6 +68,71 @@ function centerInside(pos: Point, size: Size, rect: Rect) {
   const cx = pos.x + size.w / 2;
   const cy = pos.y + size.h / 2;
   return cx >= rect.x && cx <= rect.x + rect.w && cy >= rect.y && cy <= rect.y + rect.h;
+}
+
+function footPoint(pos: Point, size: Size) {
+  return {
+    x: pos.x + size.w * 0.5,
+    y: pos.y + size.h * 0.82
+  };
+}
+
+function topLeftFromFoot(point: Point, size: Size) {
+  return {
+    x: point.x - size.w * 0.5,
+    y: point.y - size.h * 0.82
+  };
+}
+
+function pointInPolygon(point: Point, polygon: Polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses =
+      a.y > point.y !== b.y > point.y &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y || Number.EPSILON) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function polygonBounds(polygon: Polygon): Rect {
+  const xs = polygon.map((point) => point.x);
+  const ys = polygon.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function houseFloorPolygon(house: Rect): Polygon {
+  const x = (ratio: number) => house.x + house.w * ratio;
+  const y = (ratio: number) => house.y + house.h * ratio;
+  return [
+    { x: x(0.1), y: y(0.72) },
+    { x: x(0.37), y: y(0.56) },
+    { x: x(0.72), y: y(0.59) },
+    { x: x(0.9), y: y(0.72) },
+    { x: x(0.55), y: y(0.95) },
+    { x: x(0.1), y: y(0.79) }
+  ];
+}
+
+function randomPointInPolygon(polygon: Polygon) {
+  const bounds = polygonBounds(polygon);
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const point = {
+      x: bounds.x + Math.random() * bounds.w,
+      y: bounds.y + Math.random() * bounds.h
+    };
+    if (pointInPolygon(point, polygon)) return point;
+  }
+  return {
+    x: bounds.x + bounds.w / 2,
+    y: bounds.y + bounds.h / 2
+  };
 }
 
 /**
@@ -196,14 +262,11 @@ export function useCharacterWander(
 
     function randomTargetInHouse(): Point {
       if (!s.house) return randomTarget();
-      const minX = s.house.x - s.size.w / 2;
-      const maxX = s.house.x + s.house.w - s.size.w / 2;
-      const minY = s.house.y - s.size.h / 2;
-      const maxY = s.house.y + s.house.h - s.size.h / 2;
-      return {
-        x: minX + Math.random() * Math.max(1, maxX - minX),
-        y: minY + Math.random() * Math.max(1, maxY - minY)
-      };
+      return topLeftFromFoot(randomPointInPolygon(houseFloorPolygon(s.house)), s.size);
+    }
+
+    function isStandingOnHouseFloor(pos: Point) {
+      return s.house ? pointInPolygon(footPoint(pos, s.size), houseFloorPolygon(s.house)) : false;
     }
 
     function beginWalk(now: number, target: Point) {
@@ -246,7 +309,8 @@ export function useCharacterWander(
         s.needResync = false;
         const justDragEnded = s.justDragEnded;
         s.justDragEnded = false;
-        const droppedAtHome = s.house ? centerInside(s.pos, s.size, s.house) : false;
+        const droppedAtHome =
+          !!s.house && (centerInside(s.pos, s.size, s.house) || isStandingOnHouseFloor(s.pos));
         if (justDragEnded) {
           s.confinedToHouse = droppedAtHome;
         }
@@ -262,7 +326,8 @@ export function useCharacterWander(
         return;
       }
 
-      const insideHouse = s.house ? centerInside(s.pos, s.size, s.house) : false;
+      const insideHouse =
+        !!s.house && (centerInside(s.pos, s.size, s.house) || isStandingOnHouseFloor(s.pos));
 
       if (s.phase === "resting") {
         if (now >= s.phaseUntil) {

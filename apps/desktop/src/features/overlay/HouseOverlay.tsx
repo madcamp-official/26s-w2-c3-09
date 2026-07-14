@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent, PointerEvent } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { AgentPanel, AutostartSetting } from "../agent/AgentPanel";
 import { FileEnginePanel } from "../files/FileEnginePanel";
-import { setHouseOverlayLocked } from "./overlayApi";
+import {
+  getLatestCleanlinessSnapshot,
+  listManagedRoots,
+  listenForCleanlinessSnapshotUpdates
+} from "../files/fileEngineApi";
+import { HOUSE_DROP_TARGET_EVENT, setHouseOverlayLocked } from "./overlayApi";
 
 const houseUrl = new URL("../../assets/mouse-house-transparent.png", import.meta.url).href;
+const messLayerUrls = {
+  floor: new URL("../../../../../packages/character-assets/mess/floor_dirty.png", import.meta.url).href,
+  wall: new URL("../../../../../packages/character-assets/mess/wall_dirty.png", import.meta.url).href,
+  trash: new URL("../../../../../packages/character-assets/mess/trash_dirty.png", import.meta.url).href,
+  box: new URL("../../../../../packages/character-assets/mess/box_dirty.png", import.meta.url).href,
+  web: new URL("../../../../../packages/character-assets/mess/web_dirty.png", import.meta.url).href
+} as const;
 
 type DragStart = {
   x: number;
@@ -31,6 +44,8 @@ const HOUSE_PANEL_ITEMS: ReadonlyArray<{
 
 export function HouseOverlay() {
   const [locked, setLocked] = useState(false);
+  const [dropTarget, setDropTarget] = useState(false);
+  const [cleanlinessScore, setCleanlinessScore] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<HousePanelSection | null>(null);
   const [selectedRootId, setSelectedRootId] = useState("");
@@ -47,6 +62,45 @@ export function HouseOverlay() {
       if (clickTimer.current !== null) {
         window.clearTimeout(clickTimer.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    const unlisten = listen<{ active: boolean }>(HOUSE_DROP_TARGET_EVENT, (event) => {
+      setDropTarget(event.payload.active);
+    });
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let stopped = false;
+
+    async function refreshCleanliness() {
+      try {
+        const roots = await listManagedRoots();
+        const root = roots.find((item) => item.room_binding_status === "active") ?? roots[0];
+        if (!root) {
+          if (!stopped) setCleanlinessScore(null);
+          return;
+        }
+        const snapshot = await getLatestCleanlinessSnapshot(root.root_id);
+        if (!stopped) setCleanlinessScore(snapshot?.score ?? null);
+      } catch {
+        if (!stopped) setCleanlinessScore(null);
+      }
+    }
+
+    void refreshCleanliness();
+    const unlisten = listenForCleanlinessSnapshotUpdates((update) => {
+      if (!stopped) setCleanlinessScore(update.snapshot.score);
+    });
+    return () => {
+      stopped = true;
+      void unlisten.then((off) => off());
     };
   }, []);
 
@@ -118,7 +172,7 @@ export function HouseOverlay() {
   }
 
   return (
-    <div className={`house-overlay ${locked ? "is-locked" : ""}`}>
+    <div className={`house-overlay ${locked ? "is-locked" : ""} ${dropTarget ? "is-drop-target" : ""}`}>
       <button
         type="button"
         className="house-drag-surface"
@@ -132,6 +186,7 @@ export function HouseOverlay() {
         title={locked ? "Click to open menu / double-click to unlock" : "Drag to move / double-click to lock"}
       >
         <img className="house-overlay-image" src={houseUrl} alt="" draggable={false} />
+        <HouseMessLayers level={messLevelForCleanliness(cleanlinessScore)} />
       </button>
 
       {menuOpen ? (
@@ -177,6 +232,27 @@ export function HouseOverlay() {
           </div>
         </section>
       ) : null}
+    </div>
+  );
+}
+
+function messLevelForCleanliness(score: number | null) {
+  if (score === null || score >= 90) return 0;
+  if (score >= 75) return 1;
+  if (score >= 55) return 2;
+  if (score >= 35) return 3;
+  return 4;
+}
+
+function HouseMessLayers({ level }: { level: number }) {
+  if (level <= 0) return null;
+  return (
+    <div className={`house-mess-layers mess-level-${level}`} aria-hidden="true">
+      {level >= 1 ? <img src={messLayerUrls.floor} alt="" draggable={false} /> : null}
+      {level >= 2 ? <img src={messLayerUrls.wall} alt="" draggable={false} /> : null}
+      {level >= 2 ? <img src={messLayerUrls.trash} alt="" draggable={false} /> : null}
+      {level >= 3 ? <img src={messLayerUrls.box} alt="" draggable={false} /> : null}
+      {level >= 4 ? <img src={messLayerUrls.web} alt="" draggable={false} /> : null}
     </div>
   );
 }

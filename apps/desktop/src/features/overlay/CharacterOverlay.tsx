@@ -1,12 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
+import { emit } from "@tauri-apps/api/event";
+import {
+  getAllWindows,
+  getCurrentWindow,
+  LogicalPosition,
+  PhysicalPosition
+} from "@tauri-apps/api/window";
 
 import { listManagedRoots } from "../files/fileEngineApi";
 import type { ManagedRoot } from "../files/fileEngineApi";
 import {
   CharacterEvent,
   CharacterEventKind,
+  HOUSE_DROP_TARGET_EVENT,
+  HOUSE_OVERLAY_WINDOW_LABEL,
   listenForCharacterEvents,
   submitOverlayDraftRequest
 } from "./overlayApi";
@@ -74,6 +82,14 @@ type DragOrigin = {
   winY: number;
 };
 
+type Point = { x: number; y: number };
+type Size = { w: number; h: number };
+type Rect = { x: number; y: number; w: number; h: number };
+type Polygon = readonly Point[];
+type HouseDropTarget = { active: boolean };
+
+const HOUSE_FOOT_OFFSET = { x: 0.5, y: 0.82 } as const;
+
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
   const [draft, setDraft] = useState("");
@@ -90,6 +106,7 @@ export function CharacterOverlay() {
   const dragOrigin = useRef<DragOrigin | null>(null);
   const draggingStarted = useRef(false);
   const suppressClick = useRef(false);
+  const houseDropActive = useRef(false);
 
   const activeRoom = rooms.find((root) => root.room_binding_status === "active") ?? rooms[0] ?? null;
   const activeRoomName = activeRoom?.display_name ?? "방 없음";
@@ -118,7 +135,24 @@ export function CharacterOverlay() {
       .catch(() => setRooms([]));
   }, [bubbleOpen]);
 
-  function releaseDrag() {
+  async function setHouseDropTarget(active: boolean) {
+    if (houseDropActive.current === active) return;
+    houseDropActive.current = active;
+    if (!window.__TAURI_INTERNALS__) return;
+    try {
+      await emit(HOUSE_DROP_TARGET_EVENT, { active } satisfies HouseDropTarget);
+    } catch {
+      /* the house overlay may not be open */
+    }
+  }
+
+  async function releaseDrag() {
+    const shouldSnapHome =
+      draggingStarted.current && (houseDropActive.current || (await isCurrentWindowOverHouse()));
+    if (shouldSnapHome) {
+      await snapCharacterToHouseFloor();
+    }
+    await setHouseDropTarget(false);
     if (draggingStarted.current) {
       setDragReleaseTick((tick) => tick + 1);
     }
@@ -147,19 +181,22 @@ export function CharacterOverlay() {
       const nextY = origin.winY + (pointerEvent.screenY - start.y);
       void getCurrentWindow()
         .setPosition(new LogicalPosition(nextX, nextY))
+        .then(() => isCurrentWindowOverHouse())
+        .then((active) => setHouseDropTarget(active))
         .catch(() => {
           // Browser preview cannot move a native window; Tauri handles this in the desktop shell.
         });
     };
+    const onReleaseGlobal = () => void releaseDrag();
     window.addEventListener("pointermove", onPointerMoveGlobal);
-    window.addEventListener("pointerup", releaseDrag);
-    window.addEventListener("mouseup", releaseDrag);
-    window.addEventListener("blur", releaseDrag);
+    window.addEventListener("pointerup", onReleaseGlobal);
+    window.addEventListener("mouseup", onReleaseGlobal);
+    window.addEventListener("blur", onReleaseGlobal);
     return () => {
       window.removeEventListener("pointermove", onPointerMoveGlobal);
-      window.removeEventListener("pointerup", releaseDrag);
-      window.removeEventListener("mouseup", releaseDrag);
-      window.removeEventListener("blur", releaseDrag);
+      window.removeEventListener("pointerup", onReleaseGlobal);
+      window.removeEventListener("mouseup", onReleaseGlobal);
+      window.removeEventListener("blur", onReleaseGlobal);
     };
   }, []);
 
@@ -204,7 +241,7 @@ export function CharacterOverlay() {
       const moved = Math.hypot(pointer.screenX - start.x, pointer.screenY - start.y);
       suppressClick.current = moved > 5 || Date.now() - start.at > 350;
     }
-    releaseDrag();
+    void releaseDrag();
   }
 
   function openBubble() {
@@ -302,6 +339,129 @@ export function CharacterOverlay() {
       ) : null}
     </div>
   );
+}
+
+async function readHouseRect(): Promise<Rect | null> {
+  try {
+    const house = (await getAllWindows()).find(
+      (candidate) => candidate.label === HOUSE_OVERLAY_WINDOW_LABEL
+    );
+    if (!house) return null;
+    const [position, size] = await Promise.all([house.outerPosition(), house.outerSize()]);
+    const houseSide = Math.min(size.width, size.height);
+    const houseX = position.x + Math.max(0, size.width - houseSide);
+    const houseY = position.y + Math.max(0, size.height - houseSide);
+    return { x: houseX, y: houseY, w: houseSide, h: houseSide };
+  } catch {
+    return null;
+  }
+}
+
+async function readCharacterSize(): Promise<Size> {
+  try {
+    const size = await getCurrentWindow().outerSize();
+    return { w: size.width, h: size.height };
+  } catch {
+    return { w: 184, h: 160 };
+  }
+}
+
+function footPoint(pos: Point, size: Size) {
+  return {
+    x: pos.x + size.w * HOUSE_FOOT_OFFSET.x,
+    y: pos.y + size.h * HOUSE_FOOT_OFFSET.y
+  };
+}
+
+function topLeftFromFoot(point: Point, size: Size) {
+  return {
+    x: point.x - size.w * HOUSE_FOOT_OFFSET.x,
+    y: point.y - size.h * HOUSE_FOOT_OFFSET.y
+  };
+}
+
+function houseFloorPolygon(house: Rect): Polygon {
+  const x = (ratio: number) => house.x + house.w * ratio;
+  const y = (ratio: number) => house.y + house.h * ratio;
+  return [
+    { x: x(0.1), y: y(0.72) },
+    { x: x(0.37), y: y(0.56) },
+    { x: x(0.72), y: y(0.59) },
+    { x: x(0.9), y: y(0.72) },
+    { x: x(0.55), y: y(0.95) },
+    { x: x(0.1), y: y(0.79) }
+  ];
+}
+
+function pointInPolygon(point: Point, polygon: Polygon) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses =
+      a.y > point.y !== b.y > point.y &&
+      point.x < ((b.x - a.x) * (point.y - a.y)) / (b.y - a.y || Number.EPSILON) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function closestFloorPoint(point: Point, polygon: Polygon) {
+  if (pointInPolygon(point, polygon)) return point;
+
+  const xs = polygon.map((vertex) => vertex.x);
+  const ys = polygon.map((vertex) => vertex.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  let best = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let x = minX; x <= maxX; x += 12) {
+    for (let y = minY; y <= maxY; y += 12) {
+      const candidate = { x, y };
+      if (!pointInPolygon(candidate, polygon)) continue;
+      const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
+      if (distance < bestDistance) {
+        best = candidate;
+        bestDistance = distance;
+      }
+    }
+  }
+
+  return best;
+}
+
+function centerInside(pos: Point, size: Size, rect: Rect) {
+  const center = { x: pos.x + size.w / 2, y: pos.y + size.h / 2 };
+  return center.x >= rect.x && center.x <= rect.x + rect.w && center.y >= rect.y && center.y <= rect.y + rect.h;
+}
+
+async function isCurrentWindowOverHouse() {
+  if (!window.__TAURI_INTERNALS__) return false;
+  const [house, size, position] = await Promise.all([
+    readHouseRect(),
+    readCharacterSize(),
+    getCurrentWindow().outerPosition().catch(() => null)
+  ]);
+  return !!house && !!position && centerInside({ x: position.x, y: position.y }, size, house);
+}
+
+async function snapCharacterToHouseFloor() {
+  const [house, size, position] = await Promise.all([
+    readHouseRect(),
+    readCharacterSize(),
+    getCurrentWindow().outerPosition().catch(() => null)
+  ]);
+  if (!house || !position) return;
+
+  const current = { x: position.x, y: position.y };
+  const targetFoot = closestFloorPoint(footPoint(current, size), houseFloorPolygon(house));
+  const next = topLeftFromFoot(targetFoot, size);
+  await getCurrentWindow()
+    .setPosition(new PhysicalPosition(Math.round(next.x), Math.round(next.y)))
+    .catch(() => undefined);
 }
 
 function RoomChatPanel({
