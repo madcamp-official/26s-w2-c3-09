@@ -5,6 +5,7 @@ import {
   getAllWindows,
   getCurrentWindow,
   LogicalPosition,
+  LogicalSize,
   PhysicalPosition
 } from "@tauri-apps/api/window";
 
@@ -98,6 +99,11 @@ type Polygon = readonly Point[];
 type HouseDropTarget = { active: boolean };
 
 const HOUSE_FOOT_OFFSET = { x: 0.5, y: 0.82 } as const;
+const OVERLAY_SIZES = {
+  closed: { width: 112, height: 140 },
+  prompt: { width: 190, height: 140 },
+  chat: { width: 450, height: 360 }
+} as const;
 
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
@@ -132,6 +138,11 @@ export function CharacterOverlay() {
       document.body.classList.remove("overlay-body");
     };
   }, []);
+
+  useEffect(() => {
+    const mode = chatOpen ? "chat" : bubbleOpen ? "prompt" : "closed";
+    void resizeOverlayWindow(mode);
+  }, [bubbleOpen, chatOpen]);
 
   useEffect(() => {
     const unlisten = listenForCharacterEvents(setEvent);
@@ -453,6 +464,27 @@ async function readHouseRect(): Promise<Rect | null> {
     return { x: houseX, y: houseY, w: houseSide, h: houseSide };
   } catch {
     return null;
+  }
+}
+
+async function resizeOverlayWindow(mode: keyof typeof OVERLAY_SIZES) {
+  if (!window.__TAURI_INTERNALS__) return;
+  const win = getCurrentWindow();
+  const target = OVERLAY_SIZES[mode];
+  try {
+    const [position, before] = await Promise.all([win.outerPosition(), win.outerSize()]);
+    await win.setSize(new LogicalSize(target.width, target.height));
+    const after = await win.outerSize();
+    // The mascot is pinned to the bottom-right corner. Moving by the size delta keeps its feet
+    // at the same desktop coordinate while the speech bubble opens or closes.
+    await win.setPosition(
+      new PhysicalPosition(
+        position.x + before.width - after.width,
+        position.y + before.height - after.height
+      )
+    );
+  } catch {
+    // Browser preview and a closing native window do not expose a usable window handle.
   }
 }
 

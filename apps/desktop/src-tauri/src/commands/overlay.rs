@@ -161,7 +161,9 @@ fn build_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, 
         tauri::WebviewUrl::App("index.html".into()),
     )
     .title("MouseKeeper")
-    .inner_size(450.0, 360.0)
+    // Keep the native transparent hit surface close to the mascot while the bubble is closed.
+    // The frontend expands the same window only while the prompt/chat panel is visible.
+    .inner_size(112.0, 140.0)
     .resizable(false)
     .decorations(false)
     .transparent(true)

@@ -13,8 +13,9 @@ import { HOUSE_OVERLAY_WINDOW_LABEL } from "./overlayApi";
  *
  * When the mouse is free (idle, not being held or dragged) it strolls the desktop: it picks a
  * random target, walks toward it by nudging the native window position each tick, then pauses and
- * repeats — walking in random directions. The house overlay is treated as its home: while the
- * mouse is standing inside the house it rests instead of roaming, and leaves again after a while.
+ * repeats — walking in random directions. The house overlay is treated as its home. Once the user
+ * drops the mouse onto its floor, autonomous movement is confined to that floor until the user
+ * deliberately drags it back out.
  *
  * All Tauri window calls are best-effort and swallowed on failure so a missing runtime (e.g. the
  * browser dev preview, where the overlay never renders anyway) simply produces no movement.
@@ -30,11 +31,8 @@ const REST_MS: readonly [number, number] = [4000, 9000];
 // normal walks end sooner than this by simply arriving (see ARRIVE_PX).
 const WALK_TIMEOUT_MS = 18000;
 const HOUSE_REFRESH_MS = 2000;
-// The mouse must stand well inside the house footprint to count as "home", so it does not rest the
-// instant it clips the outer edge of the (large, mostly-transparent) house sprite.
-const HOUSE_INSET = 0.2;
-// How long the mouse stays put after the user deliberately drags it into the house and lets go —
-// distinct from the brief REST_MS pause it takes when it wanders home on its own.
+// How long the mouse stays put after the user deliberately drags it into the house and lets go.
+// Later walks are still allowed, but every step remains inside the house floor polygon.
 const USER_PLACED_HOME_REST_MS = 1600;
 
 type Point = { x: number; y: number };
@@ -135,6 +133,44 @@ function randomPointInPolygon(polygon: Polygon) {
   };
 }
 
+function closestPointInsidePolygon(point: Point, polygon: Polygon) {
+  if (pointInPolygon(point, polygon)) return point;
+
+  let closest = polygon[0];
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const ratio =
+      lengthSquared === 0
+        ? 0
+        : Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+    const candidate = { x: start.x + dx * ratio, y: start.y + dy * ratio };
+    const distance = Math.hypot(candidate.x - point.x, candidate.y - point.y);
+    if (distance < closestDistance) {
+      closest = candidate;
+      closestDistance = distance;
+    }
+  }
+
+  const center = polygon.reduce(
+    (sum, vertex) => ({ x: sum.x + vertex.x / polygon.length, y: sum.y + vertex.y / polygon.length }),
+    { x: 0, y: 0 }
+  );
+  for (const inset of [2, 4, 8, 16, 24]) {
+    const distance = Math.hypot(center.x - closest.x, center.y - closest.y) || 1;
+    const candidate = {
+      x: closest.x + ((center.x - closest.x) / distance) * inset,
+      y: closest.y + ((center.y - closest.y) / distance) * inset
+    };
+    if (pointInPolygon(candidate, polygon)) return candidate;
+  }
+  return randomPointInPolygon(polygon);
+}
+
 /**
  * @param active Whether the mouse should be roaming right now (idle, not held/dragged/chatting).
  * @param dragReleaseSignal Bumped by the caller each time an actual drag (not just a click) ends.
@@ -231,12 +267,9 @@ export function useCharacterWander(
         const houseSide = Math.min(size.width, size.height);
         const houseX = position.x + Math.max(0, size.width - houseSide);
         const houseY = position.y + Math.max(0, size.height - houseSide);
-        s.house = {
-          x: houseX + houseSide * HOUSE_INSET,
-          y: houseY + houseSide * HOUSE_INSET,
-          w: houseSide * (1 - HOUSE_INSET * 2),
-          h: houseSide * (1 - HOUSE_INSET * 2)
-        };
+        // Keep the full square here. `houseFloorPolygon` already applies the sprite-specific
+        // footprint ratios; applying another inset made the wander and drop polygons disagree.
+        s.house = { x: houseX, y: houseY, w: houseSide, h: houseSide };
       } catch {
         s.house = null;
       }
@@ -296,7 +329,7 @@ export function useCharacterWander(
         return;
       }
 
-      if (!s.bounds) await readGeometry();
+      if (!s.bounds || s.needResync) await readGeometry();
       await refreshHouse(now);
 
       if (s.needResync || !s.pos) {
@@ -309,14 +342,23 @@ export function useCharacterWander(
         s.needResync = false;
         const justDragEnded = s.justDragEnded;
         s.justDragEnded = false;
-        const droppedAtHome =
-          !!s.house && (centerInside(s.pos, s.size, s.house) || isStandingOnHouseFloor(s.pos));
+        const droppedAtHome = !!s.house && isStandingOnHouseFloor(s.pos);
         if (justDragEnded) {
           s.confinedToHouse = droppedAtHome;
         }
+        if (s.confinedToHouse && s.house && !isStandingOnHouseFloor(s.pos)) {
+          const targetFoot = closestPointInsidePolygon(
+            footPoint(s.pos, s.size),
+            houseFloorPolygon(s.house)
+          );
+          s.pos = topLeftFromFoot(targetFoot, s.size);
+          await win
+            .setPosition(new PhysicalPosition(Math.round(s.pos.x), Math.round(s.pos.y)))
+            .catch(() => undefined);
+        }
         if (justDragEnded && droppedAtHome) {
-          // The user just dragged the mouse into the house and let go — keep it home for a long
-          // cooldown instead of the brief natural rest.
+          // The user just dragged the mouse into the house and let go. The confinement flag stays
+          // set after this rest, so later autonomous targets cannot leave the floor.
           s.target = null;
           applyPhase("resting");
           s.phaseUntil = now + USER_PLACED_HOME_REST_MS;
@@ -326,19 +368,25 @@ export function useCharacterWander(
         return;
       }
 
-      const insideHouse =
-        !!s.house && (centerInside(s.pos, s.size, s.house) || isStandingOnHouseFloor(s.pos));
+      const insideHouse = !!s.house && isStandingOnHouseFloor(s.pos);
 
       if (s.phase === "resting") {
         if (now >= s.phaseUntil) {
-          beginWalk(now, s.confinedToHouse && s.house ? randomTargetInHouse() : randomTargetOutsideHouse());
+          if (s.confinedToHouse && !s.house) {
+            s.phaseUntil = now + randRange(REST_MS);
+          } else {
+            beginWalk(now, s.confinedToHouse && s.house ? randomTargetInHouse() : randomTargetOutsideHouse());
+          }
         }
         return;
       }
 
       if (s.phase === "pausing") {
         if (now >= s.phaseUntil) {
-          if (insideHouse) {
+          if (s.confinedToHouse && !s.house) {
+            applyPhase("resting");
+            s.phaseUntil = now + randRange(REST_MS);
+          } else if (insideHouse) {
             applyPhase("resting");
             s.phaseUntil = now + randRange(REST_MS);
           } else {
@@ -362,12 +410,27 @@ export function useCharacterWander(
         return;
       }
 
-      const nextX = s.pos.x + (dx / distance) * STEP_PX;
-      const nextY = s.pos.y + (dy / distance) * STEP_PX;
-      s.pos = { x: nextX, y: nextY };
+      let next = {
+        x: s.pos.x + (dx / distance) * STEP_PX,
+        y: s.pos.y + (dy / distance) * STEP_PX
+      };
+      if (s.confinedToHouse && s.house) {
+        const polygon = houseFloorPolygon(s.house);
+        const nextFoot = footPoint(next, s.size);
+        if (!pointInPolygon(nextFoot, polygon)) {
+          next = topLeftFromFoot(closestPointInsidePolygon(nextFoot, polygon), s.size);
+          s.pos = next;
+          await win
+            .setPosition(new PhysicalPosition(Math.round(next.x), Math.round(next.y)))
+            .catch(() => undefined);
+          beginPauseOrRest(now, true);
+          return;
+        }
+      }
+      s.pos = next;
       applyFacing(dx >= 0 ? 1 : -1);
       try {
-        await win.setPosition(new PhysicalPosition(Math.round(nextX), Math.round(nextY)));
+        await win.setPosition(new PhysicalPosition(Math.round(next.x), Math.round(next.y)));
       } catch {
         /* window may be mid-transition; retry on the next tick */
       }

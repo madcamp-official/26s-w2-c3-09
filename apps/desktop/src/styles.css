@@ -778,7 +778,7 @@ body.overlay-body .character-overlay {
 
 body.overlay-body .character-drag-surface {
   position: absolute;
-  top: 214px;
+  bottom: 8px;
   right: 8px;
   display: grid;
   place-items: center;
@@ -819,7 +819,7 @@ body.overlay-body .character-motion {
 
 body.overlay-body .character-bubble {
   position: absolute;
-  top: 244px;
+  bottom: 36px;
   right: 98px;
   box-sizing: border-box;
   width: 72px;
@@ -853,6 +853,7 @@ body.overlay-body .character-bubble::after {
 
 body.overlay-body .character-bubble.is-chatting {
   top: 10px;
+  bottom: auto;
   right: 116px;
   width: 318px;
   height: 336px;
