@@ -168,6 +168,15 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
   }, [deviceName]);
 
   useEffect(() => {
+    if (!shouldAutoStartPairing(connection, pairing)) return;
+    const message =
+      connection?.state === "revoked"
+        ? "저장된 연결이 서버에서 해제되어 새 페어링 코드를 만들었어요."
+        : undefined;
+    void resetForNewPairing(message);
+  }, [connection?.device_id, connection?.last_error_code, connection?.server_base_url, connection?.state, pairing]);
+
+  useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
@@ -189,7 +198,7 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
     const poll = async () => {
       if (new Date(pairing.expires_at).getTime() <= Date.now()) {
         setPairing(null);
-        setError("페어링 코드가 만료되었습니다. 다시 시작해 주세요.");
+        void resetForNewPairing("페어링 코드가 만료되어 새 코드를 만들었어요.");
         return;
       }
       if (pairingRequestInFlight.current) return;
@@ -302,6 +311,8 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
   }
 
   async function beginPairing() {
+    if (pairingStartInFlight.current) return;
+    pairingStartInFlight.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -311,6 +322,7 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
+      pairingStartInFlight.current = false;
       setBusy(false);
     }
   }
@@ -470,6 +482,7 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
     setSyncCursor(null);
     setLastReplayCount(0);
     setPairing(null);
+    setError(null);
     try {
       setConnection(await getAgentConnectionStatus());
       const session = await startAgentPairing(deviceNameRef.current.trim());
@@ -733,6 +746,15 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
 
 function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+function shouldAutoStartPairing(
+  connection: AgentConnectionStatus | null,
+  pairing: PairingSession | null
+) {
+  if (!connection?.server_base_url || connection.device_id || pairing) return false;
+  if (connection.last_error_code === "CREDENTIAL_STORE_UNAVAILABLE") return false;
+  return connection.state === "unconfigured" || connection.state === "revoked";
 }
 
 function pairingQrPayload(pairing: PairingSession, serverBaseUrl: string) {

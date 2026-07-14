@@ -472,9 +472,9 @@ async fn run_background_tick(
                 status.last_error_message = None;
             }),
             Err(error) => {
-                let is_confirmed_device_revoked = error.is_confirmed_device_revoked();
+                let is_confirmed_device_absent = error.is_confirmed_device_absent();
                 let error_message = error.to_string();
-                if is_confirmed_device_revoked {
+                if is_confirmed_device_absent {
                     let _ = crate::commands::agent::apply_local_device_revoked(
                         &agent,
                         &sync_store,
@@ -484,8 +484,8 @@ async fn run_background_tick(
                     .await;
                     if let Some(device_id) = device_id_before_heartbeat {
                         let _ = sync_store.clear_device(&device_id).await;
-                        // The structured DEVICE_REVOKED verdict is authoritative even when the
-                        // revoked token can no longer fetch replay. Wake the UI so it starts a fresh
+                        // An authoritative DEVICE_REVOKED or DEVICE_NOT_REGISTERED verdict means
+                        // the saved pairing cannot be recovered. Wake the UI so it starts a fresh
                         // pairing session instead of waiting for its periodic status refresh.
                         let _ = app.emit("desktop-device-revoked", device_id);
                     }
@@ -504,7 +504,7 @@ async fn run_background_tick(
                         ..crate::overlay::OverlayActivity::default()
                     },
                 );
-                return if is_confirmed_device_revoked {
+                return if is_confirmed_device_absent {
                     BackgroundTickOutcome::Stop
                 } else {
                     BackgroundTickOutcome::Continue

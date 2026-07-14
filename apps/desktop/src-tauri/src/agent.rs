@@ -1776,7 +1776,7 @@ impl AgentRuntime {
     }
 
     fn record_error(&self, error: AgentError, connection_state: AgentConnectionState) {
-        if error.is_confirmed_device_revoked() {
+        if error.is_confirmed_device_absent() {
             let _ = self.credentials.delete();
             let mut state = self.state.lock().expect("agent state mutex poisoned");
             state.credential = None;
@@ -3242,8 +3242,11 @@ impl AgentError {
         matches!(self.code, AgentErrorCode::TransportUnavailable)
     }
 
-    pub fn is_confirmed_device_revoked(&self) -> bool {
-        self.server_code.as_deref() == Some("DEVICE_REVOKED")
+    pub fn is_confirmed_device_absent(&self) -> bool {
+        matches!(
+            self.server_code.as_deref(),
+            Some("DEVICE_REVOKED" | "DEVICE_NOT_REGISTERED")
+        )
     }
 }
 
@@ -3605,7 +3608,7 @@ mod tests {
         server.join().expect("server thread");
 
         assert_eq!(error.code, AgentErrorCode::Unauthenticated);
-        assert!(!error.is_confirmed_device_revoked());
+        assert!(!error.is_confirmed_device_absent());
         assert!(store.load().expect("credential store").is_some());
         assert_eq!(
             runtime.connection_status().device_id.as_deref(),
@@ -3647,6 +3650,39 @@ mod tests {
         assert_eq!(status.device_id, None);
         assert_eq!(status.last_error_code, Some(AgentErrorCode::Forbidden));
         assert_eq!(status.last_error_message.as_deref(), Some("device revoked"));
+        assert!(runtime.realtime_credentials().is_none());
+        assert!(store.load().expect("credential store").is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_server_device_starts_fresh_pairing_state() {
+        let (server_url, server) = one_shot_error_server(
+            "/v1/devices/device-1/heartbeat",
+            "HTTP/1.1 401 Unauthorized",
+            r#"{"code":"DEVICE_NOT_REGISTERED","message":"pairing no longer exists"}"#,
+            |_| {},
+        );
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .heartbeat("ONLINE_IDLE".to_string())
+            .await
+            .expect_err("a removed device row must fail heartbeat");
+        server.join().expect("server thread");
+
+        assert!(error.is_confirmed_device_absent());
+        assert_eq!(
+            runtime.connection_status().state,
+            AgentConnectionState::Revoked
+        );
+        assert_eq!(runtime.connection_status().device_id, None);
         assert!(runtime.realtime_credentials().is_none());
         assert!(store.load().expect("credential store").is_none());
     }
