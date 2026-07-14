@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mousekeeper/features/files/smart_cache_page.dart';
 
 void main() {
@@ -46,6 +47,39 @@ void main() {
       expect(smartCacheDownloadCompletedAccessEvent(), {
         'eventType': 'DOWNLOAD_COMPLETED',
       });
+    },
+  );
+
+  test(
+    'smart-cache read providers request policy and file projections',
+    () async {
+      final paths = <String>[];
+      final container = ProviderContainer(
+        overrides: [
+          smartCacheGetProvider.overrideWithValue((path) async {
+            paths.add(path);
+            if (path.endsWith('/smart-cache-policy')) {
+              return {'enabled': true};
+            }
+            return {'files': const []};
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final policy = await container.read(
+        smartCachePolicyProvider('room-1').future,
+      );
+      final files = await container.read(
+        smartCacheFilesProvider('room-1').future,
+      );
+
+      expect(policy, {'enabled': true});
+      expect(files, {'files': const []});
+      expect(paths, [
+        '/v1/rooms/room-1/smart-cache-policy',
+        '/v1/rooms/room-1/smart-cache/files',
+      ]);
     },
   );
 

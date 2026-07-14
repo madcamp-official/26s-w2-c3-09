@@ -120,6 +120,49 @@ class SmartCachePageContent {
   bool get isOfflineFallback => offlineFallbackError != null;
 }
 
+typedef SmartCacheGet = Future<Map<String, dynamic>> Function(String path);
+
+final smartCacheGetProvider = Provider<SmartCacheGet>((ref) {
+  final api = ref.watch(apiClientProvider);
+  return api.get;
+});
+
+final smartCachePolicyProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>, String>(
+      (ref, roomId) => ref.watch(smartCacheGetProvider)(
+        '/v1/rooms/$roomId/smart-cache-policy',
+      ),
+    );
+
+final smartCacheFilesProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>, String>(
+      (ref, roomId) =>
+          ref.watch(smartCacheGetProvider)(smartCacheFilesPath(roomId)),
+    );
+
+final smartCacheStatusProvider = FutureProvider.autoDispose
+    .family<SmartCachePageContent, String>((ref, roomId) async {
+      final displayCache = ref.watch(displayCacheProvider);
+      try {
+        final results = await Future.wait([
+          ref.watch(smartCachePolicyProvider(roomId).future),
+          ref.watch(smartCacheFilesProvider(roomId).future),
+        ]);
+        final cache = results[1];
+        final files = smartCacheFilesFromPayload(cache);
+        await displayCache.replaceSmartCacheFiles(roomId, files);
+        return SmartCachePageContent(policy: results[0], cache: cache);
+      } catch (error) {
+        if (!isSmartCacheOfflineFallbackError(error)) rethrow;
+        final localFiles = await displayCache.smartCacheFiles(roomId);
+        if (localFiles.isEmpty) rethrow;
+        return SmartCachePageContent(
+          cache: smartCacheOfflineFallbackPayload(localFiles),
+          offlineFallbackError: error,
+        );
+      }
+    });
+
 class SmartCachePage extends ConsumerStatefulWidget {
   const SmartCachePage({super.key, required this.roomId});
   final String roomId;
@@ -138,30 +181,8 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
   }
 
   void reload() {
-    content = loadContent();
-  }
-
-  Future<SmartCachePageContent> loadContent() async {
-    final displayCache = ref.read(displayCacheProvider);
-    try {
-      final api = ref.read(apiClientProvider);
-      final results = await Future.wait([
-        api.get('/v1/rooms/${widget.roomId}/smart-cache-policy'),
-        api.get(smartCacheFilesPath(widget.roomId)),
-      ]);
-      final cache = results[1];
-      final files = smartCacheFilesFromPayload(cache);
-      await displayCache.replaceSmartCacheFiles(widget.roomId, files);
-      return SmartCachePageContent(policy: results[0], cache: cache);
-    } catch (error) {
-      if (!isSmartCacheOfflineFallbackError(error)) rethrow;
-      final localFiles = await displayCache.smartCacheFiles(widget.roomId);
-      if (localFiles.isEmpty) rethrow;
-      return SmartCachePageContent(
-        cache: smartCacheOfflineFallbackPayload(localFiles),
-        offlineFallbackError: error,
-      );
-    }
+    ref.invalidate(smartCacheStatusProvider(widget.roomId));
+    content = ref.read(smartCacheStatusProvider(widget.roomId).future);
   }
 
   Future<void> setEnabled(Map<String, dynamic> policy, bool enabled) async {
