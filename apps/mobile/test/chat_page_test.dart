@@ -40,6 +40,11 @@ void main() {
       patchCommandDraftMessages(messages, 'missing', const {}),
       same(messages),
     );
+    expect(
+      replaceChatSession(sessions, _session('missing', '새 제목')),
+      same(sessions),
+    );
+    expect(replaceChatSession(sessions, sessions.single), same(sessions));
   });
 
   test('chat conversation state keeps selection and pagination together', () {
@@ -295,6 +300,32 @@ void main() {
     expect(find.textContaining('최대 5개'), findsOneWidget);
     expect(gateway.createdSessions, 1);
   });
+
+  testWidgets('renaming a session patches the session row without reload', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화')],
+      messagesBySession: {
+        's1': [_message('m1', 's1', 'USER', '첫 메시지')],
+      },
+    );
+
+    await _pumpChat(tester, gateway);
+    await tester.tap(find.byKey(const ValueKey('chat-rename-session')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('chat-session-title-field')),
+      '새 제목',
+    );
+    await tester.tap(find.byKey(const ValueKey('chat-session-title-save')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('새 제목'), findsOneWidget);
+    expect(find.text('첫 메시지'), findsOneWidget);
+    expect(gateway.updatedTitles, ['s1:새 제목']);
+    expect(gateway.messageLoads, {'s1': 1});
+  });
 }
 
 Future<void> _pumpChat(WidgetTester tester, _FakeChatGateway gateway) async {
@@ -356,6 +387,7 @@ class _FakeChatGateway implements ChatGateway {
   final List<String> sentMessages = [];
   final List<String> confirmedDraftIds = [];
   final List<String> rejectedDraftIds = [];
+  final List<String> updatedTitles = [];
   int createdSessions = 0;
 
   @override
@@ -372,6 +404,23 @@ class _FakeChatGateway implements ChatGateway {
     sessions.insert(0, created);
     messagesBySession[created['id'] as String] = [];
     return created;
+  }
+
+  @override
+  Future<Map<String, dynamic>> updateSession(
+    String sessionId,
+    String title,
+  ) async {
+    updatedTitles.add('$sessionId:$title');
+    final index = sessions.indexWhere((session) => session['id'] == sessionId);
+    if (index < 0) throw StateError('NOT_FOUND');
+    final updated = {
+      ...sessions[index],
+      'title': title,
+      'updatedAt': '2026-07-14T00:01:00.000Z',
+    };
+    sessions[index] = updated;
+    return updated;
   }
 
   @override

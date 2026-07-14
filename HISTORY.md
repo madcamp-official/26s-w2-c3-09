@@ -12,6 +12,7 @@
 - [x] 데스크톱 background runtime은 heartbeat를 5초로 유지하고, REST reconcile은 15초 fast pass와 30초 heavy pass로 분리되어 있다.
 - [x] 데스크톱 AgentPanel의 local status refresh도 heartbeat freshness 5초 기준, background status 15초, connection status 30초로 분리했다.
 - [x] pairing status 조회는 일반 pairing mutation과 다른 60회/분 rate-limit bucket을 쓰며, 데스크톱 pairing UI는 2초 간격으로 status를 확인한다.
+- [x] 모바일 ChatPage가 기존 `PATCH /v1/chat-sessions/:sessionId` 제목 수정 API를 호출한다. 수정 결과는 `replaceChatSession` reducer로 해당 세션 row만 교체하고 메시지 목록은 다시 불러오지 않는다.
 - [x] Rust file engine은 서버/모바일 `RuleDefinition` draft를 내부 `RuleSet`으로 변환할 수 있게 되었고, modified/created age, size, relative path, file kind, name operator, `TRASH`, `CREATE_DIR`를 proposal 단계에서 검증한다. `CREATE_DIR` proposal은 중복 생성되지 않으며 기존 디렉터리는 `DestinationExists`로 표시된다.
 
 > 감사 기준일: 2026-07-13

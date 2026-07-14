@@ -11,6 +11,7 @@ import 'readme_command_page.dart';
 abstract interface class ChatGateway {
   Future<List<Map<String, dynamic>>> listSessions(String roomId);
   Future<Map<String, dynamic>> createSession(String roomId);
+  Future<Map<String, dynamic>> updateSession(String sessionId, String title);
   Future<void> deleteSession(String sessionId);
   Future<List<Map<String, dynamic>>> listMessages(
     String sessionId, {
@@ -87,6 +88,10 @@ class ApiChatGateway implements ChatGateway {
   @override
   Future<Map<String, dynamic>> createSession(String roomId) =>
       _api.post('/v1/rooms/$roomId/chat-sessions', const {});
+
+  @override
+  Future<Map<String, dynamic>> updateSession(String sessionId, String title) =>
+      _api.patch('/v1/chat-sessions/$sessionId', {'title': title});
 
   @override
   Future<void> deleteSession(String sessionId) async {
@@ -214,6 +219,29 @@ List<Map<String, dynamic>> touchChatSessionPreview(
         session,
   ];
   return changed ? List.unmodifiable(next) : sessions;
+}
+
+List<Map<String, dynamic>> replaceChatSession(
+  List<Map<String, dynamic>> sessions,
+  Map<String, dynamic> updated,
+) {
+  final updatedId = updated['id'];
+  if (updatedId is! String) return sessions;
+  var changed = false;
+  var found = false;
+  final next = [
+    for (final session in sessions)
+      if (session['id'] == updatedId)
+        (() {
+          found = true;
+          if (_jsonEquivalent(session, updated)) return session;
+          changed = true;
+          return updated;
+        })()
+      else
+        session,
+  ];
+  return found && changed ? List.unmodifiable(next) : sessions;
 }
 
 List<Map<String, dynamic>> mergeChatMessages(
@@ -355,6 +383,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _sending = false;
   bool _loadingMore = false;
   bool _creating = false;
+  bool _renaming = false;
   bool _deleting = false;
   bool _disposed = false;
   final Set<String> _draftingIds = {};
@@ -506,6 +535,43 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     } finally {
       if (!_disposed) setState(() => _creating = false);
     }
+  }
+
+  Future<void> _renameSelectedSession() async {
+    final sessionId = _conversation.selectedSessionId;
+    if (sessionId == null || _renaming) return;
+    final current = _conversation.sessions
+        .where((session) => session['id'] == sessionId)
+        .cast<Map<String, dynamic>>()
+        .firstOrNull;
+    if (current == null) return;
+    final title = await _promptSessionTitle(current);
+    if (title == null || title == chatSessionTitle(current)) return;
+    if (_disposed) return;
+    setState(() => _renaming = true);
+    try {
+      final updated = await _gateway.updateSession(sessionId, title);
+      if (_disposed) return;
+      _invalidateChatReadModels(sessionId: sessionId);
+      setState(() {
+        _conversation = _conversation.copyWith(
+          sessions: replaceChatSession(_conversation.sessions, updated),
+        );
+        _error = null;
+      });
+    } catch (error) {
+      _showSnack('대화 제목을 바꾸지 못했습니다: ${chatErrorMessage(error)}');
+    } finally {
+      if (!_disposed) setState(() => _renaming = false);
+    }
+  }
+
+  Future<String?> _promptSessionTitle(Map<String, dynamic> session) async {
+    return showDialog<String>(
+      context: context,
+      builder: (context) =>
+          _ChatSessionTitleDialog(initialTitle: chatSessionTitle(session)),
+    );
   }
 
   Future<void> _deleteSelectedSession() async {
@@ -692,8 +758,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           sessions: _conversation.sessions,
           selectedSessionId: _conversation.selectedSessionId,
           creating: _creating,
+          renaming: _renaming,
           deleting: _deleting,
           onCreate: _createSession,
+          onRename: _renameSelectedSession,
           onDelete: _deleteSelectedSession,
           onSelected: (id) {
             if (id != _conversation.selectedSessionId) {
@@ -807,13 +875,73 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 }
 
+class _ChatSessionTitleDialog extends StatefulWidget {
+  const _ChatSessionTitleDialog({required this.initialTitle});
+
+  final String initialTitle;
+
+  @override
+  State<_ChatSessionTitleDialog> createState() =>
+      _ChatSessionTitleDialogState();
+}
+
+class _ChatSessionTitleDialogState extends State<_ChatSessionTitleDialog> {
+  late final TextEditingController controller;
+
+  @override
+  void initState() {
+    super.initState();
+    controller = TextEditingController(text: widget.initialTitle);
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final title = controller.text.trim();
+    if (title.isNotEmpty) Navigator.of(context).pop(title);
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('대화 제목 수정'),
+    content: TextField(
+      key: const ValueKey('chat-session-title-field'),
+      controller: controller,
+      autofocus: true,
+      maxLength: 120,
+      decoration: const InputDecoration(
+        labelText: '제목',
+        border: OutlineInputBorder(),
+      ),
+      onSubmitted: (_) => _submit(),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('취소'),
+      ),
+      FilledButton(
+        key: const ValueKey('chat-session-title-save'),
+        onPressed: _submit,
+        child: const Text('저장'),
+      ),
+    ],
+  );
+}
+
 class _SessionBar extends StatelessWidget {
   const _SessionBar({
     required this.sessions,
     required this.selectedSessionId,
     required this.creating,
+    required this.renaming,
     required this.deleting,
     required this.onCreate,
+    required this.onRename,
     required this.onDelete,
     required this.onSelected,
   });
@@ -821,8 +949,10 @@ class _SessionBar extends StatelessWidget {
   final List<Map<String, dynamic>> sessions;
   final String? selectedSessionId;
   final bool creating;
+  final bool renaming;
   final bool deleting;
   final VoidCallback onCreate;
+  final VoidCallback onRename;
   final VoidCallback onDelete;
   final ValueChanged<String> onSelected;
 
@@ -873,6 +1003,17 @@ class _SessionBar extends StatelessWidget {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.add_comment_outlined),
+          ),
+          IconButton(
+            key: const ValueKey('chat-rename-session'),
+            tooltip: '대화 제목 수정',
+            onPressed: selectedSessionId == null || renaming ? null : onRename,
+            icon: renaming
+                ? const SizedBox.square(
+                    dimension: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.edit_outlined),
           ),
           IconButton(
             key: const ValueKey('chat-delete-session'),
