@@ -15,6 +15,7 @@
 - [x] 모바일 ChatPage가 기존 `PATCH /v1/chat-sessions/:sessionId` 제목 수정 API를 호출한다. 수정 결과는 `replaceChatSession` reducer로 해당 세션 row만 교체하고 메시지 목록은 다시 불러오지 않는다.
 - [x] 모바일 realtime controller가 `chat.message.created`를 세션 단위 patch로 파싱하고 generic revision fan-out을 억제한다. ChatPage는 현재 선택된 세션 이벤트만 cursor 이후 메시지 page로 보정해 `mergeChatMessages`로 합치며, 다른 세션/화면 전체를 reload하지 않는다.
 - [x] 모바일 ChatPage는 `chat.message.created` 수신 시 세션 목록 projection만 가볍게 다시 읽어 다른 세션의 preview/title/order를 갱신한다. 선택되지 않은 세션의 메시지 목록은 읽지 않고, 실패해도 현재 대화 화면을 error page로 바꾸지 않는다.
+- [x] 모바일 Files의 `FileDirectoryState.withPage`가 동일한 browse page, cursor, generation을 다시 받으면 기존 객체를 그대로 반환한다. stale 표시가 있던 범위는 authoritative page를 받으면 새 객체로 교체해 stale을 해제한다.
 - [x] Rust file engine은 서버/모바일 `RuleDefinition` draft를 내부 `RuleSet`으로 변환할 수 있게 되었고, modified/created age, size, relative path, file kind, name operator, `TRASH`, `CREATE_DIR`를 proposal 단계에서 검증한다. `CREATE_DIR` proposal은 중복 생성되지 않으며 기존 디렉터리는 `DestinationExists`로 표시된다.
 
 > 감사 기준일: 2026-07-13

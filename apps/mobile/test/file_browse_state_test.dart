@@ -40,6 +40,37 @@ void main() {
     expect(second.generation, 'generation-1');
   });
 
+  test(
+    'file directory state preserves identity for unchanged browse pages',
+    () {
+      final current = FileDirectoryState(
+        entries: [_entry('reports/a.pdf', name: 'a.pdf')],
+        nextCursor: 'cursor-1',
+        generation: 'generation-1',
+      );
+
+      final unchanged = current.withPage(
+        received: [_entry('reports/a.pdf', name: 'a.pdf')],
+        append: false,
+        nextCursor: 'cursor-1',
+        generation: 'generation-1',
+      );
+
+      expect(identical(unchanged, current), isTrue);
+
+      final stale = current.markStale();
+      final refreshed = stale.withPage(
+        received: [_entry('reports/a.pdf', name: 'a.pdf')],
+        append: false,
+        nextCursor: 'cursor-1',
+        generation: 'generation-1',
+      );
+
+      expect(identical(refreshed, stale), isFalse);
+      expect(refreshed.isStale, isFalse);
+    },
+  );
+
   test('file directory update patches only the visible directory entries', () {
     final current = FileDirectoryState(
       entries: [

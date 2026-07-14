@@ -137,15 +137,24 @@ class FileDirectoryState {
     required bool append,
     required String? nextCursor,
     required String? generation,
-  }) => FileDirectoryState(
-    entries: mergeBrowseEntries(
+  }) {
+    final nextEntries = mergeBrowseEntries(
       existing: entries,
       received: received,
       append: append,
-    ),
-    nextCursor: nextCursor,
-    generation: generation,
-  );
+    );
+    if (!isStale &&
+        this.nextCursor == nextCursor &&
+        this.generation == generation &&
+        _entryListsShallowEquals(entries, nextEntries)) {
+      return this;
+    }
+    return FileDirectoryState(
+      entries: nextEntries,
+      nextCursor: nextCursor,
+      generation: generation,
+    );
+  }
 
   FileDirectoryState applyUpdate({
     required String currentRelativeDirectory,
@@ -420,6 +429,17 @@ bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
   return true;
 }
 
+bool _entryListsShallowEquals(
+  List<Map<String, dynamic>> left,
+  List<Map<String, dynamic>> right,
+) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (!_mapShallowEquals(left[index], right[index])) return false;
+  }
+  return true;
+}
+
 Map<String, dynamic> patchFileTransferStateForRealtimeUpdate({
   required Map<String, dynamic> current,
   required RealtimeFileTransferUpdate update,
@@ -625,14 +645,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           .map((entry) => Map<String, dynamic>.from(entry as Map))
           .toList();
       if (!mounted || requestVersion != _requestVersion) return;
-      setState(() {
-        _directoryState = _directoryState.withPage(
-          received: received,
-          append: append,
-          nextCursor: page['nextCursor'] as String?,
-          generation: completed['desktopGeneration'] as String?,
-        );
-      });
+      final nextDirectoryState = _directoryState.withPage(
+        received: received,
+        append: append,
+        nextCursor: page['nextCursor'] as String?,
+        generation: completed['desktopGeneration'] as String?,
+      );
+      if (!identical(nextDirectoryState, _directoryState)) {
+        setState(() {
+          _directoryState = nextDirectoryState;
+        });
+      }
     } catch (error) {
       if (cursor != null &&
           fileOperationErrorCode(error) == 'CURSOR_INVALIDATED' &&
