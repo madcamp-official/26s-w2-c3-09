@@ -720,6 +720,7 @@ export const smartCachePolicies = pgTable("smart_cache_policies", {
   quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull(),
   maxFileBytes: bigint("max_file_bytes", { mode: "number" }).notNull(),
   excludedPatterns: jsonb("excluded_patterns").notNull().default([]),
+  pinnedPatterns: jsonb("pinned_patterns").notNull().default([]),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

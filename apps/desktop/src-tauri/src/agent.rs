@@ -213,6 +213,7 @@ pub struct AgentSmartCachePolicy {
     pub quota_bytes: u64,
     pub max_file_bytes: u64,
     pub excluded_patterns: Vec<String>,
+    pub pinned_patterns: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -1779,6 +1780,8 @@ struct SmartCachePolicyResponse {
     quota_bytes: u64,
     max_file_bytes: u64,
     excluded_patterns: Vec<String>,
+    #[serde(default)]
+    pinned_patterns: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -2208,6 +2211,7 @@ fn validate_smart_cache_policy(
         quota_bytes: response.quota_bytes,
         max_file_bytes: response.max_file_bytes,
         excluded_patterns: response.excluded_patterns,
+        pinned_patterns: response.pinned_patterns,
     })
 }
 

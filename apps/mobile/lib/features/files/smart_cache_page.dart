@@ -9,6 +9,7 @@ Map<String, dynamic> parseSmartCachePolicyInput({
   required String quotaMegabytes,
   required String maxFileMegabytes,
   required String excludedPatterns,
+  required String pinnedPatterns,
   required bool enabled,
 }) {
   const megabyte = 1024 * 1024;
@@ -20,22 +21,28 @@ Map<String, dynamic> parseSmartCachePolicyInput({
   if (maxFile > quota) {
     throw const FormatException('파일 한도는 방 한도보다 클 수 없습니다.');
   }
-  final patterns = excludedPatterns
-      .split('\n')
-      .map((line) => line.trim())
-      .where((line) => line.isNotEmpty)
-      .toList();
-  if (patterns.length > 100 ||
-      patterns.any((pattern) => pattern.length > 255)) {
-    throw const FormatException('제외 패턴은 최대 100개, 각 255자까지입니다.');
+  final excluded = _parseSmartCachePatterns(excludedPatterns);
+  final pinned = _parseSmartCachePatterns(pinnedPatterns);
+  if (excluded.length > 100 ||
+      pinned.length > 100 ||
+      excluded.any((pattern) => pattern.length > 255) ||
+      pinned.any((pattern) => pattern.length > 255)) {
+    throw const FormatException('패턴은 종류별 최대 100개, 각 255자까지입니다.');
   }
   return {
     'enabled': enabled,
     'quotaBytes': quota * megabyte,
     'maxFileBytes': maxFile * megabyte,
-    'excludedPatterns': patterns,
+    'excludedPatterns': excluded,
+    'pinnedPatterns': pinned,
   };
 }
+
+List<String> _parseSmartCachePatterns(String value) => value
+    .split('\n')
+    .map((line) => line.trim())
+    .where((line) => line.isNotEmpty)
+    .toList();
 
 String smartCacheAccessEventPath(String cachedFileId) =>
     '/v1/cached-files/$cachedFileId/access-events';
@@ -219,6 +226,7 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
             'quotaBytes': policy['quotaBytes'],
             'maxFileBytes': policy['maxFileBytes'],
             'excludedPatterns': policy['excludedPatterns'] ?? [],
+            'pinnedPatterns': policy['pinnedPatterns'] ?? [],
           });
       setState(reload);
     } catch (error) {
@@ -245,6 +253,9 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
       text: (policy['excludedPatterns'] as List<dynamic>? ?? const []).join(
         '\n',
       ),
+    );
+    final pinned = TextEditingController(
+      text: (policy['pinnedPatterns'] as List<dynamic>? ?? const []).join('\n'),
     );
     final formKey = GlobalKey<FormState>();
     var consent = enableAfterSave != true || policy['enabled'] == true;
@@ -295,6 +306,17 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
                         border: OutlineInputBorder(),
                       ),
                     ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: pinned,
+                      minLines: 3,
+                      maxLines: 6,
+                      decoration: const InputDecoration(
+                        labelText: '고정 패턴 (한 줄에 하나)',
+                        hintText: 'important/**\n*.presentation.pdf',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
                     if (enableAfterSave == true && policy['enabled'] != true)
                       CheckboxListTile(
                         contentPadding: EdgeInsets.zero,
@@ -325,6 +347,7 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
                             quotaMegabytes: quota.text,
                             maxFileMegabytes: maxFile.text,
                             excludedPatterns: excluded.text,
+                            pinnedPatterns: pinned.text,
                             enabled:
                                 enableAfterSave ?? (policy['enabled'] == true),
                           ),
@@ -344,6 +367,7 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
     quota.dispose();
     maxFile.dispose();
     excluded.dispose();
+    pinned.dispose();
     if (result == null) return;
     await savePolicy(result, enabled: result['enabled'] == true);
   }
@@ -478,7 +502,8 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
                 title: const Text('용량·제외 범위 설정'),
                 subtitle: Text(
                   '파일 한도: ${policy['maxFileBytes']} bytes · '
-                  '제외 패턴 ${(policy['excludedPatterns'] as List<dynamic>? ?? const []).length}개',
+                  '제외 패턴 ${(policy['excludedPatterns'] as List<dynamic>? ?? const []).length}개 · '
+                  '고정 패턴 ${(policy['pinnedPatterns'] as List<dynamic>? ?? const []).length}개',
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => configurePolicy(policy),

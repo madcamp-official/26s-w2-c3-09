@@ -16,6 +16,7 @@ void main() {
         quotaMegabytes: '500',
         maxFileMegabytes: '50',
         excludedPatterns: 'private/**\n*.tmp\n',
+        pinnedPatterns: 'important/**\n',
         enabled: true,
       ),
       {
@@ -23,6 +24,7 @@ void main() {
         'quotaBytes': 500 * 1024 * 1024,
         'maxFileBytes': 50 * 1024 * 1024,
         'excludedPatterns': ['private/**', '*.tmp'],
+        'pinnedPatterns': ['important/**'],
       },
     );
   });
@@ -33,6 +35,7 @@ void main() {
         quotaMegabytes: '10',
         maxFileMegabytes: '20',
         excludedPatterns: '',
+        pinnedPatterns: '',
         enabled: true,
       ),
       throwsFormatException,

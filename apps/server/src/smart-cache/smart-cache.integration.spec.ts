@@ -120,6 +120,24 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
     });
   });
 
+  it('stores and returns pinned policy patterns', async () => {
+    const updated = await service.updatePolicy(userId, roomId, {
+      enabled: true,
+      quotaBytes: 100,
+      maxFileBytes: 100,
+      excludedPatterns: ['excluded/**'],
+      pinnedPatterns: ['important/**'],
+    });
+    expect(updated.pinnedPatterns).toEqual(['important/**']);
+
+    const loaded = await service.getPolicy(userId, roomId);
+    expect(loaded).toMatchObject({
+      roomId,
+      excludedPatterns: ['excluded/**'],
+      pinnedPatterns: ['important/**'],
+    });
+  });
+
   it('serializes quota, replays batches, releases expiry, and writes tombstones', async () => {
     const firstKey = randomUUID();
     const secondKey = randomUUID();

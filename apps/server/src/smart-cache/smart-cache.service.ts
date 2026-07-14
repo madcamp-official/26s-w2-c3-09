@@ -88,23 +88,25 @@ export class SmartCacheService {
         quotaBytes: env.SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES,
         maxFileBytes: env.SMART_CACHE_DEFAULT_MAX_FILE_BYTES,
         excludedPatterns: [],
+        pinnedPatterns: [],
       }
     );
   }
   async updatePolicy(
     userId: string,
     roomId: string,
-    body: z.infer<typeof updateSmartCachePolicySchema>,
+    body: z.input<typeof updateSmartCachePolicySchema>,
   ) {
+    const policyPatch = { ...body, pinnedPatterns: body.pinnedPatterns ?? [] };
     const room = await this.room(userId, roomId);
-    if (body.enabled) {
+    if (policyPatch.enabled) {
       this.enabled();
       this.storage.assertConfigured();
     }
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${roomId}))`);
       await this.lockActiveRoom(tx, userId, room.desktopDeviceId, roomId);
-      if (body.enabled) {
+      if (policyPatch.enabled) {
         const availableBytes = Number(
           (
             await tx
@@ -132,20 +134,20 @@ export class SmartCacheService {
               )
           )[0]?.value ?? 0,
         );
-        if (availableBytes + reservedBytes > body.quotaBytes)
+        if (availableBytes + reservedBytes > policyPatch.quotaBytes)
           throw new ConflictException({ code: 'REJECTED_POLICY' });
       }
       const policy = (
         await tx
           .insert(smartCachePolicies)
-          .values({ roomId, ...body })
+          .values({ roomId, ...policyPatch })
           .onConflictDoUpdate({
             target: smartCachePolicies.roomId,
-            set: { ...body, updatedAt: new Date() },
+            set: { ...policyPatch, updatedAt: new Date() },
           })
           .returning()
       )[0];
-      if (!body.enabled) {
+      if (!policyPatch.enabled) {
         const files = await tx
           .select()
           .from(cachedFiles)
@@ -198,7 +200,7 @@ export class SmartCacheService {
         eventType: 'smart-cache.updated',
         aggregateType: 'smart_cache_policy',
         aggregateId: roomId,
-        payload: { roomId, enabled: body.enabled },
+        payload: { roomId, enabled: policyPatch.enabled },
       });
       return policy;
     });
