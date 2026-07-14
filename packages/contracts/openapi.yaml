@@ -839,6 +839,23 @@ paths:
             pending-command warning,
             and desktop presence,
           }
+  /v1/rooms/{roomId}/smart-cache/files:
+    parameters:
+      - {
+          in: path,
+          name: roomId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    get:
+      description: Plan-aligned alias for the room smart-cache file list. `/v1/rooms/{roomId}/cached-files` remains available for older clients.
+      responses:
+        "200":
+          {
+            description: Available cached files,
+            pending-command warning,
+            and desktop presence,
+          }
   /v1/agent/cache-candidates:
     post:
       security: [{ deviceBearer: [] }]

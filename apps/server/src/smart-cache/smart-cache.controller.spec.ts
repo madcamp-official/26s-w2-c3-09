@@ -18,6 +18,32 @@ describe('SmartCacheController', () => {
     authType: 'DEVICE' as const,
   };
 
+  it('keeps the planned smart-cache file list path as the mobile read endpoint', () => {
+    const service = {
+      list: jest.fn().mockReturnValue({
+        files: [],
+        pendingCommandWarning: false,
+        desktopOnline: true,
+      }),
+    };
+    const controller = new SmartCacheController(service as never);
+
+    expect(
+      controller.listSmartCacheFiles(
+        principal,
+        '018f4c7b-1ad6-7c95-bf34-5e45881f98a3',
+      ),
+    ).toEqual({
+      files: [],
+      pendingCommandWarning: false,
+      desktopOnline: true,
+    });
+    expect(service.list).toHaveBeenCalledWith(
+      principal.userId,
+      '018f4c7b-1ad6-7c95-bf34-5e45881f98a3',
+    );
+  });
+
   it('delegates desktop source-change stale reports with an idempotency key', () => {
     const service = {
       markStale: jest.fn().mockReturnValue({

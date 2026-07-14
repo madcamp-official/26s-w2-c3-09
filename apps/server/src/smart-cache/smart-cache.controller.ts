@@ -50,6 +50,15 @@ export class SmartCacheController {
   ) {
     return this.cache.list(p.userId, roomId);
   }
+
+  @Get('rooms/:roomId/smart-cache/files')
+  listSmartCacheFiles(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('roomId') roomId: string,
+  ) {
+    return this.cache.list(p.userId, roomId);
+  }
+
   @Post('agent/cache-candidates') @AgentOnly() submit(
     @CurrentPrincipal() p: AuthPrincipal,
     @Headers('idempotency-key') raw: string | undefined,

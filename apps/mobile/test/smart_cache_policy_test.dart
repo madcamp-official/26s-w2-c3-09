@@ -35,6 +35,10 @@ void main() {
     'download completion access event is explicit and scoped to one file',
     () {
       expect(
+        smartCacheFilesPath('room-1'),
+        '/v1/rooms/room-1/smart-cache/files',
+      );
+      expect(
         smartCacheAccessEventPath('cached-file-1'),
         '/v1/cached-files/cached-file-1/access-events',
       );

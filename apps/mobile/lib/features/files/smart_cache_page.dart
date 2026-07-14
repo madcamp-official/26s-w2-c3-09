@@ -47,6 +47,9 @@ Map<String, dynamic> parseSmartCachePolicyInput({
 String smartCacheAccessEventPath(String cachedFileId) =>
     '/v1/cached-files/$cachedFileId/access-events';
 
+String smartCacheFilesPath(String roomId) =>
+    '/v1/rooms/$roomId/smart-cache/files';
+
 Map<String, dynamic> smartCacheDownloadCompletedAccessEvent() => const {
   'eventType': 'DOWNLOAD_COMPLETED',
 };
@@ -82,7 +85,7 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
     final api = ref.read(apiClientProvider);
     content = Future.wait([
       api.get('/v1/rooms/${widget.roomId}/smart-cache-policy'),
-      api.get('/v1/rooms/${widget.roomId}/cached-files'),
+      api.get(smartCacheFilesPath(widget.roomId)),
     ]);
   }
 
