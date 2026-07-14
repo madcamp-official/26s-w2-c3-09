@@ -3,6 +3,7 @@
 ## Recent implementation notes (2026-07-13)
 
 - Mobile smart-cache downloads now POST `DOWNLOAD_COMPLETED` to `/v1/cached-files/:cachedFileId/access-events` only after local save and SHA-256 verification; the server records `lastAccessedAt`/usage score from that verified ACK instead of treating signed URL issuance as a completed access.
+- Realtime/event contract artifacts now include independent JSON Schema files for `presence.updated`, item-scoped `smart-cache.updated`, and the safe declarative Rule DSL, with OpenAPI component refs and regression checks.
 - Mobile smart-cache file listing now uses the plan-aligned `/v1/rooms/:roomId/smart-cache/files` endpoint, while the older `/v1/rooms/:roomId/cached-files` route remains as a compatibility alias.
 - Mobile now stores smart-cache file metadata in Drift (`cached_smart_cache_files`): availability/freshness, checksum, local verified download path, and last verified/downloaded timestamps are owner-scoped and purged with the room/connection cache.
 - Mobile smart-cache now falls back to owner-scoped Drift metadata only on transport failures, showing an offline warning and the last verified cache list without hiding server/auth errors.
@@ -131,7 +132,7 @@ Tauri Desktop
 - Windows에서 Cargo object 파일 잠금으로 Vite가 종료되지 않도록 `src-tauri/target` 감시 제외
 - overlay window/event bridge skeleton
 - 서버 `RENAME`·`MOVE`·`TRASH`·directory `CREATE`·empty-file `CREATE` command를 직접 파일 변경이 아닌 승인 대기 `MOVE`/격리/`CREATE_DIR`/`CREATE_FILE` proposal로 변환하는 Desktop processor 경로
-- 파일 엔진용 OpenAPI 외부 schema 6개와 fixture
+- 파일 엔진·realtime용 OpenAPI 외부 JSON Schema 15개와 fixture
 
 아직 완료되지 않은 범위:
 

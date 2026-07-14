@@ -2423,3 +2423,9 @@ components:
       $ref: ./events/file-browse.schema.json
     FileTransferEvent:
       $ref: ./events/file-transfer.schema.json
+    PresenceUpdatedPayload:
+      $ref: ./events/presence.schema.json
+    SmartCacheUpdatedPayload:
+      $ref: ./events/smart-cache.schema.json
+    RuleDslDefinition:
+      $ref: ./events/rule-dsl.schema.json

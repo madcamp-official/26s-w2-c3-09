@@ -152,6 +152,96 @@ describe("smart cache contracts", () => {
   });
 });
 
+describe("event JSON schema artifacts", () => {
+  it("documents presence.updated as a device-scoped realtime patch", () => {
+    const schema = require("../events/presence.schema.json") as {
+      title: string;
+      additionalProperties: boolean;
+      required: string[];
+      properties: Record<string, { enum?: string[]; maximum?: number }>;
+    };
+
+    expect(schema.title).toBe("PresenceUpdatedPayload");
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["deviceId", "presence", "ttlSeconds"]);
+    expect(schema.properties.presence?.enum).toEqual([
+      "ONLINE_IDLE",
+      "ONLINE_SCANNING",
+      "ONLINE_EXECUTING",
+      "DEGRADED",
+      "OFFLINE",
+    ]);
+    expect(schema.properties.ttlSeconds?.maximum).toBe(3600);
+  });
+
+  it("documents smart-cache.updated as item-scoped cache events", () => {
+    const schema = require("../events/smart-cache.schema.json") as {
+      oneOf: Array<{ $ref: string }>;
+      $defs: Record<
+        string,
+        {
+          pattern?: string;
+          additionalProperties?: boolean;
+          properties?: Record<string, { enum?: string[]; const?: string }>;
+        }
+      >;
+    };
+    const safeRelativePath = new RegExp(
+      schema.$defs.SafeRelativePath.pattern ?? "",
+    );
+
+    expect(schema.oneOf.map((item) => item.$ref)).toEqual([
+      "#/$defs/PolicyUpdated",
+      "#/$defs/CandidateBatchUpdated",
+      "#/$defs/CachedFileUpdated",
+      "#/$defs/ReservationUpdated",
+      "#/$defs/FreshnessUpdated",
+    ]);
+    expect(safeRelativePath.test("docs/report.pdf")).toBe(true);
+    expect(safeRelativePath.test("../outside.pdf")).toBe(false);
+    expect(safeRelativePath.test("C:\\outside.pdf")).toBe(false);
+    expect(safeRelativePath.test("/outside.pdf")).toBe(false);
+    expect(schema.$defs.CachedFileUpdated.properties?.status?.enum).toEqual([
+      "AVAILABLE",
+      "INVALIDATED",
+    ]);
+    expect(schema.$defs.FreshnessUpdated.properties?.freshnessStatus?.const).toBe(
+      "STALE",
+    );
+  });
+
+  it("keeps the exported rule DSL declarative and path-bounded", () => {
+    const schema = require("../events/rule-dsl.schema.json") as {
+      additionalProperties: boolean;
+      required: string[];
+      properties: {
+        action: { oneOf: Array<{ $ref: string }> };
+      };
+      $defs: Record<
+        string,
+        { pattern?: string; additionalProperties?: boolean }
+      >;
+    };
+    const safeRelativePath = new RegExp(
+      schema.$defs.SafeRelativePath.pattern ?? "",
+    );
+
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(["conditions", "action"]);
+    expect(schema.properties.action.oneOf.map((item) => item.$ref)).toContain(
+      "#/$defs/CreateDirectoryAction",
+    );
+    expect(safeRelativePath.test("Inbox/PDF")).toBe(true);
+    expect(safeRelativePath.test("Inbox/../Secrets")).toBe(false);
+    expect(safeRelativePath.test("\\\\server\\share")).toBe(false);
+    for (const [name, definition] of Object.entries(schema.$defs)) {
+      if (name === "SafeRelativePath") continue;
+      expect(definition.additionalProperties).toBe(false);
+    }
+    expect(JSON.stringify(schema)).not.toMatch(/shell|javascript|eval/i);
+  });
+});
+
 describe("rule contracts", () => {
   it("accepts a deterministic extension move rule", () => {
     expect(
