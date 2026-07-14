@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Mobile Room now exposes an approval-first manual file command form for `RENAME`, `MOVE`, `TRASH`, and `CREATE`. The form validates obvious unsafe relative paths locally, sends the existing server command contract with `requiresApproval`, and relies on the desktop agent to create proposals before any file mutation.
 - Mobile Smart Cache reads now use `smartCachePolicyProvider(roomId)`, `smartCacheFilesProvider(roomId)`, and `smartCacheStatusProvider(roomId)`, preserving the existing transport-only offline fallback while keeping policy/file projections behind provider-backed reads.
 - Mobile rules now expose `ruleGatewayProvider` and `ruleListProvider(roomId)` for provider-backed reads; RulesPage still applies successful create/update/draft confirmations by local upsert instead of reloading the entire list.
 - Mobile file browse transport is now provider-backed through `fileBrowseGatewayProvider`, `fileDirectoryBrowseRequesterProvider`, and `fileBrowseStatusFetcherProvider`; FilesPage still keeps the WebSocket-first wait path and only uses REST status as the 5-second safety fallback.

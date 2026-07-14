@@ -14,6 +14,7 @@ import '../files/files_page.dart';
 import '../files/smart_cache_page.dart';
 import '../chat/chat_page.dart';
 import '../rules/rules_page.dart';
+import 'file_command_page.dart';
 
 class RoomContent {
   const RoomContent({
@@ -568,6 +569,24 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                           SmartCachePage(roomId: widget.room['id'] as String),
                     ),
                   )
+                : null,
+          ),
+          IconButton(
+            tooltip: '파일 명령',
+            icon: const Icon(Icons.pending_actions_outlined),
+            onPressed: disconnect == null
+                ? () => Navigator.of(context)
+                      .push<bool>(
+                        MaterialPageRoute(
+                          builder: (_) => FileCommandPage(
+                            roomId: roomId,
+                            rootId: widget.room['rootAlias'] as String? ?? '',
+                          ),
+                        ),
+                      )
+                      .then((changed) {
+                        if (changed == true && mounted) setState(_reload);
+                      })
                 : null,
           ),
           IconButton(
