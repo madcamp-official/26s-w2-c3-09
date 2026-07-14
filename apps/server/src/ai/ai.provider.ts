@@ -1,5 +1,6 @@
 import type {
   createCommandSchema,
+  createFileBrowseRequestSchema,
   ruleDefinitionSchema,
 } from '@mousekeeper/contracts';
 import type { z } from 'zod';
@@ -45,11 +46,20 @@ export type AiCommandDraftResult = {
   expiresAt?: string;
 };
 
+export type AiQueryResult = {
+  status: 'READY';
+  kind: 'QUERY';
+  browse: z.infer<typeof createFileBrowseRequestSchema>;
+  responseSummary: string;
+};
+
 export type AiProviderResult =
   | AiUnavailableResult
   | AiInvalidResult
   | AiNoActionResult
-  | AiCommandDraftResult;
+  | AiCommandDraftResult
+  | AiQueryResult
+  | AiRuleDraftResult;
 
 export type AiRuleDraftResult = {
   status: 'READY';

@@ -769,6 +769,7 @@ export const chatMessageTypeSchema = z.enum([
   "TEXT",
   "COMMAND_DRAFT",
   "RULE_DRAFT",
+  "QUERY_RESULT",
   "EXECUTION_RESULT",
 ]);
 export const chatMessageSchema = z
@@ -782,6 +783,64 @@ export const chatMessageSchema = z
     structuredPayload: z.record(z.string(), z.unknown()).nullable(),
     commandId: uuidSchema.nullable(),
     createdAt: z.iso.datetime(),
+  })
+  .strict();
+export const chatSessionSummarySchema = z
+  .object({
+    id: uuidSchema,
+    roomId: uuidSchema,
+    title: z.string().min(1).max(120),
+    summary: z.string().nullable(),
+    status: chatSessionStatusSchema,
+    createdAt: z.iso.datetime(),
+    updatedAt: z.iso.datetime(),
+    deletedAt: z.iso.datetime().nullable(),
+    messagePreview: z.string().max(120),
+    unreadCount: z.number().int().nonnegative(),
+    pendingActionCount: z.number().int().nonnegative(),
+    lastReadMessageId: uuidSchema.nullable(),
+    readAt: z.iso.datetime().nullable(),
+  })
+  .strict();
+export const chatQuickPromptSchema = z
+  .object({
+    id: z.string().min(1).max(80),
+    label: z.string().min(1).max(80),
+    prompt: z.string().min(1).max(500),
+    category: z.enum(["QUERY", "COMMAND", "RULE", "CLEANUP"]),
+  })
+  .strict();
+export const chatQuickHistoryItemSchema = z
+  .object({
+    messageId: uuidSchema,
+    sessionId: uuidSchema,
+    sessionTitle: z.string().min(1).max(120),
+    senderType: chatMessageSenderSchema,
+    messageType: chatMessageTypeSchema,
+    content: z.string().min(1).max(2000),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+export const chatQuickSuggestionSchema = z
+  .object({
+    messageId: uuidSchema,
+    sessionId: uuidSchema,
+    sessionTitle: z.string().min(1).max(120),
+    messageType: z.enum(["COMMAND_DRAFT", "RULE_DRAFT"]),
+    content: z.string().min(1).max(2000),
+    draftId: uuidSchema,
+    status: z.string().min(1).max(40),
+    createdAt: z.iso.datetime(),
+  })
+  .strict();
+export const chatQuickViewResponseSchema = z
+  .object({
+    prompts: z.array(chatQuickPromptSchema).min(1).max(12),
+    sessions: z.array(chatSessionSummarySchema).max(5),
+    history: z.array(chatQuickHistoryItemSchema).max(12),
+    pendingSuggestions: z.array(chatQuickSuggestionSchema).max(12),
+    unreadCount: z.number().int().nonnegative(),
+    pendingActionCount: z.number().int().nonnegative(),
   })
   .strict();
 export const aiProviderUnavailableSchema = z
@@ -809,11 +868,28 @@ export const aiProviderCommandDraftSchema = z
     commandDraftId: uuidSchema,
   })
   .strict();
+export const aiProviderRuleDraftSchema = z
+  .object({
+    status: z.literal("READY"),
+    kind: z.literal("RULE_DRAFT"),
+    ruleDraftId: uuidSchema,
+  })
+  .strict();
+export const aiProviderQuerySchema = z
+  .object({
+    status: z.literal("READY"),
+    kind: z.literal("QUERY"),
+    fileBrowseRequestId: uuidSchema.nullable(),
+    cacheHitCount: z.number().int().nonnegative(),
+  })
+  .strict();
 export const chatAiResultSchema = z.union([
   aiProviderUnavailableSchema,
   aiProviderInvalidSchema,
   aiProviderNoActionSchema,
   aiProviderCommandDraftSchema,
+  aiProviderRuleDraftSchema,
+  aiProviderQuerySchema,
 ]);
 export const ruleDraftStatusSchema = z.enum([
   "DRAFT",
@@ -893,6 +969,12 @@ export const createChatMessageResponseSchema = z
       });
     }
   });
+export const quickCleanupSchema = z.object({}).strict();
+export const quickCleanupResponseSchema = createChatMessageResponseSchema
+  .extend({
+    session: chatSessionSummarySchema,
+  })
+  .strict();
 export const commandDraftStatusSchema = z.enum([
   "DRAFT",
   "APPROVED",

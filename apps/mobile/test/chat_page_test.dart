@@ -42,6 +42,23 @@ void main() {
       same(messages),
     );
     expect(
+      patchActionDraftMessages(
+        [
+          _message(
+            'rule-message',
+            's1',
+            'ASSISTANT',
+            'rule draft',
+            messageType: 'RULE_DRAFT',
+            structuredPayload: {'id': 'rule-draft-1', 'status': 'DRAFT'},
+          ),
+        ],
+        'rule-draft-1',
+        {'id': 'rule-draft-1', 'status': 'REJECTED'},
+      ).single['structuredPayload'],
+      {'id': 'rule-draft-1', 'status': 'REJECTED'},
+    );
+    expect(
       replaceChatSession(sessions, _session('missing', '새 제목')),
       same(sessions),
     );
@@ -251,6 +268,44 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('REJECTED'), findsOneWidget);
+  });
+
+  testWidgets('confirming a rule draft patches the message without reload', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', 'rule session')],
+      messagesBySession: {
+        's1': [
+          _message(
+            'm-rule-draft',
+            's1',
+            'ASSISTANT',
+            'Move PDF files into Archive/PDF.',
+            messageType: 'RULE_DRAFT',
+            structuredPayload: {
+              'id': 'rule-draft-1',
+              'status': 'DRAFT',
+              'ruleId': null,
+            },
+          ),
+        ],
+      },
+    );
+
+    await _pumpChat(tester, gateway);
+    await tester.tap(
+      find.byKey(const ValueKey('chat-rule-draft-confirm-rule-draft-1')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(gateway.confirmedRuleDraftIds, ['rule-draft-1']);
+    expect(gateway.messageLoads, {'s1': 1});
+    expect(
+      find.byKey(const ValueKey('chat-rule-draft-status-rule-draft-1')),
+      findsOneWidget,
+    );
+    expect(find.text('MATERIALIZED'), findsOneWidget);
   });
 
   testWidgets('load more appends the next message page by cursor', (
@@ -474,6 +529,8 @@ class _FakeChatGateway implements ChatGateway {
   final List<String> sentMessages = [];
   final List<String> confirmedDraftIds = [];
   final List<String> rejectedDraftIds = [];
+  final List<String> confirmedRuleDraftIds = [];
+  final List<String> rejectedRuleDraftIds = [];
   final List<String> updatedTitles = [];
   final List<String> readReceipts = [];
   int createdSessions = 0;
@@ -599,6 +656,30 @@ class _FakeChatGateway implements ChatGateway {
     rejectedDraftIds.add(draftId);
     return {
       'draft': {'id': draftId, 'status': 'REJECTED', 'commandId': null},
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> confirmRuleDraft(
+    String draftId,
+    String idempotencyKey,
+  ) async {
+    confirmedRuleDraftIds.add(draftId);
+    return {
+      'draft': {
+        'id': draftId,
+        'status': 'MATERIALIZED',
+        'ruleId': 'rule-$draftId',
+      },
+      'rule': {'id': 'rule-$draftId'},
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> rejectRuleDraft(String draftId) async {
+    rejectedRuleDraftIds.add(draftId);
+    return {
+      'draft': {'id': draftId, 'status': 'REJECTED', 'ruleId': null},
     };
   }
 }

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  cachedFiles,
   chatMessages,
   chatReadStates,
   chatSessions,
@@ -9,6 +10,7 @@ import {
   devices,
   fileBrowseRequests,
   fileTransfers,
+  ruleDrafts,
   rooms,
   syncEvents,
   users,
@@ -260,6 +262,249 @@ describeDatabase('ChatService PostgreSQL integration', () => {
         .from(commands)
         .where(eq(commands.roomId, roomId)),
     ).toHaveLength(0);
+  });
+
+  it('returns quick-view prompts, recent history, and pending suggestions', async () => {
+    const session = await service.createSession(userId, roomId, 'Quick view');
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Rename old report',
+    );
+    const draftResult = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'RENAME',
+        payload: {
+          rootId: 'root:downloads',
+          sourceRelativePath: 'reports/old.pdf',
+          newName: 'final.pdf',
+        },
+      },
+      confirmationSummary: 'Rename reports/old.pdf to final.pdf',
+    });
+
+    const quickView = await service.quickView(userId, roomId);
+
+    expect(quickView.prompts.map((prompt) => prompt.category)).toEqual(
+      expect.arrayContaining(['QUERY', 'COMMAND', 'RULE', 'CLEANUP']),
+    );
+    expect(quickView.sessions[0]).toMatchObject({
+      id: session.id,
+      unreadCount: 1,
+      pendingActionCount: 1,
+    });
+    expect(quickView.unreadCount).toBeGreaterThanOrEqual(1);
+    expect(quickView.pendingActionCount).toBe(1);
+    expect(quickView.history.map((item) => item.messageId)).toEqual(
+      expect.arrayContaining([source.message.id, draftResult.message.id]),
+    );
+    expect(quickView.pendingSuggestions).toEqual([
+      expect.objectContaining({
+        sessionId: session.id,
+        messageType: 'COMMAND_DRAFT',
+        draftId: draftResult.draft.id,
+        status: 'DRAFT',
+      }),
+    ]);
+  });
+
+  it('creates quick cleanup as an ANALYZE command draft without queuing a command', async () => {
+    const result = await service.createQuickCleanupSuggestion(userId, roomId);
+
+    expect(result.session).toMatchObject({
+      roomId,
+      title: '빠른 정리 제안',
+      unreadCount: 1,
+      pendingActionCount: 1,
+    });
+    expect(result.message).toMatchObject({
+      senderType: 'USER',
+      messageType: 'TEXT',
+      content: '빠른 정리 제안 요청',
+      sessionId: result.session.id,
+    });
+    expect(result.assistant).toMatchObject({
+      senderType: 'ASSISTANT',
+      messageType: 'COMMAND_DRAFT',
+      sessionId: result.session.id,
+      structuredPayload: expect.objectContaining({
+        intent: 'ANALYZE',
+        status: 'DRAFT',
+        commandId: null,
+      }),
+    });
+    expect(result.ai).toMatchObject({
+      status: 'READY',
+      kind: 'COMMAND_DRAFT',
+    });
+    expect(
+      await connection.db
+        .select()
+        .from(commandDrafts)
+        .where(eq(commandDrafts.sessionId, result.session.id)),
+    ).toEqual([
+      expect.objectContaining({
+        intent: 'ANALYZE',
+        arguments: {},
+        status: 'DRAFT',
+        commandId: null,
+      }),
+    ]);
+    expect(
+      await connection.db
+        .select()
+        .from(commands)
+        .where(eq(commands.roomId, roomId)),
+    ).toHaveLength(0);
+  });
+
+  it('persists AI rule drafts as chat approval cards without materializing rules', async () => {
+    service = new ChatService(
+      connection.db,
+      new SyncService(),
+      new ScriptedAiProvider({
+        status: 'READY',
+        kind: 'RULE_DRAFT',
+        draft: {
+          name: 'PDF archive',
+          definition: {
+            match: 'ALL',
+            conditions: [
+              { field: 'extension', operator: 'IN', value: ['.pdf'] },
+            ],
+            action: { type: 'MOVE', destinationTemplate: 'Archive/PDF' },
+          },
+          explanation: 'Move PDF files into Archive/PDF.',
+          ambiguities: [],
+        },
+      }),
+    );
+    const session = await service.createSession(userId, roomId);
+    const result = await service.createMessage(
+      userId,
+      session.id,
+      'PDF는 앞으로 Archive/PDF로 옮기는 규칙 추가해줘',
+    );
+
+    expect(result.aiStatus).toBe('READY');
+    expect(result.ai).toMatchObject({
+      status: 'READY',
+      kind: 'RULE_DRAFT',
+    });
+    expect(result.assistant).toMatchObject({
+      senderType: 'ASSISTANT',
+      messageType: 'RULE_DRAFT',
+      content: 'Move PDF files into Archive/PDF.',
+      structuredPayload: expect.objectContaining({
+        name: 'PDF archive',
+        status: 'DRAFT',
+        ruleId: null,
+      }),
+    });
+    if (!result.assistant) throw new Error('Expected assistant rule draft message');
+
+    const drafts = await connection.db
+      .select()
+      .from(ruleDrafts)
+      .where(eq(ruleDrafts.sessionId, session.id));
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      sourceMessageId: result.message.id,
+      roomId,
+      createdByUserId: userId,
+      name: 'PDF archive',
+      status: 'DRAFT',
+      ruleId: null,
+    });
+    expect((await service.listSessions(userId, roomId))[0]).toMatchObject({
+      id: session.id,
+      unreadCount: 1,
+      pendingActionCount: 1,
+    });
+  });
+
+  it('answers AI query results from cache while forcing live browse offline', async () => {
+    const sync = new SyncService();
+    const offlineRedis = {
+      status: 'ready',
+      connect: jest.fn(async () => undefined),
+      get: jest.fn(async () => null),
+    };
+    service = new ChatService(
+      connection.db,
+      sync,
+      new ScriptedAiProvider({
+        status: 'READY',
+        kind: 'QUERY',
+        browse: {
+          relativeDirectory: 'Documents',
+          cursor: null,
+          query: 'report',
+          extensions: ['.pdf'],
+          limit: 10,
+          searchScope: 'MANAGED_ROOT',
+        },
+        responseSummary: 'Looking for report PDFs under Documents.',
+      }),
+      new FileBrowseService(connection.db, offlineRedis as never, sync),
+      undefined,
+    );
+    await connection.db.insert(cachedFiles).values({
+      roomId,
+      sourceRelativePath: 'Documents/report.pdf',
+      sourceVersion: { mtimeMs: 1, sizeBytes: 1024 },
+      sourceVersionHash: 'a'.repeat(64),
+      usageScore: 10,
+      objectKey: 'cache/report.pdf',
+      sizeBytes: 1024,
+      sha256: 'b'.repeat(64),
+      lastVerifiedAt: new Date(),
+    });
+    await connection.db.insert(cachedFiles).values({
+      roomId,
+      sourceRelativePath: 'Documents/photo.jpg',
+      sourceVersion: { mtimeMs: 2, sizeBytes: 2048 },
+      sourceVersionHash: 'c'.repeat(64),
+      usageScore: 9,
+      objectKey: 'cache/photo.jpg',
+      sizeBytes: 2048,
+      sha256: 'd'.repeat(64),
+      lastVerifiedAt: new Date(),
+    });
+
+    const session = await service.createSession(userId, roomId);
+    const result = await service.createMessage(
+      userId,
+      session.id,
+      'Documents에서 report pdf 찾아줘',
+    );
+
+    expect(result.ai).toMatchObject({
+      status: 'READY',
+      kind: 'QUERY',
+      cacheHitCount: 1,
+    });
+    expect(result.assistant).toMatchObject({
+      senderType: 'ASSISTANT',
+      messageType: 'QUERY_RESULT',
+      structuredPayload: expect.objectContaining({
+        cacheMode: 'CACHE_ONLY',
+        cacheHitCount: 1,
+        cacheEntries: [
+          expect.objectContaining({ relativePath: 'Documents/report.pdf' }),
+        ],
+        liveBrowseRequest: expect.objectContaining({
+          status: 'FAILED',
+          failureCode: 'DEVICE_OFFLINE',
+        }),
+      }),
+    });
+    expect((await service.listSessions(userId, roomId))[0]).toMatchObject({
+      id: session.id,
+      unreadCount: 1,
+      pendingActionCount: 0,
+    });
   });
 
   it('materializes a command draft only after confirmation with an idempotency key', async () => {
@@ -670,6 +915,12 @@ describeDatabase('ChatService PostgreSQL integration', () => {
   afterEach(async () => {
     await connection.db.delete(syncEvents).where(eq(syncEvents.userId, userId));
     await connection.db.delete(chatReadStates).where(eq(chatReadStates.userId, userId));
+    await connection.db
+      .delete(cachedFiles)
+      .where(eq(cachedFiles.roomId, roomId));
+    await connection.db
+      .delete(ruleDrafts)
+      .where(eq(ruleDrafts.roomId, roomId));
     await connection.db
       .delete(commandDrafts)
       .where(eq(commandDrafts.roomId, roomId));

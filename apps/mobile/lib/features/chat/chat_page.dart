@@ -29,6 +29,11 @@ abstract interface class ChatGateway {
     String idempotencyKey,
   );
   Future<Map<String, dynamic>> rejectCommandDraft(String draftId);
+  Future<Map<String, dynamic>> confirmRuleDraft(
+    String draftId,
+    String idempotencyKey,
+  );
+  Future<Map<String, dynamic>> rejectRuleDraft(String draftId);
 }
 
 const chatMessagePageSize = 30;
@@ -141,6 +146,20 @@ class ApiChatGateway implements ChatGateway {
   @override
   Future<Map<String, dynamic>> rejectCommandDraft(String draftId) =>
       _api.post('/v1/command-drafts/$draftId/reject', const {});
+
+  @override
+  Future<Map<String, dynamic>> confirmRuleDraft(
+    String draftId,
+    String idempotencyKey,
+  ) => _api.post(
+    '/v1/rule-drafts/$draftId/confirm',
+    const {},
+    idempotencyKey: idempotencyKey,
+  );
+
+  @override
+  Future<Map<String, dynamic>> rejectRuleDraft(String draftId) =>
+      _api.post('/v1/rule-drafts/$draftId/reject', const {});
 }
 
 String chatSessionTitle(Map<String, dynamic> session) {
@@ -180,6 +199,22 @@ String chatErrorMessage(Object error) {
   return '채팅 작업을 완료하지 못했습니다.';
 }
 
+bool isActionDraftMessage(Map<String, dynamic> message) =>
+    message['messageType'] == 'COMMAND_DRAFT' ||
+    message['messageType'] == 'RULE_DRAFT';
+
+bool isRuleDraftMessage(Map<String, dynamic> message) =>
+    message['messageType'] == 'RULE_DRAFT';
+
+String? actionDraftIdFromMessage(Map<String, dynamic> message) {
+  if (!isActionDraftMessage(message)) return null;
+  final payload = message['structuredPayload'];
+  if (payload is Map && payload['id'] is String) {
+    return payload['id'] as String;
+  }
+  return null;
+}
+
 String? commandDraftIdFromMessage(Map<String, dynamic> message) {
   if (message['messageType'] != 'COMMAND_DRAFT') return null;
   final payload = message['structuredPayload'];
@@ -189,13 +224,16 @@ String? commandDraftIdFromMessage(Map<String, dynamic> message) {
   return null;
 }
 
-String commandDraftStatusFromMessage(Map<String, dynamic> message) {
+String actionDraftStatusFromMessage(Map<String, dynamic> message) {
   final payload = message['structuredPayload'];
   if (payload is Map && payload['status'] is String) {
     return payload['status'] as String;
   }
   return 'DRAFT';
 }
+
+String commandDraftStatusFromMessage(Map<String, dynamic> message) =>
+    actionDraftStatusFromMessage(message);
 
 String? selectChatSessionId(
   List<Map<String, dynamic>> sessions,
@@ -278,7 +316,7 @@ List<Map<String, dynamic>> mergeChatMessages(
   return changed ? List.unmodifiable(next) : existing;
 }
 
-List<Map<String, dynamic>> patchCommandDraftMessages(
+List<Map<String, dynamic>> patchActionDraftMessages(
   List<Map<String, dynamic>> messages,
   String draftId,
   Object? draft,
@@ -288,7 +326,7 @@ List<Map<String, dynamic>> patchCommandDraftMessages(
   var changed = false;
   final next = [
     for (final message in messages)
-      if (commandDraftIdFromMessage(message) == draftId)
+      if (actionDraftIdFromMessage(message) == draftId)
         (() {
           if (_jsonEquivalent(message['structuredPayload'], nextPayload)) {
             return message;
@@ -301,6 +339,12 @@ List<Map<String, dynamic>> patchCommandDraftMessages(
   ];
   return changed ? List.unmodifiable(next) : messages;
 }
+
+List<Map<String, dynamic>> patchCommandDraftMessages(
+  List<Map<String, dynamic>> messages,
+  String draftId,
+  Object? draft,
+) => patchActionDraftMessages(messages, draftId, draft);
 
 bool _jsonEquivalent(Object? left, Object? right) {
   if (identical(left, right)) return true;
@@ -793,44 +837,71 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Future<void> _confirmCommandDraft(String draftId) async {
-    if (_draftingIds.contains(draftId)) return;
-    setState(() => _draftingIds.add(draftId));
-    try {
-      final result = await _gateway.confirmCommandDraft(
-        draftId,
-        const Uuid().v4(),
-      );
-      if (_disposed) return;
-      _patchDraftMessage(draftId, result['draft']);
-      _invalidateChatReadModels(sessionId: _conversation.selectedSessionId);
-      _showSnack('Command draft confirmed.');
-    } catch (error) {
-      _showSnack(
-        'Command draft confirmation failed: ${chatErrorMessage(error)}',
-      );
-    } finally {
-      if (!_disposed) setState(() => _draftingIds.remove(draftId));
-    }
+    await _confirmActionDraft(
+      draftId,
+      () => _gateway.confirmCommandDraft(draftId, const Uuid().v4()),
+      'Command draft confirmed.',
+      'Command draft confirmation failed',
+    );
   }
 
   Future<void> _rejectCommandDraft(String draftId) async {
+    await _rejectActionDraft(
+      draftId,
+      () => _gateway.rejectCommandDraft(draftId),
+      'Command draft rejected.',
+      'Command draft rejection failed',
+    );
+  }
+
+  Future<void> _confirmRuleDraft(String draftId) async {
+    await _confirmActionDraft(
+      draftId,
+      () => _gateway.confirmRuleDraft(draftId, const Uuid().v4()),
+      'Rule draft confirmed.',
+      'Rule draft confirmation failed',
+    );
+  }
+
+  Future<void> _rejectRuleDraft(String draftId) async {
+    await _rejectActionDraft(
+      draftId,
+      () => _gateway.rejectRuleDraft(draftId),
+      'Rule draft rejected.',
+      'Rule draft rejection failed',
+    );
+  }
+
+  Future<void> _confirmActionDraft(
+    String draftId,
+    Future<Map<String, dynamic>> Function() action,
+    String successMessage,
+    String failurePrefix,
+  ) async {
     if (_draftingIds.contains(draftId)) return;
     setState(() => _draftingIds.add(draftId));
     try {
-      final result = await _gateway.rejectCommandDraft(draftId);
+      final result = await action();
       if (_disposed) return;
       _patchDraftMessage(draftId, result['draft']);
       _invalidateChatReadModels(sessionId: _conversation.selectedSessionId);
-      _showSnack('Command draft rejected.');
+      _showSnack(successMessage);
     } catch (error) {
-      _showSnack('Command draft rejection failed: ${chatErrorMessage(error)}');
+      _showSnack('$failurePrefix: ${chatErrorMessage(error)}');
     } finally {
       if (!_disposed) setState(() => _draftingIds.remove(draftId));
     }
   }
 
+  Future<void> _rejectActionDraft(
+    String draftId,
+    Future<Map<String, dynamic>> Function() action,
+    String successMessage,
+    String failurePrefix,
+  ) => _confirmActionDraft(draftId, action, successMessage, failurePrefix);
+
   void _patchDraftMessage(String draftId, Object? draft) {
-    final next = patchCommandDraftMessages(
+    final next = patchActionDraftMessages(
       _conversation.messages,
       draftId,
       draft,
@@ -1002,6 +1073,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           busyDraftIds: _draftingIds,
           onConfirmDraft: (draftId) => unawaited(_confirmCommandDraft(draftId)),
           onRejectDraft: (draftId) => unawaited(_rejectCommandDraft(draftId)),
+          onConfirmRuleDraft: (draftId) =>
+              unawaited(_confirmRuleDraft(draftId)),
+          onRejectRuleDraft: (draftId) => unawaited(_rejectRuleDraft(draftId)),
         );
       },
     );
@@ -1171,20 +1245,26 @@ class _ChatBubble extends StatelessWidget {
     required this.busyDraftIds,
     required this.onConfirmDraft,
     required this.onRejectDraft,
+    required this.onConfirmRuleDraft,
+    required this.onRejectRuleDraft,
   });
 
   final Map<String, dynamic> message;
   final Set<String> busyDraftIds;
   final ValueChanged<String> onConfirmDraft;
   final ValueChanged<String> onRejectDraft;
+  final ValueChanged<String> onConfirmRuleDraft;
+  final ValueChanged<String> onRejectRuleDraft;
 
   @override
   Widget build(BuildContext context) {
     final fromUser = message['senderType'] == 'USER';
-    final isDraft = message['messageType'] == 'COMMAND_DRAFT';
-    final draftId = commandDraftIdFromMessage(message);
-    final draftStatus = commandDraftStatusFromMessage(message);
+    final isDraft = isActionDraftMessage(message);
+    final isRuleDraft = isRuleDraftMessage(message);
+    final draftId = actionDraftIdFromMessage(message);
+    final draftStatus = actionDraftStatusFromMessage(message);
     final draftBusy = draftId != null && busyDraftIds.contains(draftId);
+    final keyPrefix = isRuleDraft ? 'chat-rule-draft' : 'chat-command-draft';
     return Align(
       alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Card(
@@ -1208,10 +1288,12 @@ class _ChatBubble extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       FilledButton(
-                        key: ValueKey('chat-command-draft-confirm-$draftId'),
+                        key: ValueKey('$keyPrefix-confirm-$draftId'),
                         onPressed: draftBusy
                             ? null
-                            : () => onConfirmDraft(draftId),
+                            : () => isRuleDraft
+                                  ? onConfirmRuleDraft(draftId)
+                                  : onConfirmDraft(draftId),
                         child: draftBusy
                             ? const SizedBox.square(
                                 dimension: 16,
@@ -1223,17 +1305,19 @@ class _ChatBubble extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       TextButton(
-                        key: ValueKey('chat-command-draft-reject-$draftId'),
+                        key: ValueKey('$keyPrefix-reject-$draftId'),
                         onPressed: draftBusy
                             ? null
-                            : () => onRejectDraft(draftId),
+                            : () => isRuleDraft
+                                  ? onRejectRuleDraft(draftId)
+                                  : onRejectDraft(draftId),
                         child: const Text('거절'),
                       ),
                     ],
                   )
                 else
                   Chip(
-                    key: ValueKey('chat-command-draft-status-$draftId'),
+                    key: ValueKey('$keyPrefix-status-$draftId'),
                     label: Text(draftStatus),
                   ),
               ],

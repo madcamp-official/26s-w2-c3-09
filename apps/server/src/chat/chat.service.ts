@@ -11,9 +11,11 @@ import {
   createFileTransferSchema,
   downloadCommandPayloadSchema,
   findCommandPayloadSchema,
+  ruleDefinitionSchema,
   uploadCommandPayloadSchema,
 } from '@mousekeeper/contracts';
 import {
+  cachedFiles,
   chatMessages,
   chatReadStates,
   chatSessions,
@@ -22,13 +24,19 @@ import {
   devices,
   fileBrowseRequests,
   fileTransfers,
+  ruleDrafts,
   rooms,
   type Database,
 } from '@mousekeeper/database';
 import { and, asc, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { mapAiResultToCommandDraft } from '../ai/ai-command-draft.mapper';
-import { AI_PROVIDER, type AiProvider } from '../ai/ai.provider';
+import {
+  AI_PROVIDER,
+  type AiProvider,
+  type AiQueryResult,
+  type AiRuleDraftResult,
+} from '../ai/ai.provider';
 import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
 import { FileBrowseService } from '../file-access/file-browse.service';
@@ -38,6 +46,35 @@ import { TransfersService } from '../transfers/transfers.service';
 const CHAT_SESSION_LIMIT = 5;
 const DEFAULT_CHAT_TITLE = 'New chat';
 const DEFAULT_DRAFT_TTL_MS = 10 * 60 * 1000;
+const QUICK_CLEANUP_USER_MESSAGE = '빠른 정리 제안 요청';
+const QUICK_CLEANUP_CONFIRMATION =
+  'PC가 관리 루트를 분석해서 정리 제안을 만들도록 요청합니다. 파일 변경은 별도 제안 승인 전에는 실행되지 않습니다.';
+const QUICK_VIEW_PROMPTS = [
+  {
+    id: 'find-recent-reports',
+    label: 'Find reports',
+    prompt: '최근 report PDF 파일 찾아줘',
+    category: 'QUERY',
+  },
+  {
+    id: 'clean-downloads',
+    label: 'Clean Downloads',
+    prompt: 'Downloads 폴더에서 정리할 것들을 빠르게 제안해줘',
+    category: 'CLEANUP',
+  },
+  {
+    id: 'archive-pdfs-rule',
+    label: 'PDF rule',
+    prompt: '앞으로 PDF는 Archive/PDF로 옮기는 규칙을 추가해줘',
+    category: 'RULE',
+  },
+  {
+    id: 'move-screenshots',
+    label: 'Move screenshots',
+    prompt: '스크린샷 파일들을 Screenshots 폴더로 옮겨줘',
+    category: 'COMMAND',
+  },
+] as const;
 type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 type DbExecutor = Database | Transaction;
 type PublicChatMessage = {
@@ -77,6 +114,135 @@ export class ChatService {
       .orderBy(desc(chatSessions.updatedAt), desc(chatSessions.createdAt));
 
     return this.withPreviews(this.db, sessions);
+  }
+
+  async quickView(userId: string, roomId: string) {
+    await this.requireOwnedRoom(userId, roomId);
+    const sessions = await this.listSessions(userId, roomId);
+    const history = await this.quickHistory(userId, roomId);
+    const pendingSuggestions = await this.quickPendingSuggestions(
+      userId,
+      roomId,
+    );
+    return {
+      prompts: QUICK_VIEW_PROMPTS.map((prompt) => ({ ...prompt })),
+      sessions: sessions.slice(0, CHAT_SESSION_LIMIT),
+      history,
+      pendingSuggestions,
+      unreadCount: sessions.reduce(
+        (sum, session) => sum + Number(session.unreadCount ?? 0),
+        0,
+      ),
+      pendingActionCount: sessions.reduce(
+        (sum, session) => sum + Number(session.pendingActionCount ?? 0),
+        0,
+      ),
+    };
+  }
+
+  async createQuickCleanupSuggestion(userId: string, roomId: string) {
+    return this.db.transaction(async (tx) => {
+      await this.requireOwnedRoomIn(tx, userId, roomId);
+      const session = await this.getOrCreateQuickCleanupSessionIn(
+        tx,
+        userId,
+        roomId,
+      );
+      const message = (
+        await tx
+          .insert(chatMessages)
+          .values({
+            roomId,
+            sessionId: session.id,
+            senderType: 'USER',
+            messageType: 'TEXT',
+            content: QUICK_CLEANUP_USER_MESSAGE,
+          })
+          .returning()
+      )[0]!;
+      const expiresAt = new Date(Date.now() + DEFAULT_DRAFT_TTL_MS);
+      const draft = (
+        await tx
+          .insert(commandDrafts)
+          .values({
+            sessionId: session.id,
+            sourceMessageId: message.id,
+            roomId,
+            createdByUserId: userId,
+            intent: 'ANALYZE',
+            arguments: {},
+            confirmationSummary: QUICK_CLEANUP_CONFIRMATION,
+            expiresAt,
+          })
+          .returning()
+      )[0]!;
+      const draftSummary = this.publicDraft(draft);
+      const assistant = (
+        await tx
+          .insert(chatMessages)
+          .values({
+            roomId,
+            sessionId: session.id,
+            senderType: 'ASSISTANT',
+            messageType: 'COMMAND_DRAFT',
+            content: QUICK_CLEANUP_CONFIRMATION,
+            structuredPayload: draftSummary,
+          })
+          .returning()
+      )[0]!;
+      const now = new Date();
+      const updatedSession = (
+        await tx
+          .update(chatSessions)
+          .set({ title: '빠른 정리 제안', updatedAt: now })
+          .where(eq(chatSessions.id, session.id))
+          .returning()
+      )[0]!;
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId,
+        eventType: 'chat.message.created',
+        aggregateType: 'chat_message',
+        aggregateId: message.id,
+        payload: {
+          messageId: message.id,
+          sessionId: session.id,
+          senderType: message.senderType,
+          messageType: message.messageType,
+        },
+      });
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId,
+        eventType: 'chat.message.created',
+        aggregateType: 'chat_message',
+        aggregateId: assistant.id,
+        payload: {
+          messageId: assistant.id,
+          sessionId: session.id,
+          commandDraftId: draft.id,
+          senderType: assistant.senderType,
+          messageType: assistant.messageType,
+        },
+      });
+      return {
+        session: this.publicSession(
+          updatedSession,
+          assistant.content.slice(0, 120),
+          await this.sessionCounters(tx, updatedSession),
+        ),
+        message: this.publicMessage(message),
+        assistant: this.publicMessage(assistant),
+        aiStatus: 'READY' as const,
+        ai: {
+          status: 'READY' as const,
+          kind: 'COMMAND_DRAFT' as const,
+          commandDraftId: draft.id,
+        },
+      };
+    });
   }
 
   async createSession(userId: string, roomId: string, title?: string) {
@@ -829,6 +995,44 @@ export class ChatService {
         content: message.content,
       },
     });
+    if (ai.status === 'READY' && ai.kind === 'RULE_DRAFT') {
+      const draft = await this.createRuleDraftFromAi(userId, session, message, ai);
+      if (!draft) {
+        return {
+          message,
+          assistant: null,
+          aiStatus: 'INVALID' as const,
+          ai: {
+            status: 'INVALID' as const,
+            code: 'AI_OUTPUT_INVALID' as const,
+          },
+        };
+      }
+      return {
+        message,
+        assistant: draft.message,
+        aiStatus: 'READY' as const,
+        ai: {
+          status: 'READY' as const,
+          kind: 'RULE_DRAFT' as const,
+          ruleDraftId: draft.draft.id,
+        },
+      };
+    }
+    if (ai.status === 'READY' && ai.kind === 'QUERY') {
+      const query = await this.createQueryResultFromAi(userId, session, ai);
+      return {
+        message,
+        assistant: query.message,
+        aiStatus: 'READY' as const,
+        ai: {
+          status: 'READY' as const,
+          kind: 'QUERY' as const,
+          fileBrowseRequestId: query.fileBrowseRequest?.id ?? null,
+          cacheHitCount: query.cacheEntries.length,
+        },
+      };
+    }
     const mapped = mapAiResultToCommandDraft(message.id, ai);
     if (mapped.kind === 'NO_DRAFT' || mapped.kind === 'INVALID') {
       return {
@@ -853,6 +1057,226 @@ export class ChatService {
         commandDraftId: draft.draft.id,
       },
     };
+  }
+
+  private async createQueryResultFromAi(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+    ai: AiQueryResult,
+  ) {
+    const browseBody = createFileBrowseRequestSchema.safeParse(ai.browse);
+    if (!browseBody.success) {
+      return this.createInvalidAiAssistantMessage(userId, session);
+    }
+    return this.db.transaction(async (tx) => {
+      const currentSession = await this.requireOwnedSessionIn(
+        tx,
+        userId,
+        session.id,
+      );
+      const cacheEntries = await this.cachedBrowseEntriesIn(
+        tx,
+        currentSession.roomId,
+        browseBody.data,
+      );
+      const fileBrowseRequest = this.browse
+        ? await this.browse.createInTransaction(
+            tx,
+            userId,
+            currentSession.roomId,
+            browseBody.data,
+          )
+        : null;
+      const payload = {
+        kind: 'QUERY_RESULT',
+        cacheMode:
+          fileBrowseRequest == null || fileBrowseRequest.status === 'FAILED'
+            ? 'CACHE_ONLY'
+            : 'CACHE_AND_LIVE',
+        cacheEntries,
+        cacheHitCount: cacheEntries.length,
+        liveBrowseRequest: fileBrowseRequest
+          ? this.publicFileBrowseRequest(fileBrowseRequest)
+          : null,
+      };
+      const message = (
+        await tx
+          .insert(chatMessages)
+          .values({
+            roomId: currentSession.roomId,
+            sessionId: currentSession.id,
+            senderType: 'ASSISTANT',
+            messageType: 'QUERY_RESULT',
+            content: queryResultContent(
+              ai.responseSummary,
+              cacheEntries.length,
+              fileBrowseRequest?.status ?? null,
+            ),
+            structuredPayload: payload,
+          })
+          .returning()
+      )[0]!;
+      await tx
+        .update(chatSessions)
+        .set({ updatedAt: new Date() })
+        .where(eq(chatSessions.id, currentSession.id));
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId: currentSession.roomId,
+        eventType: 'chat.message.created',
+        aggregateType: 'chat_message',
+        aggregateId: message.id,
+        payload: {
+          messageId: message.id,
+          sessionId: currentSession.id,
+          fileBrowseRequestId: fileBrowseRequest?.id ?? null,
+          senderType: message.senderType,
+          messageType: message.messageType,
+        },
+      });
+      return {
+        message: this.publicMessage(message),
+        fileBrowseRequest,
+        cacheEntries,
+      };
+    });
+  }
+
+  private async createInvalidAiAssistantMessage(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+  ) {
+    return this.db.transaction(async (tx) => {
+      const currentSession = await this.requireOwnedSessionIn(
+        tx,
+        userId,
+        session.id,
+      );
+      const message = (
+        await tx
+          .insert(chatMessages)
+          .values({
+            roomId: currentSession.roomId,
+            sessionId: currentSession.id,
+            senderType: 'ASSISTANT',
+            messageType: 'TEXT',
+            content: 'AI output failed schema validation, so no query was run.',
+            structuredPayload: {
+              status: 'INVALID',
+              code: 'AI_OUTPUT_INVALID',
+            },
+          })
+          .returning()
+      )[0]!;
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId: currentSession.roomId,
+        eventType: 'chat.message.created',
+        aggregateType: 'chat_message',
+        aggregateId: message.id,
+        payload: {
+          messageId: message.id,
+          sessionId: currentSession.id,
+          senderType: message.senderType,
+          messageType: message.messageType,
+        },
+      });
+      return {
+        message: this.publicMessage(message),
+        fileBrowseRequest: null,
+        cacheEntries: [],
+      };
+    });
+  }
+
+  private async createRuleDraftFromAi(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+    sourceMessage: PublicChatMessage,
+    ai: AiRuleDraftResult,
+  ) {
+    const definition = ruleDefinitionSchema.safeParse(ai.draft.definition);
+    if (!definition.success) {
+      return null;
+    }
+    return this.db.transaction(async (tx) => {
+      const currentSession = await this.requireOwnedSessionIn(
+        tx,
+        userId,
+        session.id,
+      );
+      const currentSource = await this.requireSessionMessageIn(
+        tx,
+        currentSession.id,
+        sourceMessage.id,
+      );
+      const draft = (
+        await tx
+          .insert(ruleDrafts)
+          .values({
+            sessionId: currentSession.id,
+            sourceMessageId: currentSource.id,
+            roomId: currentSession.roomId,
+            createdByUserId: userId,
+            name: ai.draft.name,
+            definition: definition.data,
+            explanation: ai.draft.explanation,
+            ambiguities: ai.draft.ambiguities,
+            expiresAt: new Date(Date.now() + DEFAULT_DRAFT_TTL_MS),
+          })
+          .returning()
+      )[0]!;
+      const draftSummary = this.publicRuleDraft(draft);
+      const message = (
+        await tx
+          .insert(chatMessages)
+          .values({
+            roomId: currentSession.roomId,
+            sessionId: currentSession.id,
+            senderType: 'ASSISTANT',
+            messageType: 'RULE_DRAFT',
+            content: ai.draft.explanation,
+            structuredPayload: draftSummary,
+          })
+          .returning()
+      )[0]!;
+      await tx
+        .update(chatSessions)
+        .set({ updatedAt: new Date() })
+        .where(eq(chatSessions.id, currentSession.id));
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId: currentSession.roomId,
+        eventType: 'rule.draft.created',
+        aggregateType: 'rule_draft',
+        aggregateId: draft.id,
+        payload: {
+          ruleDraftId: draft.id,
+          sessionId: currentSession.id,
+          sourceMessageId: currentSource.id,
+          status: draft.status,
+        },
+      });
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId: currentSession.roomId,
+        eventType: 'chat.message.created',
+        aggregateType: 'chat_message',
+        aggregateId: message.id,
+        payload: {
+          messageId: message.id,
+          sessionId: currentSession.id,
+          ruleDraftId: draft.id,
+          senderType: message.senderType,
+          messageType: message.messageType,
+        },
+      });
+      return { draft: draftSummary, message: this.publicMessage(message) };
+    });
   }
 
   private async requireOwnedRoom(userId: string, roomId: string) {
@@ -1145,6 +1569,109 @@ export class ChatService {
     return result;
   }
 
+  private async getOrCreateQuickCleanupSessionIn(
+    tx: Transaction,
+    userId: string,
+    roomId: string,
+  ) {
+    const latest = (
+      await tx
+        .select()
+        .from(chatSessions)
+        .where(
+          and(
+            eq(chatSessions.userId, userId),
+            eq(chatSessions.roomId, roomId),
+            eq(chatSessions.status, 'ACTIVE'),
+          ),
+        )
+        .orderBy(desc(chatSessions.updatedAt), desc(chatSessions.createdAt))
+        .limit(1)
+    )[0];
+    if (latest) return latest;
+    return (
+      await tx
+        .insert(chatSessions)
+        .values({
+          userId,
+          roomId,
+          title: '빠른 정리 제안',
+        })
+        .returning()
+    )[0]!;
+  }
+
+  private async quickHistory(userId: string, roomId: string) {
+    const rows = await this.db
+      .select({ message: chatMessages, session: chatSessions })
+      .from(chatMessages)
+      .innerJoin(
+        chatSessions,
+        and(
+          eq(chatSessions.id, chatMessages.sessionId),
+          eq(chatSessions.userId, userId),
+          eq(chatSessions.roomId, roomId),
+          eq(chatSessions.status, 'ACTIVE'),
+        ),
+      )
+      .where(eq(chatMessages.roomId, roomId))
+      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+      .limit(8);
+    return rows.map(({ message, session }) => ({
+      messageId: message.id,
+      sessionId: session.id,
+      sessionTitle: session.title,
+      senderType: message.senderType,
+      messageType: message.messageType,
+      content: message.content,
+      createdAt: message.createdAt,
+    }));
+  }
+
+  private async quickPendingSuggestions(userId: string, roomId: string) {
+    const rows = await this.db
+      .select({ message: chatMessages, session: chatSessions })
+      .from(chatMessages)
+      .innerJoin(
+        chatSessions,
+        and(
+          eq(chatSessions.id, chatMessages.sessionId),
+          eq(chatSessions.userId, userId),
+          eq(chatSessions.roomId, roomId),
+          eq(chatSessions.status, 'ACTIVE'),
+        ),
+      )
+      .where(
+        and(
+          eq(chatMessages.roomId, roomId),
+          eq(chatMessages.senderType, 'ASSISTANT'),
+          or(
+            eq(chatMessages.messageType, 'COMMAND_DRAFT'),
+            eq(chatMessages.messageType, 'RULE_DRAFT'),
+          ),
+        ),
+      )
+      .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+      .limit(24);
+    const suggestions = [];
+    for (const { message, session } of rows) {
+      const draft = draftSummaryFromPayload(message.structuredPayload);
+      if (!draft || draft.status !== 'DRAFT') continue;
+      suggestions.push({
+        messageId: message.id,
+        sessionId: session.id,
+        sessionTitle: session.title,
+        messageType: message.messageType,
+        content: message.content,
+        draftId: draft.id,
+        status: draft.status,
+        createdAt: message.createdAt,
+      });
+      if (suggestions.length >= 12) break;
+    }
+    return suggestions;
+  }
+
   private async latestPreview(db: DbExecutor, sessionId: string) {
     const latest = (
       await db
@@ -1242,7 +1769,7 @@ export class ChatService {
   }
 
   private async pendingActionCount(db: DbExecutor, sessionId: string) {
-    const row = (
+    const commandRow = (
       await db
         .select({ value: sql<number>`count(*)::int` })
         .from(commandDrafts)
@@ -1253,7 +1780,15 @@ export class ChatService {
           ),
         )
     )[0];
-    return Number(row?.value ?? 0);
+    const ruleRow = (
+      await db
+        .select({ value: sql<number>`count(*)::int` })
+        .from(ruleDrafts)
+        .where(
+          and(eq(ruleDrafts.sessionId, sessionId), eq(ruleDrafts.status, 'DRAFT')),
+        )
+    )[0];
+    return Number(commandRow?.value ?? 0) + Number(ruleRow?.value ?? 0);
   }
 
   private publicSession(
@@ -1315,9 +1850,67 @@ export class ChatService {
     };
   }
 
+  private publicRuleDraft(draft: typeof ruleDrafts.$inferSelect) {
+    return {
+      id: draft.id,
+      roomId: draft.roomId,
+      name: draft.name,
+      definition: draft.definition,
+      explanation: draft.explanation,
+      ambiguities: Array.isArray(draft.ambiguities) ? draft.ambiguities : [],
+      status: draft.status,
+      expiresAt: draft.expiresAt,
+      ruleId: draft.ruleId,
+    };
+  }
+
   private publicCommand(command: typeof commands.$inferSelect) {
     const { createdByUserId: _, idempotencyKey: __, ...safe } = command;
     return safe;
+  }
+
+  private async cachedBrowseEntriesIn(
+    tx: Transaction,
+    roomId: string,
+    browse: z.infer<typeof createFileBrowseRequestSchema>,
+  ) {
+    const directory = normalizeQueryDirectory(browse.relativeDirectory);
+    const query = browse.query?.trim().toLowerCase() ?? null;
+    const extensions = new Set(
+      browse.extensions.map((extension) => extension.toLowerCase()),
+    );
+    const limit = Math.min(Math.max(browse.limit, 1), 200);
+    const rows = await tx
+      .select()
+      .from(cachedFiles)
+      .where(
+        and(
+          eq(cachedFiles.roomId, roomId),
+          eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
+          ne(cachedFiles.freshnessStatus, 'STALE'),
+        ),
+      )
+      .orderBy(desc(cachedFiles.usageScore), desc(cachedFiles.cachedAt))
+      .limit(400);
+    const entries = [];
+    for (const file of rows) {
+      const path = file.sourceRelativePath;
+      if (!isPathInQueryScope(path, directory, browse.searchScope)) continue;
+      if (query && !path.toLowerCase().includes(query)) continue;
+      if (extensions.size > 0 && !extensions.has(fileExtension(path))) {
+        continue;
+      }
+      entries.push({
+        id: file.id,
+        relativePath: path,
+        sizeBytes: file.sizeBytes,
+        freshnessStatus: file.freshnessStatus,
+        cachedAt: file.cachedAt,
+        lastVerifiedAt: file.lastVerifiedAt,
+      });
+      if (entries.length >= limit) break;
+    }
+    return entries;
   }
 
   private publicFileBrowseRequest(
@@ -1345,4 +1938,53 @@ export class ChatService {
 function titleFromContent(content: string) {
   const title = content.trim().replace(/\s+/g, ' ').slice(0, 120);
   return title.length > 0 ? title : DEFAULT_CHAT_TITLE;
+}
+
+function queryResultContent(
+  summary: string,
+  cacheHitCount: number,
+  liveStatus: string | null,
+) {
+  const status =
+    liveStatus === 'REQUESTED'
+      ? 'live browse requested'
+      : liveStatus === 'FAILED'
+        ? 'offline cache only'
+        : 'cache only';
+  return `${summary} Cache matches: ${cacheHitCount}; ${status}.`;
+}
+
+function normalizeQueryDirectory(value: string) {
+  return value.trim().replace(/^\/+|\/+$/g, '');
+}
+
+function isPathInQueryScope(
+  path: string,
+  directory: string,
+  scope: 'CURRENT_DIRECTORY' | 'MANAGED_ROOT',
+) {
+  if (directory === '') return true;
+  if (path === directory) return true;
+  if (!path.startsWith(`${directory}/`)) return false;
+  if (scope === 'MANAGED_ROOT') return true;
+  const rest = path.slice(directory.length + 1);
+  return !rest.includes('/');
+}
+
+function fileExtension(path: string) {
+  const name = path.split('/').pop() ?? path;
+  const index = name.lastIndexOf('.');
+  return index >= 0 ? name.slice(index).toLowerCase() : '';
+}
+
+function draftSummaryFromPayload(
+  value: unknown,
+): { id: string; status: string } | null {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.id === 'string' && typeof candidate.status === 'string'
+    ? { id: candidate.id, status: candidate.status }
+    : null;
 }

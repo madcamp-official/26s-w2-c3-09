@@ -37,6 +37,13 @@ export function mapAiResultToCommandDraft(
   if (ai.kind === 'NO_ACTION') {
     return { kind: 'NO_DRAFT', aiStatus: ai.status, ai };
   }
+  if (ai.kind !== 'COMMAND_DRAFT') {
+    return {
+      kind: 'INVALID',
+      aiStatus: 'INVALID',
+      ai: invalidAiOutput(),
+    };
+  }
 
   const draftInput = createCommandDraftSchema.safeParse({
     sourceMessageId,

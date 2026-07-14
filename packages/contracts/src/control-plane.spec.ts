@@ -20,6 +20,9 @@ import {
   cachedFileAccessEventSchema,
   completeCacheUploadSchema,
   createChatMessageResponseSchema,
+  chatQuickViewResponseSchema,
+  quickCleanupSchema,
+  quickCleanupResponseSchema,
   commandDraftSummarySchema,
   createChatSessionSchema,
   createCommandDraftSchema,
@@ -967,6 +970,50 @@ describe("chat session contracts", () => {
     expect(createChatMessageResponseSchema.parse(draftResponse)).toEqual(
       draftResponse,
     );
+    const queryResponse = {
+      ...response,
+      assistant: {
+        ...response.message,
+        id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a6",
+        senderType: "ASSISTANT",
+        messageType: "QUERY_RESULT",
+        content: "Cache matches: 1; offline cache only.",
+        structuredPayload: {
+          kind: "QUERY_RESULT",
+          cacheMode: "CACHE_ONLY",
+          cacheHitCount: 1,
+          cacheEntries: [
+            {
+              relativePath: "Documents/report.pdf",
+              sizeBytes: 1024,
+            },
+          ],
+          liveBrowseRequest: null,
+        },
+      },
+      aiStatus: "READY",
+      ai: {
+        status: "READY",
+        kind: "QUERY",
+        fileBrowseRequestId: null,
+        cacheHitCount: 1,
+      },
+    };
+    expect(createChatMessageResponseSchema.parse(queryResponse)).toEqual(
+      queryResponse,
+    );
+    const ruleResponse = {
+      ...response,
+      aiStatus: "READY",
+      ai: {
+        status: "READY",
+        kind: "RULE_DRAFT",
+        ruleDraftId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a7",
+      },
+    };
+    expect(createChatMessageResponseSchema.parse(ruleResponse)).toEqual(
+      ruleResponse,
+    );
     expect(
       createChatMessageResponseSchema.safeParse({
         ...response,
@@ -978,6 +1025,127 @@ describe("chat session contracts", () => {
         aiStatus: "READY",
       }).success,
     ).toBe(false);
+  });
+
+  it("validates chat quick-view prompt, history, and pending counts", () => {
+    const session = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+      title: "Inbox cleanup",
+      summary: null,
+      status: "ACTIVE",
+      createdAt: "2026-07-13T01:00:00.000Z",
+      updatedAt: "2026-07-13T01:02:03.000Z",
+      deletedAt: null,
+      messagePreview: "Rename old report",
+      unreadCount: 2,
+      pendingActionCount: 1,
+      lastReadMessageId: null,
+      readAt: null,
+    };
+    const response = {
+      prompts: [
+        {
+          id: "find-recent-reports",
+          label: "Find reports",
+          prompt: "최근 report PDF 파일 찾아줘",
+          category: "QUERY",
+        },
+      ],
+      sessions: [session],
+      history: [
+        {
+          messageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a3",
+          sessionId: session.id,
+          sessionTitle: session.title,
+          senderType: "ASSISTANT",
+          messageType: "COMMAND_DRAFT",
+          content: "Rename reports/old.pdf to reports/final.pdf",
+          createdAt: "2026-07-13T01:02:03.000Z",
+        },
+      ],
+      pendingSuggestions: [
+        {
+          messageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a3",
+          sessionId: session.id,
+          sessionTitle: session.title,
+          messageType: "COMMAND_DRAFT",
+          content: "Rename reports/old.pdf to reports/final.pdf",
+          draftId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a4",
+          status: "DRAFT",
+          createdAt: "2026-07-13T01:02:03.000Z",
+        },
+      ],
+      unreadCount: 2,
+      pendingActionCount: 1,
+    };
+
+    expect(chatQuickViewResponseSchema.parse(response)).toEqual(response);
+  });
+
+  it("validates quick cleanup approval-card responses", () => {
+    const session = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a2",
+      title: "빠른 정리 제안",
+      summary: null,
+      status: "ACTIVE",
+      createdAt: "2026-07-13T01:00:00.000Z",
+      updatedAt: "2026-07-13T01:02:03.000Z",
+      deletedAt: null,
+      messagePreview: "PC가 관리 루트를 분석해서 정리 제안을 만들도록 요청합니다.",
+      unreadCount: 1,
+      pendingActionCount: 1,
+      lastReadMessageId: null,
+      readAt: null,
+    };
+    const response = {
+      session,
+      message: {
+        id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a3",
+        roomId: session.roomId,
+        sessionId: session.id,
+        senderType: "USER",
+        messageType: "TEXT",
+        content: "빠른 정리 제안 요청",
+        structuredPayload: null,
+        commandId: null,
+        createdAt: "2026-07-13T01:02:02.000Z",
+      },
+      assistant: {
+        id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a4",
+        roomId: session.roomId,
+        sessionId: session.id,
+        senderType: "ASSISTANT",
+        messageType: "COMMAND_DRAFT",
+        content: "PC가 관리 루트를 분석해서 정리 제안을 만들도록 요청합니다.",
+        structuredPayload: {
+          id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+          intent: "ANALYZE",
+          confirmationSummary:
+            "PC가 관리 루트를 분석해서 정리 제안을 만들도록 요청합니다.",
+          status: "DRAFT",
+          expiresAt: "2026-07-13T01:12:03.000Z",
+          commandId: null,
+          fileBrowseRequestId: null,
+          fileTransferId: null,
+        },
+        commandId: null,
+        createdAt: "2026-07-13T01:02:03.000Z",
+      },
+      aiStatus: "READY",
+      ai: {
+        status: "READY",
+        kind: "COMMAND_DRAFT",
+        commandDraftId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+      },
+    };
+
+    expect(quickCleanupSchema.parse({})).toEqual({});
+    expect(quickCleanupSchema.safeParse({ mode: "force" }).success).toBe(
+      false,
+    );
+    expect(quickCleanupResponseSchema.parse(response)).toEqual(response);
   });
 
   it("validates command draft summaries without command arguments or secrets", () => {

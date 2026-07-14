@@ -745,6 +745,8 @@ const _homeIrrelevantEvents = <String>{
   'chat.message.created',
   'chat.session.read',
   'command.draft.updated',
+  'rule.draft.created',
+  'rule.draft.updated',
   'command.available',
   'command.updated',
   'file.browse.requested',
@@ -761,6 +763,8 @@ const _homeIrrelevantEvents = <String>{
 const _chatSessionProjectionEvents = <String>{
   'chat.session.read',
   'command.draft.updated',
+  'rule.draft.created',
+  'rule.draft.updated',
 };
 
 class RealtimeCharacterKindController extends Notifier<CharacterState?> {

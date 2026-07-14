@@ -710,6 +710,10 @@ export const ruleDrafts = pgTable(
   "rule_drafts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id").references(() => chatSessions.id),
+    sourceMessageId: uuid("source_message_id").references(
+      () => chatMessages.id,
+    ),
     roomId: uuid("room_id")
       .notNull()
       .references(() => rooms.id),
@@ -729,6 +733,7 @@ export const ruleDrafts = pgTable(
       .defaultNow(),
   },
   (t) => [
+    index("rule_drafts_session_status_idx").on(t.sessionId, t.status),
     index("rule_drafts_room_status_idx").on(t.roomId, t.status),
     index("rule_drafts_user_status_idx").on(t.createdByUserId, t.status),
     uniqueIndex("rule_drafts_confirm_key_idx").on(

@@ -105,6 +105,98 @@ describe('OpenAiResponsesProvider', () => {
     });
   });
 
+  it('classifies chat rule requests into validated rule drafts', async () => {
+    const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
+      okOutput({
+        kind: 'RULE_DRAFT',
+        reasonCode: '',
+        reply: '',
+        intent: 'NONE',
+        argumentsJson: '{}',
+        confirmationSummary: '',
+        name: 'PDF archive',
+        definitionJson: JSON.stringify({
+          match: 'ALL',
+          conditions: [{ field: 'extension', operator: 'IN', value: ['.pdf'] }],
+          action: { type: 'MOVE', destinationTemplate: 'Archive/PDF' },
+        }),
+        explanation: 'Move PDF files into Archive/PDF.',
+        ambiguities: [],
+      }),
+    );
+
+    await expect(
+      providerWith(fetcher).classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: {
+          id: 'message-1',
+          content: 'make a rule that moves PDFs to Archive/PDF',
+        },
+      }),
+    ).resolves.toEqual({
+      status: 'READY',
+      kind: 'RULE_DRAFT',
+      draft: {
+        name: 'PDF archive',
+        definition: {
+          match: 'ALL',
+          conditions: [{ field: 'extension', operator: 'IN', value: ['.pdf'] }],
+          action: { type: 'MOVE', destinationTemplate: 'Archive/PDF' },
+        },
+        explanation: 'Move PDF files into Archive/PDF.',
+        ambiguities: [],
+      },
+    });
+  });
+
+  it('classifies file lookups into validated query requests', async () => {
+    const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
+      okOutput({
+        kind: 'QUERY',
+        reasonCode: '',
+        reply: '',
+        intent: 'NONE',
+        argumentsJson: '{}',
+        confirmationSummary: '',
+        browseJson: JSON.stringify({
+          relativeDirectory: 'Documents',
+          cursor: null,
+          query: 'report',
+          extensions: ['.pdf'],
+          limit: 25,
+          searchScope: 'MANAGED_ROOT',
+        }),
+        responseSummary: 'Looking for report PDFs under Documents.',
+      }),
+    );
+
+    await expect(
+      providerWith(fetcher).classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: {
+          id: 'message-1',
+          content: 'show me report PDFs under Documents',
+        },
+      }),
+    ).resolves.toEqual({
+      status: 'READY',
+      kind: 'QUERY',
+      browse: {
+        relativeDirectory: 'Documents',
+        cursor: null,
+        query: 'report',
+        extensions: ['.pdf'],
+        limit: 25,
+        searchScope: 'MANAGED_ROOT',
+      },
+      responseSummary: 'Looking for report PDFs under Documents.',
+    });
+  });
+
   it('translates rule drafts only after Rule DSL validation', async () => {
     const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
       okOutput({

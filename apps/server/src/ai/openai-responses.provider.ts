@@ -1,6 +1,7 @@
 import {
   commandIntentSchema,
   createCommandSchema,
+  createFileBrowseRequestSchema,
   ruleDefinitionSchema,
 } from '@mousekeeper/contracts';
 import { z } from 'zod';
@@ -34,12 +35,24 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 1_000;
 
 const rawCommandDraftSchema = z
   .object({
-    kind: z.enum(['NO_ACTION', 'REFUSE', 'COMMAND_DRAFT']),
+    kind: z.enum([
+      'NO_ACTION',
+      'REFUSE',
+      'COMMAND_DRAFT',
+      'RULE_DRAFT',
+      'QUERY',
+    ]),
     reasonCode: z.string().max(100),
     reply: z.string().max(1000),
     intent: z.union([z.literal('NONE'), commandIntentSchema]),
     argumentsJson: z.string().max(20_000),
     confirmationSummary: z.string().max(1000),
+    browseJson: z.string().max(20_000).optional(),
+    responseSummary: z.string().max(1000).optional(),
+    name: z.string().max(120).optional(),
+    definitionJson: z.string().max(20_000).optional(),
+    explanation: z.string().max(2000).optional(),
+    ambiguities: z.array(z.string().max(300)).max(10).optional(),
   })
   .strict();
 
@@ -67,7 +80,10 @@ const commandDraftJsonSchema = {
     'confirmationSummary',
   ],
   properties: {
-    kind: { type: 'string', enum: ['NO_ACTION', 'REFUSE', 'COMMAND_DRAFT'] },
+    kind: {
+      type: 'string',
+      enum: ['NO_ACTION', 'REFUSE', 'COMMAND_DRAFT', 'RULE_DRAFT', 'QUERY'],
+    },
     reasonCode: { type: 'string' },
     reply: { type: 'string' },
     intent: {
@@ -80,6 +96,23 @@ const commandDraftJsonSchema = {
         'A JSON object string containing only the payload for the selected command intent. Use "{}" unless kind is COMMAND_DRAFT.',
     },
     confirmationSummary: { type: 'string' },
+    browseJson: {
+      type: 'string',
+      description:
+        'A JSON object string matching createFileBrowseRequestSchema. Use "{}" unless kind is QUERY.',
+    },
+    responseSummary: { type: 'string' },
+    name: { type: 'string' },
+    definitionJson: {
+      type: 'string',
+      description:
+        'A JSON object string matching MouseKeeper Rule DSL. Use "{}" unless kind is RULE_DRAFT.',
+    },
+    explanation: { type: 'string' },
+    ambiguities: {
+      type: 'array',
+      items: { type: 'string' },
+    },
   },
 } as const;
 
@@ -144,6 +177,44 @@ export class OpenAiResponsesProvider implements AiProvider {
 
     const parsed = rawCommandDraftSchema.safeParse(result.value);
     if (!parsed.success) return this.invalid();
+    if (parsed.data.kind === 'RULE_DRAFT') {
+      if (
+        !parsed.data.name?.trim() ||
+        !parsed.data.explanation?.trim() ||
+        parsed.data.definitionJson == null
+      ) {
+        return this.invalid();
+      }
+      const definition = ruleDefinitionSchema.safeParse(
+        parseJsonObject(parsed.data.definitionJson),
+      );
+      if (!definition.success) return this.invalid();
+      return {
+        status: 'READY',
+        kind: 'RULE_DRAFT',
+        draft: {
+          name: parsed.data.name,
+          definition: definition.data,
+          explanation: parsed.data.explanation,
+          ambiguities: parsed.data.ambiguities ?? [],
+        },
+      };
+    }
+    if (parsed.data.kind === 'QUERY') {
+      if (!parsed.data.browseJson || !parsed.data.responseSummary?.trim()) {
+        return this.invalid();
+      }
+      const browse = createFileBrowseRequestSchema.safeParse(
+        parseJsonObject(parsed.data.browseJson),
+      );
+      if (!browse.success) return this.invalid();
+      return {
+        status: 'READY',
+        kind: 'QUERY',
+        browse: browse.data,
+        responseSummary: parsed.data.responseSummary,
+      };
+    }
     if (parsed.data.kind !== 'COMMAND_DRAFT') {
       return { status: 'READY', kind: 'NO_ACTION' };
     }
@@ -331,6 +402,10 @@ function commandInstructions() {
     'Do not execute files, do not invent local file contents, and do not include command metadata.',
     'Always include every schema field; use empty strings, intent NONE, argumentsJson "{}", and [] for irrelevant fields.',
     'Use COMMAND_DRAFT only when the user asks for a concrete managed-root file operation.',
+    'Use QUERY when the user asks to look up, search, list, or check files without changing files.',
+    'For QUERY, put createFileBrowseRequestSchema JSON in browseJson. Use relativeDirectory "" for the managed root, cursor null, and searchScope MANAGED_ROOT unless the user names a subfolder.',
+    'Use RULE_DRAFT only when the user asks to add, remember, or automate an ongoing file organization rule.',
+    'For RULE_DRAFT, put the Rule DSL JSON in definitionJson and leave intent NONE, argumentsJson "{}", confirmationSummary empty, and browseJson "{}".',
     'If the request is unclear, unsafe, outside managed roots, or just conversation, return NO_ACTION or REFUSE.',
     'Valid command intents are the MouseKeeper server contract intents.',
   ].join('\n');

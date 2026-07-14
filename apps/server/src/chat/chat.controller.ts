@@ -17,6 +17,7 @@ import {
   createChatSessionSchema,
   createCommandDraftSchema,
   markChatSessionReadSchema,
+  quickCleanupSchema,
   rejectCommandDraftSchema,
   updateChatSessionSchema,
 } from '@mousekeeper/contracts';
@@ -39,6 +40,24 @@ export class ChatController {
     @Param('roomId') roomId: string,
   ) {
     return this.chat.listSessions(p.userId, roomId);
+  }
+
+  @Get('rooms/:roomId/chat/quick-view')
+  quickView(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('roomId') roomId: string,
+  ) {
+    return this.chat.quickView(p.userId, roomId);
+  }
+
+  @Post('rooms/:roomId/chat/quick-cleanup')
+  quickCleanup(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('roomId') roomId: string,
+    @Body(new ZodValidationPipe(quickCleanupSchema))
+    _body: z.infer<typeof quickCleanupSchema>,
+  ) {
+    return this.chat.createQuickCleanupSuggestion(p.userId, roomId);
   }
 
   @Post('rooms/:roomId/chat-sessions')
