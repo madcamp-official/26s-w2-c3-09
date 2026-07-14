@@ -185,6 +185,29 @@ describeDatabase('RulesService rule draft integration', () => {
     });
   });
 
+  it('fails closed for rule draft preview until desktop dry-run transport is configured', async () => {
+    const service = new RulesService(
+      connection.db,
+      new SyncService(),
+      new ScriptedRuleAiProvider(),
+    );
+
+    const result = await service.createDraft(userId, roomId, {
+      instruction: 'Move old PDFs',
+    });
+    if (result.status !== 'READY') throw new Error('expected ready draft');
+
+    await expect(
+      service.previewDraft(userId, result.draft.id),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'RULE_DRAFT_PREVIEW_UNCONFIGURED',
+        draft: { id: result.draft.id, status: 'DRAFT' },
+      },
+    });
+    expect(await service.list(userId, roomId)).toEqual([]);
+  });
+
   it('rejects a draft without creating a rule', async () => {
     const service = new RulesService(
       connection.db,

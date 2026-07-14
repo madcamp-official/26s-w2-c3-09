@@ -334,6 +334,28 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RuleDraftResult" }
+  /v1/rule-drafts/{draftId}/preview:
+    parameters:
+      - {
+          in: path,
+          name: draftId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/EmptyCommandPayload" } }
+      responses:
+        "201":
+          description: Up to 200 desktop dry-run matches for an active rule draft
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RuleDraftPreviewResponse" }
+        "409":
+          description: RULE_DRAFT_PREVIEW_UNCONFIGURED, DRAFT_EXPIRED, or INVALID_STATE_TRANSITION
   /v1/rule-drafts/{draftId}/confirm:
     parameters:
       - {
@@ -2316,6 +2338,30 @@ components:
             status: { type: string, enum: [READY] }
             kind: { type: string, enum: [RULE_DRAFT] }
             draft: { $ref: "#/components/schemas/RuleDraftSummary" }
+    RuleDraftPreviewResponse:
+      type: object
+      additionalProperties: false
+      required: [status, draft, items, truncated]
+      properties:
+        status: { type: string, enum: [READY] }
+        draft: { $ref: "#/components/schemas/RuleDraftSummary" }
+        items:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/RuleDraftPreviewItem" }
+        truncated: { type: boolean }
+    RuleDraftPreviewItem:
+      type: object
+      additionalProperties: false
+      required: [relativePath, fileKind, proposedAction]
+      properties:
+        relativePath: { type: string, minLength: 1, maxLength: 1024 }
+        fileKind: { type: string, enum: [FILE, DIRECTORY] }
+        proposedAction:
+          { type: string, enum: [MOVE, QUARANTINE, TRASH, CREATE_DIR] }
+        destinationRelativePath:
+          { type: [string, "null"], minLength: 1, maxLength: 1024 }
+        reason: { type: string, minLength: 1, maxLength: 500 }
     RuleSummary:
       type: object
       additionalProperties: false

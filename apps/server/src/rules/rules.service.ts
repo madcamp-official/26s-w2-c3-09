@@ -137,6 +137,42 @@ export class RulesService {
     });
   }
 
+  async previewDraft(userId: string, draftId: string) {
+    return this.db.transaction(async (tx) => {
+      const owned = await this.requireOwnedDraftIn(tx, userId, draftId);
+      const draft = owned.draft;
+      if (draft.status === 'EXPIRED' || draft.expiresAt <= new Date()) {
+        const expired =
+          draft.status === 'EXPIRED'
+            ? draft
+            : (
+                await tx
+                  .update(ruleDrafts)
+                  .set({ status: 'EXPIRED' })
+                  .where(eq(ruleDrafts.id, draft.id))
+                  .returning()
+              )[0]!;
+        throw new ConflictException({
+          code: 'DRAFT_EXPIRED',
+          draft: this.publicRuleDraft(expired),
+        });
+      }
+      if (draft.status !== 'DRAFT') {
+        throw new ConflictException({
+          code: 'INVALID_STATE_TRANSITION',
+          from: draft.status,
+          to: 'PREVIEW',
+        });
+      }
+      throw new ConflictException({
+        code: 'RULE_DRAFT_PREVIEW_UNCONFIGURED',
+        message:
+          'Rule draft preview requires a configured desktop dry-run transport.',
+        draft: this.publicRuleDraft(draft),
+      });
+    });
+  }
+
   async confirmDraft(userId: string, draftId: string, key: string) {
     return this.db.transaction(async (tx) => {
       const owned = await this.requireOwnedDraftIn(tx, userId, draftId);

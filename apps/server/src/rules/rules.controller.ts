@@ -12,6 +12,7 @@ import {
   confirmRuleDraftSchema,
   createRuleDraftRequestSchema,
   createRuleSchema,
+  previewRuleDraftSchema,
   rejectRuleDraftSchema,
   updateRuleSchema,
 } from '@mousekeeper/contracts';
@@ -54,6 +55,16 @@ export class RulesController {
     body: z.infer<typeof createRuleDraftRequestSchema>,
   ) {
     return this.rules.createDraft(principal.userId, roomId, body);
+  }
+
+  @Post('rule-drafts/:draftId/preview')
+  previewDraft(
+    @CurrentPrincipal() principal: AuthPrincipal,
+    @Param('draftId') draftId: string,
+    @Body(new ZodValidationPipe(previewRuleDraftSchema))
+    _body: z.infer<typeof previewRuleDraftSchema>,
+  ) {
+    return this.rules.previewDraft(principal.userId, draftId);
   }
 
   @Post('rule-drafts/:draftId/confirm')

@@ -27,6 +27,8 @@ import {
   updateChatSessionSchema,
   createRuleDraftRequestSchema,
   confirmRuleDraftResponseSchema,
+  previewRuleDraftSchema,
+  ruleDraftPreviewResponseSchema,
   rejectRuleDraftResponseSchema,
   ruleDraftSummarySchema,
   ruleDraftResultSchema,
@@ -387,6 +389,54 @@ describe("rule draft contracts", () => {
 });
 
 describe("rule draft lifecycle response contracts", () => {
+  it("validates a bounded desktop dry-run preview response", () => {
+    const draft = {
+      id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a6",
+      name: "Old PDFs",
+      definition: {
+        match: "ALL",
+        conditions: [{ field: "extension", operator: "IN", value: [".pdf"] }],
+        action: { type: "MOVE", destinationTemplate: "Archive/PDF" },
+      },
+      explanation: "Move old PDFs after explicit approval.",
+      ambiguities: [],
+      status: "DRAFT",
+      expiresAt: "2026-07-13T10:00:00.000Z",
+      ruleId: null,
+    };
+
+    expect(previewRuleDraftSchema.parse({})).toEqual({});
+    expect(
+      ruleDraftPreviewResponseSchema.parse({
+        status: "READY",
+        draft,
+        items: [
+          {
+            relativePath: "reports/old.pdf",
+            fileKind: "FILE",
+            proposedAction: "MOVE",
+            destinationRelativePath: "Archive/PDF/old.pdf",
+            reason: "extension .pdf matched",
+          },
+        ],
+        truncated: false,
+      }).items,
+    ).toHaveLength(1);
+    expect(
+      ruleDraftPreviewResponseSchema.safeParse({
+        status: "READY",
+        draft,
+        items: Array.from({ length: 201 }, (_, index) => ({
+          relativePath: `reports/${index}.pdf`,
+          fileKind: "FILE",
+          proposedAction: "MOVE",
+        })),
+        truncated: true,
+      }).success,
+    ).toBe(false);
+  });
+
   it("validates rule draft confirm and reject responses", () => {
     const draft = {
       id: "018f4c7b-1ad6-7c95-bf34-5e45881f98a5",

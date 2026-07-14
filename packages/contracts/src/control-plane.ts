@@ -858,6 +858,24 @@ export const ruleDraftResultSchema = z.union([
     })
     .strict(),
 ]);
+export const previewRuleDraftSchema = z.object({}).strict();
+export const ruleDraftPreviewItemSchema = z
+  .object({
+    relativePath: relativePathSchema,
+    fileKind: z.enum(["FILE", "DIRECTORY"]),
+    proposedAction: z.enum(["MOVE", "QUARANTINE", "TRASH", "CREATE_DIR"]),
+    destinationRelativePath: relativePathSchema.nullable().optional(),
+    reason: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+export const ruleDraftPreviewResponseSchema = z
+  .object({
+    status: z.literal("READY"),
+    draft: ruleDraftSummarySchema,
+    items: z.array(ruleDraftPreviewItemSchema).max(200),
+    truncated: z.boolean(),
+  })
+  .strict();
 export const createChatMessageResponseSchema = z
   .object({
     message: chatMessageSchema,
