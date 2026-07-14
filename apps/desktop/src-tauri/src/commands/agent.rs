@@ -105,11 +105,25 @@ pub async fn poll_agent_pairing(
     session_id: String,
     desktop_nonce: String,
     runtime: tauri::State<'_, AgentRuntime>,
+    overlay_runtime: tauri::State<'_, crate::overlay::OverlayRuntime>,
+    app: tauri::AppHandle,
 ) -> Result<PairingStatus, String> {
-    runtime
+    let status = runtime
         .poll_pairing(session_id, desktop_nonce)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    // Pairing just completed (CLAIMED): swap the setup/main window for the overlay, mirroring the
+    // startup path in `run()` that shows the overlay whenever a device is already paired. Without
+    // this, the overlay would only appear on the next app restart.
+    if status.device_id.is_some() {
+        crate::tray::hide_main_window(&app);
+        if let Err(error) = crate::commands::overlay::show_overlay_window(&app, &overlay_runtime) {
+            eprintln!("failed to show overlay after pairing: {error}");
+        }
+    }
+
+    Ok(status)
 }
 
 #[cfg(not(feature = "tauri-commands"))]

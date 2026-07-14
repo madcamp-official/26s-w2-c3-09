@@ -455,9 +455,9 @@ pre {
   padding: 10px;
 }
 
-.proposal-row div {
+.proposal-row .proposal-move {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -3370,52 +3370,125 @@ html.overlay-root body.overlay-body .character-chat button {
   display: none !important;
 }
 
-.organize-primary-actions {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.organize-flow-card {
+.organize-flow-head {
   display: grid;
-  gap: 10px;
-  margin-top: 14px;
+  gap: 4px;
+  margin-bottom: 12px;
   border: 2px dotted var(--mk-pixel-line);
   background:
     linear-gradient(90deg, rgba(43, 54, 64, 0.035) 1px, transparent 1px),
     linear-gradient(0deg, rgba(43, 54, 64, 0.035) 1px, transparent 1px),
     #f7fbf8;
   background-size: 6px 6px;
-  padding: 14px;
+  padding: 12px 14px;
   box-shadow: 3px 3px 0 rgba(32, 40, 48, 0.18);
 }
 
-.organize-flow-card strong {
+.organize-flow-head strong {
   font-size: 16px;
 }
 
-.organize-flow-card p {
+.organize-flow-head p {
   margin: 0;
   color: #63717d;
   overflow-wrap: anywhere;
 }
 
-.organize-flow-card ol {
+/* Vertical 1 -> 2 -> 3 flow so it is obvious which button to press next. */
+.organize-stepper {
   display: grid;
-  gap: 8px;
+  gap: 0;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.organize-flow-card li {
-  border: 2px dotted rgba(43, 54, 64, 0.45);
-  background: #fffdf8;
-  padding: 8px 10px;
-  font-weight: 800;
+.organize-step-item {
+  display: block;
 }
 
-.organize-flow-card li.is-done {
-  color: #246f42;
+.organize-step {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 2px dotted var(--mk-pixel-line);
+  background: #fffdf8;
+  padding: 12px 14px;
+  text-align: left;
+  box-shadow: 3px 3px 0 rgba(32, 40, 48, 0.18);
+  cursor: pointer;
+}
+
+.organize-step:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.organize-step.is-current {
+  border-style: solid;
+  background: #fffbe6;
+  box-shadow: 3px 3px 0 rgba(210, 170, 20, 0.4);
+}
+
+.organize-step.is-done {
   background: #e4f6dc;
+}
+
+.organize-step-badge {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--mk-pixel-line);
+  border-radius: 50%;
+  background: #ffffff;
+  font-weight: 900;
+  font-size: 15px;
+}
+
+.organize-step.is-done .organize-step-badge {
+  border-color: #246f42;
+  background: #246f42;
+  color: #ffffff;
+}
+
+.organize-step.is-current .organize-step-badge {
+  border-color: #b8901a;
+  background: #ffe37a;
+}
+
+.organize-step-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.organize-step-title {
+  font-weight: 900;
+  font-size: 15px;
+}
+
+.organize-step-run .organize-step-title {
+  color: #9e1f1a;
+}
+
+.organize-step-desc {
+  color: #63717d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.organize-step-arrow {
+  display: grid;
+  place-items: center;
+  height: 26px;
+  color: var(--mk-pixel-line);
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .permission-room-picker {
@@ -3503,6 +3576,104 @@ html.overlay-root body.overlay-body .character-chat button {
   display: none;
 }
 
-html.overlay-root .house-manager-content .organize-primary-actions {
-  grid-template-columns: minmax(0, 1fr);
+.proposal-row .proposal-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.proposal-file strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.proposal-file-icon {
+  flex: none;
+}
+
+.proposal-status-chip {
+  flex: none;
+  border: 2px dotted #9e1f1a;
+  background: #fff1ee;
+  color: #9e1f1a;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+/* "여기 → 저기" so the move reads at a glance without knowing the folder tree. */
+.proposal-row .proposal-path-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.proposal-row .proposal-loc {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.proposal-loc small {
+  color: #8a949d;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.proposal-loc > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 2px dotted rgba(43, 54, 64, 0.4);
+  background: #f7fbf8;
+  padding: 4px 8px;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.proposal-loc-to > span {
+  border-color: #246f42;
+  background: #e4f6dc;
+  color: #1f5c37;
+}
+
+.proposal-arrow {
+  color: #9e1f1a;
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.proposal-precheck {
+  color: #63717d;
+}
+
+.proposal-row.decision-approved {
+  border-color: #246f42 !important;
+  background: #f2fbee;
+}
+
+.proposal-row.decision-rejected {
+  border-color: #9e1f1a !important;
+  background: #fff5f3;
+}
+
+html.overlay-root .house-manager-content .organize-flow-head {
+  margin-bottom: 10px;
+}
+
+@media (max-width: 640px) {
+  .proposal-path-flow {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: stretch;
+  }
+
+  .proposal-arrow {
+    transform: rotate(90deg);
+    justify-self: center;
+  }
 }

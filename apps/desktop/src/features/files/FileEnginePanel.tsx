@@ -1065,42 +1065,44 @@ export function FileEnginePanel({
 
   return (
     <div className={embedded ? "file-engine-panel embedded-file-engine" : "app-shell file-engine-panel"}>
-      <section className="file-engine-topbar">
-        {embedded ? (
-          <div className="fe-topbar-lead">
-            <h1>{sectionTitle}</h1>
-            <div className="fe-folder-picker" hidden={hideRootPicker || activeSection !== "rooms"}>
-              <label htmlFor="fe-root-select">관리 폴더</label>
-              <select
-                id="fe-root-select"
-                value={selectedRootId}
-                onChange={(event) => selectRoot(event.target.value)}
-              >
-                <option value="">선택된 폴더 없음</option>
-                {roots.map((root) => (
-                  <option key={root.root_id} value={root.root_id}>
-                    {root.display_name}
-                  </option>
-                ))}
-              </select>
+      {activeSection !== "settings" ? (
+        <section className="file-engine-topbar">
+          {embedded ? (
+            <div className="fe-topbar-lead">
+              <h1>{sectionTitle}</h1>
+              <div className="fe-folder-picker" hidden={hideRootPicker || activeSection !== "rooms"}>
+                <label htmlFor="fe-root-select">관리 폴더</label>
+                <select
+                  id="fe-root-select"
+                  value={selectedRootId}
+                  onChange={(event) => selectRoot(event.target.value)}
+                >
+                  <option value="">선택된 폴더 없음</option>
+                  {roots.map((root) => (
+                    <option key={root.root_id} value={root.root_id}>
+                      {root.display_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
+          ) : (
+            <div>
+              <h1>파일 정리</h1>
+            </div>
+          )}
+          <div className="fe-topbar-actions">
+            <span className="fe-status-text" title={status}>
+              {status}
+            </span>
+            <button type="button" onClick={refreshRoots}>
+              새로고침
+            </button>
           </div>
-        ) : (
-          <div>
-            <h1>파일 정리</h1>
-          </div>
-        )}
-        <div className="fe-topbar-actions">
-          <span className="fe-status-text" title={status}>
-            {status}
-          </span>
-          <button type="button" onClick={refreshRoots}>
-            새로고침
-          </button>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
-      {embedded && selectedRoot ? (
+      {embedded && selectedRoot && activeSection !== "settings" ? (
         <p className="path-text fe-folder-path">{selectedRoot.root}</p>
       ) : null}
 
@@ -1306,34 +1308,74 @@ export function FileEnginePanel({
               {selectedRoot ? <p className="path-text">{selectedRoot.root}</p> : null}
             </>
           ) : null}
-          <div className="button-grid task-button-grid organize-primary-actions">
-            <button type="button" onClick={() => void analyzeAndProposeForSelectedRoot()} disabled={!selectedRootId}>
-              정리 제안 만들기
-            </button>
-            <button
-              type="button"
-              onClick={() => void autoApproveSelectedProposal()}
-              disabled={!selectedRootId || !proposal || !autoApprovalPolicy?.enabled}
-            >
-              자동 승인 적용
-            </button>
-            <button
-              type="button"
-              onClick={() => void precheckAndExecuteSelectedRoot()}
-              disabled={!selectedRootId || !proposal || approvedCount === 0 || !!journalCorruption}
-            >
-              실행
-            </button>
-          </div>
-          <div className="organize-flow-card">
+          <div className="organize-flow-head">
             <strong>{selectedRoot?.display_name || "방을 선택하세요"}</strong>
             <p>{selectedRoot?.root || "방 관리에서 먼저 관리 폴더를 선택하면 이 화면이 그 방으로 고정됩니다."}</p>
-            <ol>
-              <li className={proposal ? "is-done" : ""}>정리 제안 생성</li>
-              <li className={approvedCount > 0 ? "is-done" : ""}>자동 승인 또는 직접 선택</li>
-              <li className={activePrecheckReady ? "is-done" : ""}>사전 점검 후 실행</li>
-            </ol>
           </div>
+          <ol className="organize-stepper">
+            <li className="organize-step-item">
+              <button
+                type="button"
+                className={`organize-step ${proposal ? "is-done" : selectedRootId ? "is-current" : ""}`}
+                onClick={() => void analyzeAndProposeForSelectedRoot()}
+                disabled={!selectedRootId}
+              >
+                <span className="organize-step-badge">{proposal ? "✓" : "1"}</span>
+                <span className="organize-step-body">
+                  <span className="organize-step-title">정리 제안 생성</span>
+                  <span className="organize-step-desc">
+                    {proposal
+                      ? `제안 ${proposal.proposals.length}건이 아래에 준비됐어요`
+                      : "폴더를 분석해서 어떤 파일을 어디로 옮길지 제안을 만들어요"}
+                  </span>
+                </span>
+              </button>
+            </li>
+            <li className="organize-step-arrow" aria-hidden="true">
+              ↓
+            </li>
+            <li className="organize-step-item">
+              <button
+                type="button"
+                className={`organize-step ${approvedCount > 0 ? "is-done" : proposal && autoApprovalPolicy?.enabled ? "is-current" : ""}`}
+                onClick={() => void autoApproveSelectedProposal()}
+                disabled={!selectedRootId || !proposal || !autoApprovalPolicy?.enabled}
+              >
+                <span className="organize-step-badge">{approvedCount > 0 ? "✓" : "2"}</span>
+                <span className="organize-step-body">
+                  <span className="organize-step-title">
+                    자동 승인{autoApprovalPolicy?.enabled ? "" : " (설정에서 켜기)"}
+                  </span>
+                  <span className="organize-step-desc">
+                    {approvedCount > 0
+                      ? `${approvedCount}건 승인됨 · 아래 목록에서 직접 바꿀 수도 있어요`
+                      : "제안을 한 번에 승인해요. 아래 목록에서 하나씩 골라도 돼요"}
+                  </span>
+                </span>
+              </button>
+            </li>
+            <li className="organize-step-arrow" aria-hidden="true">
+              ↓
+            </li>
+            <li className="organize-step-item">
+              <button
+                type="button"
+                className={`organize-step organize-step-run ${approvedCount > 0 && !journalCorruption ? "is-current" : ""}`}
+                onClick={() => void precheckAndExecuteSelectedRoot()}
+                disabled={!selectedRootId || !proposal || approvedCount === 0 || !!journalCorruption}
+              >
+                <span className="organize-step-badge">3</span>
+                <span className="organize-step-body">
+                  <span className="organize-step-title">실행</span>
+                  <span className="organize-step-desc">
+                    {approvedCount > 0
+                      ? `승인한 ${approvedCount}건을 실제 폴더로 옮겨요`
+                      : "승인된 제안을 실제 폴더로 옮겨요"}
+                  </span>
+                </span>
+              </button>
+            </li>
+          </ol>
           <div className="button-grid task-button-grid legacy-task-actions">
             <button type="button" onClick={analyzeSelectedRoot} disabled={!selectedRootId}>
               파일 분석
@@ -1426,14 +1468,35 @@ export function FileEnginePanel({
           <h2>정리 제안</h2>
           <div className="proposal-list">
             {proposal?.proposals.map((item) => (
-              <article key={item.proposal_id} className="proposal-row">
-                <div>
-                  <strong>{item.from}</strong>
-                  <span>{item.to}</span>
-                  <small>{item.status}</small>
-                  <small>decision: {decisions[item.proposal_id] || "pending"}</small>
+              <article
+                key={item.proposal_id}
+                className={`proposal-row decision-${decisions[item.proposal_id] || "pending"}`}
+              >
+                <div className="proposal-move">
+                  <div className="proposal-file">
+                    <span className="proposal-file-icon" aria-hidden="true">
+                      📄
+                    </span>
+                    <strong title={item.from}>{proposalFileName(item.from)}</strong>
+                    {item.status !== "ready" ? (
+                      <span className="proposal-status-chip">{proposalStatusLabel(item.status)}</span>
+                    ) : null}
+                  </div>
+                  <div className="proposal-path-flow">
+                    <span className="proposal-loc">
+                      <small>현재 위치</small>
+                      <span title={item.from}>📁 {proposalFolderLabel(item.from)}</span>
+                    </span>
+                    <span className="proposal-arrow" aria-hidden="true">
+                      →
+                    </span>
+                    <span className="proposal-loc proposal-loc-to">
+                      <small>정리 후</small>
+                      <span title={item.to}>📁 {proposalFolderLabel(item.to)}</span>
+                    </span>
+                  </div>
                   {activePrecheck ? (
-                    <small>{formatPrecheckSummary(activePrecheck, item)}</small>
+                    <small className="proposal-precheck">{formatPrecheckSummary(activePrecheck, item)}</small>
                   ) : null}
                   {decisions[item.proposal_id] === "rejected" ? (
                     <input
@@ -1808,6 +1871,19 @@ function operationStatusLabel(status: OperationHistoryEntry["latest_status"]) {
 
 function proposalStatusLabel(status: Proposal["status"]) {
   return { ready: "준비됨", destination_exists: "대상 있음" }[status] ?? status;
+}
+
+// The last path segment — the actual file being moved, shown as the row headline.
+function proposalFileName(path: string) {
+  const segments = path.split(/[/\\]/).filter(Boolean);
+  return segments[segments.length - 1] || path;
+}
+
+// The parent folder a file sits in / moves to, so users read "여기 → 저기" instead of full paths.
+function proposalFolderLabel(path: string) {
+  const segments = path.split(/[/\\]/).filter(Boolean);
+  if (segments.length <= 1) return "최상위 폴더";
+  return segments[segments.length - 2];
 }
 
 function executeStatusLabel(status: ExecuteReport["results"][number]["status"]) {
