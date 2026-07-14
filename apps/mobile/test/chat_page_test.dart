@@ -364,6 +364,55 @@ void main() {
       {'sessionId': 's1', 'cursor': 'm1', 'limit': chatMessagePageSize},
     ]);
   });
+
+  testWidgets(
+    'realtime message for another session refreshes only session previews',
+    (tester) async {
+      final gateway = _FakeChatGateway(
+        sessions: [
+          _session('s1', 'first session'),
+          {..._session('s2', ''), 'messagePreview': 'old preview'},
+        ],
+        messagesBySession: {
+          's1': [_message('m1', 's1', 'USER', 'first message')],
+          's2': [_message('other', 's2', 'USER', 'other session message')],
+        },
+      );
+
+      await _pumpChat(tester, gateway);
+      expect(gateway.sessionLoads, 1);
+      gateway.sessions[1] = {
+        ...gateway.sessions[1],
+        'messagePreview': 'new other session preview',
+        'updatedAt': '2026-07-14T00:02:00.000Z',
+      };
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(ChatPage)),
+      );
+      container
+          .read(realtimeChatMessageUpdateProvider.notifier)
+          .emit(
+            const RealtimeChatMessageUpdate(
+              messageId: 'm2',
+              sessionId: 's2',
+              roomId: 'room-1',
+            ),
+          );
+      await tester.pumpAndSettle();
+
+      expect(gateway.sessionLoads, 2);
+      expect(gateway.messageRequests, [
+        {'sessionId': 's1', 'cursor': null, 'limit': chatMessagePageSize},
+      ]);
+      expect(find.text('new other session preview'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('chat-session-picker')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('new other session preview'), findsOneWidget);
+    },
+  );
 }
 
 Future<void> _pumpChat(WidgetTester tester, _FakeChatGateway gateway) async {
@@ -427,11 +476,13 @@ class _FakeChatGateway implements ChatGateway {
   final List<String> rejectedDraftIds = [];
   final List<String> updatedTitles = [];
   int createdSessions = 0;
+  int sessionLoads = 0;
 
   @override
-  Future<List<Map<String, dynamic>>> listSessions(String roomId) async => [
-    ...sessions,
-  ];
+  Future<List<Map<String, dynamic>>> listSessions(String roomId) async {
+    sessionLoads += 1;
+    return [...sessions];
+  }
 
   @override
   Future<Map<String, dynamic>> createSession(String roomId) async {

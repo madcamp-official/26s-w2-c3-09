@@ -389,6 +389,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _disposed = false;
   final Set<String> _draftingIds = {};
   final Set<String> _realtimeMessageIdsInFlight = {};
+  bool _realtimeSessionRefreshInFlight = false;
   int _loadVersion = 0;
 
   ChatGateway get _gateway => widget.gateway ?? ref.read(chatGatewayProvider);
@@ -676,8 +677,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     RealtimeChatMessageUpdate update,
   ) async {
     if (update.roomId != null && update.roomId != widget.roomId) return;
+    unawaited(_refreshSessionsForRealtime(update));
     if (update.sessionId != _conversation.selectedSessionId) {
-      _invalidateChatReadModels();
       return;
     }
     if (_conversation.messages.any(
@@ -710,6 +711,41 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // session messages from the server.
     } finally {
       _realtimeMessageIdsInFlight.remove(update.messageId);
+    }
+  }
+
+  Future<void> _refreshSessionsForRealtime(
+    RealtimeChatMessageUpdate update,
+  ) async {
+    if (update.roomId != null && update.roomId != widget.roomId) return;
+    if (_realtimeSessionRefreshInFlight) return;
+    _realtimeSessionRefreshInFlight = true;
+    try {
+      _invalidateChatReadModels();
+      final sessions = await _listSessions();
+      if (_disposed) return;
+      final selectedId = selectChatSessionId(
+        sessions,
+        _conversation.selectedSessionId,
+      );
+      final selectedStillAvailable =
+          selectedId != null && selectedId == _conversation.selectedSessionId;
+      setState(() {
+        _conversation = _conversation.copyWith(
+          sessions: sessions,
+          selectedSessionId: selectedId,
+          clearSelectedSessionId: selectedId == null,
+          messages: selectedStillAvailable ? null : const [],
+          clearMessageCursor: !selectedStillAvailable,
+          hasMoreMessages: selectedStillAvailable ? null : false,
+        );
+      });
+    } catch (_) {
+      // Session previews/order are an optimization over the durable chat
+      // store. A failed lightweight refresh must not reload messages or
+      // replace the visible conversation with an error page.
+    } finally {
+      _realtimeSessionRefreshInFlight = false;
     }
   }
 
