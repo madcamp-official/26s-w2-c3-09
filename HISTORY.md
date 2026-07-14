@@ -2,6 +2,7 @@
 
 ## 2026-07-14 추가 검증 및 정리
 
+- [x] 모바일 ChatPage의 gateway 주입을 `chatGatewayProvider`로 분리하고, 세션 선택/preview 갱신/메시지 pagination merge/command draft patch를 순수 reducer 함수로 분리했다. 동일 payload나 중복 메시지처럼 실제 변화가 없는 경우 같은 객체를 반환하므로 이후 chat realtime patch와 pagination provider 분리의 기반이 된다.
 - [x] Git conflict marker와 unmerged path를 재확인했다. 현재 저장소에는 `<<<<<<<`, `=======`, `>>>>>>>` 충돌 마커와 `UU` 상태 파일이 없다.
 - [x] 모바일 통신 지연 개선 상태를 재검증했다. Home은 최초/명시 갱신 때 `/v1/home/summary`를 한 번 읽고, `presence.updated`, proposal/decision/execution/snapshot/file browse/transfer 이벤트는 WebSocket payload로 해당 항목만 patch한다.
 - [x] 5초 모바일 연결 안전 reconcile은 ACTIVE device/room gate만 확인하며 Home summary 전체 재호출을 유발하지 않는다.

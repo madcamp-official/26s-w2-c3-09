@@ -4,6 +4,44 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mousekeeper/features/chat/chat_page.dart';
 
 void main() {
+  test('chat reducers preserve identity for no-op updates', () {
+    final sessions = [_session('s1', '첫 대화')];
+    expect(touchChatSessionPreview(sessions, 's1', ''), same(sessions));
+    expect(
+      touchChatSessionPreview(sessions, 'missing', 'hello'),
+      same(sessions),
+    );
+
+    final messages = [
+      _message(
+        'm1',
+        's1',
+        'ASSISTANT',
+        'draft',
+        messageType: 'COMMAND_DRAFT',
+        structuredPayload: {
+          'id': 'draft-1',
+          'status': 'DRAFT',
+          'commandId': null,
+        },
+      ),
+    ];
+    expect(mergeChatMessages(messages, const []), same(messages));
+    expect(mergeChatMessages(messages, [messages.single]), same(messages));
+    expect(
+      patchCommandDraftMessages(messages, 'draft-1', {
+        'id': 'draft-1',
+        'status': 'DRAFT',
+        'commandId': null,
+      }),
+      same(messages),
+    );
+    expect(
+      patchCommandDraftMessages(messages, 'missing', const {}),
+      same(messages),
+    );
+  });
+
   testWidgets('loads chat sessions and switches selected session', (
     tester,
   ) async {

@@ -27,6 +27,10 @@ abstract interface class ChatGateway {
 
 const chatMessagePageSize = 30;
 
+final chatGatewayProvider = Provider<ChatGateway>(
+  (ref) => ApiChatGateway(ref.watch(apiClientProvider)),
+);
+
 class ApiChatGateway implements ChatGateway {
   ApiChatGateway(this._api);
 
@@ -131,6 +135,110 @@ String commandDraftStatusFromMessage(Map<String, dynamic> message) {
   return 'DRAFT';
 }
 
+String? selectChatSessionId(
+  List<Map<String, dynamic>> sessions,
+  String? preferredId,
+) {
+  if (preferredId != null) {
+    for (final session in sessions) {
+      if (session['id'] == preferredId) return preferredId;
+    }
+  }
+  if (sessions.isEmpty) return null;
+  return sessions.first['id'] as String?;
+}
+
+String? lastChatMessageId(List<Map<String, dynamic>> messages) {
+  if (messages.isEmpty) return null;
+  return messages.last['id'] as String?;
+}
+
+List<Map<String, dynamic>> touchChatSessionPreview(
+  List<Map<String, dynamic>> sessions,
+  String sessionId,
+  String preview,
+) {
+  var changed = false;
+  final next = [
+    for (final session in sessions)
+      if (session['id'] == sessionId && session['messagePreview'] != preview)
+        (() {
+          changed = true;
+          return {...session, 'messagePreview': preview};
+        })()
+      else
+        session,
+  ];
+  return changed ? List.unmodifiable(next) : sessions;
+}
+
+List<Map<String, dynamic>> mergeChatMessages(
+  List<Map<String, dynamic>> existing,
+  List<Map<String, dynamic>> received,
+) {
+  if (received.isEmpty) return existing;
+  final seen = existing
+      .map((message) => message['id'])
+      .whereType<String>()
+      .toSet();
+  var changed = false;
+  final next = <Map<String, dynamic>>[...existing];
+  for (final message in received) {
+    final id = message['id'];
+    if (id is String && seen.add(id)) {
+      next.add(message);
+      changed = true;
+    }
+  }
+  return changed ? List.unmodifiable(next) : existing;
+}
+
+List<Map<String, dynamic>> patchCommandDraftMessages(
+  List<Map<String, dynamic>> messages,
+  String draftId,
+  Object? draft,
+) {
+  if (draft is! Map) return messages;
+  final nextPayload = Map<String, dynamic>.from(draft);
+  var changed = false;
+  final next = [
+    for (final message in messages)
+      if (commandDraftIdFromMessage(message) == draftId)
+        (() {
+          if (_jsonEquivalent(message['structuredPayload'], nextPayload)) {
+            return message;
+          }
+          changed = true;
+          return {...message, 'structuredPayload': nextPayload};
+        })()
+      else
+        message,
+  ];
+  return changed ? List.unmodifiable(next) : messages;
+}
+
+bool _jsonEquivalent(Object? left, Object? right) {
+  if (identical(left, right)) return true;
+  if (left is Map && right is Map) {
+    if (left.length != right.length) return false;
+    for (final entry in left.entries) {
+      if (!right.containsKey(entry.key) ||
+          !_jsonEquivalent(entry.value, right[entry.key])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (left is List && right is List) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!_jsonEquivalent(left[index], right[index])) return false;
+    }
+    return true;
+  }
+  return left == right;
+}
+
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key, required this.roomId, this.gateway});
 
@@ -159,8 +267,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   String? _messageCursor;
   bool _hasMoreMessages = false;
 
-  ChatGateway get _gateway =>
-      widget.gateway ?? ApiChatGateway(ref.read(apiClientProvider));
+  ChatGateway get _gateway => widget.gateway ?? ref.read(chatGatewayProvider);
 
   @override
   void initState() {
@@ -191,7 +298,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         if (_stale(version)) return;
         sessions = [created];
       }
-      final selectedId = _selectExistingOrFirst(sessions, _selectedSessionId);
+      final selectedId = selectChatSessionId(sessions, _selectedSessionId);
       final messages = selectedId == null
           ? <Map<String, dynamic>>[]
           : await _gateway.listMessages(selectedId);
@@ -200,7 +307,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _sessions = sessions;
         _selectedSessionId = selectedId;
         _messages = messages;
-        _messageCursor = _lastMessageId(messages);
+        _messageCursor = lastChatMessageId(messages);
         _hasMoreMessages = messages.length == chatMessagePageSize;
         _loading = false;
       });
@@ -227,7 +334,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (_stale(version)) return;
       setState(() {
         _messages = messages;
-        _messageCursor = _lastMessageId(messages);
+        _messageCursor = lastChatMessageId(messages);
         _hasMoreMessages = messages.length == chatMessagePageSize;
         _loading = false;
       });
@@ -272,7 +379,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final remaining = _sessions
           .where((session) => session['id'] != sessionId)
           .toList(growable: false);
-      final nextId = _selectExistingOrFirst(remaining, null);
+      final nextId = selectChatSessionId(remaining, null);
       setState(() {
         _sessions = remaining;
         _selectedSessionId = nextId;
@@ -308,8 +415,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ];
       setState(() {
         _messages = newMessages;
-        _messageCursor = _lastMessageId(newMessages);
-        _sessions = _touchSessionPreview(_sessions, sessionId, content);
+        _messageCursor = lastChatMessageId(newMessages);
+        _sessions = touchChatSessionPreview(_sessions, sessionId, content);
       });
       _scrollToBottom();
       final notice = chatSendNotice(result);
@@ -329,10 +436,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       final next = await _gateway.listMessages(sessionId, cursor: cursor);
       if (_disposed || sessionId != _selectedSessionId) return;
-      final merged = _mergeMessages(_messages, next);
+      final merged = mergeChatMessages(_messages, next);
       setState(() {
         _messages = merged;
-        _messageCursor = _lastMessageId(merged);
+        _messageCursor = lastChatMessageId(merged);
         _hasMoreMessages = next.length == chatMessagePageSize;
       });
       _scrollToBottom();
@@ -379,16 +486,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   void _patchDraftMessage(String draftId, Object? draft) {
-    if (draft is! Map) return;
-    final nextPayload = Map<String, dynamic>.from(draft);
+    final next = patchCommandDraftMessages(_messages, draftId, draft);
+    if (identical(next, _messages)) return;
     setState(() {
-      _messages = [
-        for (final message in _messages)
-          if (commandDraftIdFromMessage(message) == draftId)
-            {...message, 'structuredPayload': nextPayload}
-          else
-            message,
-      ];
+      _messages = next;
     });
   }
 
@@ -407,52 +508,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (!_scrollController.hasClients) return;
       _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
     });
-  }
-
-  static String? _selectExistingOrFirst(
-    List<Map<String, dynamic>> sessions,
-    String? preferredId,
-  ) {
-    if (preferredId != null) {
-      for (final session in sessions) {
-        if (session['id'] == preferredId) return preferredId;
-      }
-    }
-    if (sessions.isEmpty) return null;
-    return sessions.first['id'] as String?;
-  }
-
-  static List<Map<String, dynamic>> _touchSessionPreview(
-    List<Map<String, dynamic>> sessions,
-    String sessionId,
-    String preview,
-  ) => [
-    for (final session in sessions)
-      if (session['id'] == sessionId)
-        {...session, 'messagePreview': preview}
-      else
-        session,
-  ];
-
-  static String? _lastMessageId(List<Map<String, dynamic>> messages) {
-    if (messages.isEmpty) return null;
-    return messages.last['id'] as String?;
-  }
-
-  static List<Map<String, dynamic>> _mergeMessages(
-    List<Map<String, dynamic>> existing,
-    List<Map<String, dynamic>> received,
-  ) {
-    final seen = existing
-        .map((message) => message['id'])
-        .whereType<String>()
-        .toSet();
-    return [
-      ...existing,
-      for (final message in received)
-        if (message['id'] is String && seen.add(message['id'] as String))
-          message,
-    ];
   }
 
   @override
