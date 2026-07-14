@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::agent::AgentRuntime;
 use crate::cleanliness::CleanlinessSnapshot;
@@ -23,6 +25,7 @@ const KIND_PROPOSAL: &str = "proposal";
 const KIND_COMMAND_STATUS: &str = "command_status";
 const KIND_FILE_TRANSFER_COMPLETION: &str = "file_transfer_completion";
 const KIND_SMART_CACHE_COMPLETION: &str = "smart_cache_completion";
+const KIND_SMART_CACHE_STALE_PREFIX: &str = "smart_cache_stale:";
 const KIND_ROOM_SNAPSHOT_PREFIX: &str = "room_snapshot:";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -65,6 +68,14 @@ struct SmartCacheCompletionPayload {
     usage_score: i64,
     manual_pin: bool,
     encryption_metadata: SmartCacheEncryptionMetadata,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheStalePayload {
+    room_id: String,
+    source_relative_path: Option<String>,
+    reason: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -159,6 +170,45 @@ pub fn enqueue_smart_cache_completion(
     outbox.enqueue(KIND_SMART_CACHE_COMPLETION, &key, &payload_json)
 }
 
+pub fn enqueue_smart_cache_stale(
+    outbox: &OutboxStore,
+    room_id: &str,
+    source_relative_path: Option<&str>,
+    reason: &str,
+) -> Result<bool, String> {
+    if room_id.trim().is_empty() {
+        return Err("smart cache stale room id is required".to_string());
+    }
+    match (source_relative_path, reason) {
+        (Some(path), "SOURCE_CHANGED" | "SOURCE_REMOVED") => {
+            validate_stale_source_path(path)?;
+        }
+        (None, "REINDEXED") => {}
+        (None, "SOURCE_CHANGED" | "SOURCE_REMOVED") => {
+            return Err("smart cache stale source path is required".to_string());
+        }
+        (Some(_), "REINDEXED") => {
+            return Err("smart cache REINDEXED reports must not include a source path".to_string());
+        }
+        _ => return Err("smart cache stale reason is invalid".to_string()),
+    }
+    let payload = SmartCacheStalePayload {
+        room_id: room_id.to_string(),
+        source_relative_path: source_relative_path.map(ToString::to_string),
+        reason: reason.to_string(),
+    };
+    let payload_json = serde_json::to_string(&payload)
+        .map_err(|error| format!("cannot encode smart cache stale report: {error}"))?;
+    let path_scope = source_relative_path.unwrap_or("*");
+    let mut scope = Sha256::new();
+    scope.update(room_id.as_bytes());
+    scope.update([0]);
+    scope.update(path_scope.as_bytes());
+    let kind = format!("{KIND_SMART_CACHE_STALE_PREFIX}{:x}", scope.finalize());
+    let key = format!("{:039}-{reason}", unix_nanos());
+    outbox.enqueue_replacing_pending(&kind, &key, &payload_json)
+}
+
 /// Persists the exact snapshot object calculated by the Rust engine. A newer snapshot supersedes
 /// older unsent values for this room so a delayed retry cannot move the room sequence backwards.
 pub fn enqueue_room_snapshot(
@@ -228,6 +278,19 @@ async fn dispatch(
         }
         return agent
             .submit_room_snapshot(payload.room_id, payload.snapshot)
+            .await
+            .map(|_| ())
+            .map_err(classify);
+    }
+    if item.kind.starts_with(KIND_SMART_CACHE_STALE_PREFIX) {
+        let payload = decode::<SmartCacheStalePayload>(&item.payload_json)?;
+        return agent
+            .mark_smart_cache_stale(
+                item.idempotency_key.clone(),
+                payload.room_id,
+                payload.source_relative_path,
+                payload.reason,
+            )
             .await
             .map(|_| ())
             .map_err(classify);
@@ -313,6 +376,32 @@ pub fn smart_cache_completion_key(reservation_id: &str) -> String {
     format!("{reservation_id}-complete")
 }
 
+fn unix_nanos() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn validate_stale_source_path(path: &str) -> Result<(), String> {
+    if path.is_empty()
+        || path.len() > 1024
+        || path.contains('\0')
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains("//")
+        || path.contains("\\\\")
+    {
+        return Err("smart cache stale source path is invalid".to_string());
+    }
+    for segment in path.split(['/', '\\']) {
+        if segment.is_empty() || matches!(segment, "." | "..") {
+            return Err("smart cache stale source path is invalid".to_string());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -321,9 +410,10 @@ mod tests {
     use super::{
         enqueue_command_status, enqueue_execution_result, enqueue_file_transfer_completion,
         enqueue_proposal, enqueue_room_snapshot, enqueue_smart_cache_completion,
-        file_transfer_completion_key, smart_cache_completion_key, RoomSnapshotPayload,
-        KIND_COMMAND_STATUS, KIND_EXECUTION_RESULT, KIND_FILE_TRANSFER_COMPLETION, KIND_PROPOSAL,
-        KIND_ROOM_SNAPSHOT_PREFIX, KIND_SMART_CACHE_COMPLETION,
+        enqueue_smart_cache_stale, file_transfer_completion_key, smart_cache_completion_key,
+        RoomSnapshotPayload, SmartCacheStalePayload, KIND_COMMAND_STATUS, KIND_EXECUTION_RESULT,
+        KIND_FILE_TRANSFER_COMPLETION, KIND_PROPOSAL, KIND_ROOM_SNAPSHOT_PREFIX,
+        KIND_SMART_CACHE_COMPLETION, KIND_SMART_CACHE_STALE_PREFIX,
     };
     use crate::command_processor::{
         AgentProposalActionType, AgentProposalConflictState, AgentProposalItem,
@@ -450,6 +540,39 @@ mod tests {
         assert!(batch[0].payload_json.contains(r#""manualPin":true"#));
         assert!(batch[0].payload_json.contains(r#""encryptionMetadata":"#));
         assert!(batch[0].payload_json.contains(r#""plaintextSizeBytes":5"#));
+    }
+
+    #[test]
+    fn smart_cache_stale_reports_replace_pending_reports_for_the_same_source() {
+        let (_temp, store) = store();
+        assert!(
+            enqueue_smart_cache_stale(&store, "room-1", Some("docs/a.pdf"), "SOURCE_CHANGED")
+                .expect("first stale report")
+        );
+        enqueue_smart_cache_stale(&store, "room-1", Some("docs/a.pdf"), "SOURCE_CHANGED")
+            .expect("second stale report");
+
+        let batch = store.pending_batch(10).expect("batch");
+
+        assert_eq!(batch.len(), 1);
+        assert!(batch[0].kind.starts_with(KIND_SMART_CACHE_STALE_PREFIX));
+        let payload: SmartCacheStalePayload =
+            serde_json::from_str(&batch[0].payload_json).expect("decode stale payload");
+        assert_eq!(payload.room_id, "room-1");
+        assert_eq!(payload.source_relative_path.as_deref(), Some("docs/a.pdf"));
+        assert_eq!(payload.reason, "SOURCE_CHANGED");
+    }
+
+    #[test]
+    fn smart_cache_stale_rejects_escape_paths_before_outbox_persistence() {
+        let (_temp, store) = store();
+
+        let error =
+            enqueue_smart_cache_stale(&store, "room-1", Some("../secret.txt"), "SOURCE_CHANGED")
+                .expect_err("escape path must fail");
+
+        assert!(error.contains("source path"));
+        assert!(store.pending_batch(10).expect("batch").is_empty());
     }
 
     #[test]

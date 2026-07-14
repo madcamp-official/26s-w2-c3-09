@@ -22,6 +22,7 @@ import {
   commandDraftSummarySchema,
   createChatSessionSchema,
   createCommandDraftSchema,
+  markCachedFilesStaleSchema,
   updateChatSessionSchema,
   createRuleDraftRequestSchema,
   confirmRuleDraftResponseSchema,
@@ -56,6 +57,49 @@ describe("push notification token contract", () => {
 });
 
 describe("smart cache contracts", () => {
+  it("validates source-change stale reports without broadening their scope", () => {
+    const targeted = {
+      roomId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a1",
+      sourceRelativePath: "docs/report.pdf",
+      reason: "SOURCE_CHANGED",
+    };
+
+    expect(markCachedFilesStaleSchema.parse(targeted)).toEqual(targeted);
+    expect(
+      markCachedFilesStaleSchema.safeParse({
+        roomId: targeted.roomId,
+        sourceRelativePath: null,
+        reason: "SOURCE_CHANGED",
+      }).success,
+    ).toBe(false);
+    expect(
+      markCachedFilesStaleSchema.safeParse({
+        roomId: targeted.roomId,
+        sourceRelativePath: "../outside.pdf",
+        reason: "SOURCE_REMOVED",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("uses REINDEXED only for root-wide freshness uncertainty", () => {
+    const roomId = "018f4c7b-1ad6-7c95-bf34-5e45881f98a1";
+
+    expect(
+      markCachedFilesStaleSchema.parse({
+        roomId,
+        sourceRelativePath: null,
+        reason: "REINDEXED",
+      }),
+    ).toEqual({ roomId, sourceRelativePath: null, reason: "REINDEXED" });
+    expect(
+      markCachedFilesStaleSchema.safeParse({
+        roomId,
+        sourceRelativePath: "docs/report.pdf",
+        reason: "REINDEXED",
+      }).success,
+    ).toBe(false);
+  });
+
   it("requires encrypted completion metadata without key material", () => {
     const completion = {
       sizeBytes: 132,

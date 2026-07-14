@@ -14,6 +14,7 @@ import {
   cacheCandidateBatchSchema,
   completeCacheUploadSchema,
   idempotencyKeySchema,
+  markCachedFilesStaleSchema,
   updateSmartCachePolicySchema,
 } from '@mousekeeper/contracts';
 import { z } from 'zod';
@@ -85,6 +86,20 @@ export class SmartCacheController {
     @Param('reservationId') id: string,
   ) {
     return this.cache.cancelReservation(p.userId, requireAgentDevice(p), id);
+  }
+
+  @Post('agent/cached-files/stale')
+  @AgentOnly()
+  markStale(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Headers('idempotency-key') raw: string | undefined,
+    @Body(new ZodValidationPipe(markCachedFilesStaleSchema))
+    body: z.infer<typeof markCachedFilesStaleSchema>,
+  ) {
+    const key = idempotencyKeySchema.safeParse(raw);
+    if (!key.success)
+      throw new BadRequestException({ code: 'VALIDATION_FAILED' });
+    return this.cache.markStale(p.userId, requireAgentDevice(p), body);
   }
 
   @Delete('cached-files/:cachedFileId')

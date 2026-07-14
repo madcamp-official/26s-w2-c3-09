@@ -9,6 +9,7 @@ import {
 import {
   cacheCandidateBatchSchema,
   completeCacheUploadSchema,
+  markCachedFilesStaleSchema,
   updateSmartCachePolicySchema,
 } from '@mousekeeper/contracts';
 import {
@@ -23,7 +24,7 @@ import {
   smartCachePolicies,
   type Database,
 } from '@mousekeeper/database';
-import { and, asc, eq, gt, inArray, sql, sum } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, ne, sql, sum } from 'drizzle-orm';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import Redis from 'ioredis';
@@ -798,6 +799,66 @@ export class SmartCacheService {
         payload: { reservationId, status: 'CANCELLED' },
       });
       return { reservationId, status: cancelled.status };
+    });
+  }
+
+  async markStale(
+    userId: string,
+    deviceId: string,
+    body: z.infer<typeof markCachedFilesStaleSchema>,
+  ) {
+    const room = await this.room(userId, body.roomId);
+    if (room.desktopDeviceId !== deviceId) {
+      throw new ForbiddenException({ code: 'FORBIDDEN' });
+    }
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${body.roomId}))`,
+      );
+      await this.lockActiveRoom(tx, userId, deviceId, body.roomId);
+      const conditions = [
+        eq(cachedFiles.roomId, body.roomId),
+        eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
+        ne(cachedFiles.freshnessStatus, 'STALE'),
+      ];
+      if (body.sourceRelativePath !== null) {
+        conditions.push(
+          body.reason === 'SOURCE_REMOVED'
+            ? sql`(${cachedFiles.sourceRelativePath} = ${body.sourceRelativePath} OR starts_with(${cachedFiles.sourceRelativePath}, ${`${body.sourceRelativePath}/`}))`
+            : eq(cachedFiles.sourceRelativePath, body.sourceRelativePath),
+        );
+      }
+      const staleFiles = await tx
+        .update(cachedFiles)
+        .set({ freshnessStatus: 'STALE' })
+        .where(and(...conditions))
+        .returning({
+          id: cachedFiles.id,
+          sourceRelativePath: cachedFiles.sourceRelativePath,
+        });
+      if (staleFiles.length > 0) {
+        await this.sync.append(tx, {
+          userId,
+          deviceId,
+          roomId: body.roomId,
+          eventType: 'smart-cache.updated',
+          aggregateType: 'cached_file_freshness',
+          aggregateId: body.roomId,
+          payload: {
+            roomId: body.roomId,
+            sourceRelativePath: body.sourceRelativePath,
+            reason: body.reason,
+            freshnessStatus: 'STALE',
+            staleCount: staleFiles.length,
+          },
+        });
+      }
+      return {
+        roomId: body.roomId,
+        sourceRelativePath: body.sourceRelativePath,
+        reason: body.reason,
+        staleCount: staleFiles.length,
+      };
     });
   }
 

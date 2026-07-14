@@ -945,6 +945,32 @@ export const cacheCandidateBatchSchema = z
     candidates: z.array(cacheCandidateSchema).min(1).max(200),
   })
   .strict();
+export const markCachedFilesStaleSchema = z
+  .object({
+    roomId: uuidSchema,
+    sourceRelativePath: relativePathSchema.nullable().default(null),
+    reason: z.enum(["SOURCE_CHANGED", "SOURCE_REMOVED", "REINDEXED"]),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.reason === "REINDEXED") {
+      if (value.sourceRelativePath !== null) {
+        context.addIssue({
+          code: "custom",
+          path: ["sourceRelativePath"],
+          message: "REINDEXED stale reports must not include a path",
+        });
+      }
+      return;
+    }
+    if (value.sourceRelativePath === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["sourceRelativePath"],
+        message: "SOURCE_CHANGED and SOURCE_REMOVED stale reports need a path",
+      });
+    }
+  });
 export const smartCacheEncryptionMetadataSchema = z
   .object({
     algorithm: z.literal("AES-256-GCM"),

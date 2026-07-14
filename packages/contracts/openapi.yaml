@@ -867,6 +867,28 @@ paths:
             or idempotency conflict,
           }
         "503": { description: Smart cache or object storage is not configured }
+  /v1/agent/cached-files/stale:
+    post:
+      security: [{ deviceBearer: [] }]
+      parameters:
+        - {
+            in: header,
+            name: Idempotency-Key,
+            required: true,
+            schema: { type: string, minLength: 8, maxLength: 128 },
+          }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/MarkCachedFilesStale" } }
+      responses:
+        "201":
+          {
+            description: Available cached files marked STALE after desktop source uncertainty,
+          }
+        "400": { description: Invalid stale report }
+        "403": { description: Desktop device does not own the room }
   /v1/agent/cache-uploads/{reservationId}/complete:
     parameters:
       - {
@@ -1785,6 +1807,22 @@ components:
           minItems: 1
           maxItems: 200
           items: { $ref: "#/components/schemas/CacheCandidate" }
+    MarkCachedFilesStale:
+      type: object
+      additionalProperties: false
+      description: SOURCE_CHANGED and SOURCE_REMOVED require sourceRelativePath. REINDEXED must use null sourceRelativePath and marks the room's available cached files as freshness-uncertain.
+      required: [roomId, sourceRelativePath, reason]
+      properties:
+        roomId: { type: string, format: uuid }
+        sourceRelativePath:
+          oneOf:
+            - { $ref: "#/components/schemas/SafeCommandRelativePath" }
+            - { type: "null" }
+        reason:
+          {
+            type: string,
+            enum: [SOURCE_CHANGED, SOURCE_REMOVED, REINDEXED],
+          }
     CacheUploadReservation:
       type: object
       additionalProperties: false
