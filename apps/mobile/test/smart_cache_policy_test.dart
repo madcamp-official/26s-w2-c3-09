@@ -31,6 +31,19 @@ void main() {
     );
   });
 
+  test(
+    'download completion access event is explicit and scoped to one file',
+    () {
+      expect(
+        smartCacheAccessEventPath('cached-file-1'),
+        '/v1/cached-files/cached-file-1/access-events',
+      );
+      expect(smartCacheDownloadCompletedAccessEvent(), {
+        'eventType': 'DOWNLOAD_COMPLETED',
+      });
+    },
+  );
+
   test('encrypted cached files fail closed until key sync exists', () {
     expect(
       () => ensureSmartCacheDownloadDecryptable({

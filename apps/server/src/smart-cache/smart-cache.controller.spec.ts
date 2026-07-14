@@ -46,18 +46,54 @@ describe('SmartCacheController', () => {
   });
 
   it('rejects stale reports without an idempotency key', () => {
-    const controller = new SmartCacheController({ markStale: jest.fn() } as never);
+    const controller = new SmartCacheController({
+      markStale: jest.fn(),
+    } as never);
 
     expect(() =>
-      controller.markStale(
-        principal,
-        undefined,
-        {
-          roomId: '018f4c7b-1ad6-7c95-bf34-5e45881f98a3',
-          sourceRelativePath: null,
-          reason: 'REINDEXED',
-        },
-      ),
+      controller.markStale(principal, undefined, {
+        roomId: '018f4c7b-1ad6-7c95-bf34-5e45881f98a3',
+        sourceRelativePath: null,
+        reason: 'REINDEXED',
+      }),
     ).toThrow(BadRequestException);
+  });
+
+  it('delegates verified mobile cached-file access events', () => {
+    const mobilePrincipal = {
+      ...principal,
+      deviceId: null,
+      authProviderUid: 'firebase-user',
+      displayName: 'Mobile',
+      authType: 'FIREBASE' as const,
+    };
+    const service = {
+      recordAccess: jest.fn().mockReturnValue({
+        cachedFileId: '018f4c7b-1ad6-7c95-bf34-5e45881f98a4',
+        eventType: 'DOWNLOAD_COMPLETED',
+        usageScore: 15,
+        lastAccessedAt: '2026-07-14T01:02:03.000Z',
+      }),
+    };
+    const controller = new SmartCacheController(service as never);
+    const body = { eventType: 'DOWNLOAD_COMPLETED' as const };
+
+    expect(
+      controller.recordAccess(
+        mobilePrincipal,
+        '018f4c7b-1ad6-7c95-bf34-5e45881f98a4',
+        body,
+      ),
+    ).toEqual({
+      cachedFileId: '018f4c7b-1ad6-7c95-bf34-5e45881f98a4',
+      eventType: 'DOWNLOAD_COMPLETED',
+      usageScore: 15,
+      lastAccessedAt: '2026-07-14T01:02:03.000Z',
+    });
+    expect(service.recordAccess).toHaveBeenCalledWith(
+      mobilePrincipal.userId,
+      '018f4c7b-1ad6-7c95-bf34-5e45881f98a4',
+      body,
+    );
   });
 });

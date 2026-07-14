@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import {
   cacheCandidateBatchSchema,
+  cachedFileAccessEventSchema,
   completeCacheUploadSchema,
   markCachedFilesStaleSchema,
   updateSmartCachePolicySchema,
@@ -964,16 +965,12 @@ export class SmartCacheService {
               eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
             ),
           )
-          .for('update')
+          .for('share')
           .limit(1)
       )[0];
       if (!owned) throw new NotFoundException({ code: 'NOT_FOUND' });
       if (!owned.sha256)
         throw new ConflictException({ code: 'CHECKSUM_UNAVAILABLE' });
-      await tx
-        .update(cachedFiles)
-        .set({ lastAccessedAt: new Date() })
-        .where(eq(cachedFiles.id, cachedFileId));
       return {
         downloadUrl: await this.storage.downloadUrl(owned.objectKey, 60),
         sizeBytes: owned.sizeBytes,
@@ -981,6 +978,66 @@ export class SmartCacheService {
         encryptionMetadata: owned.encryptionMetadata,
         freshnessStatus: owned.freshnessStatus,
         lastVerifiedAt: owned.lastVerifiedAt,
+      };
+    });
+  }
+
+  async recordAccess(
+    userId: string,
+    cachedFileId: string,
+    body: z.infer<typeof cachedFileAccessEventSchema>,
+  ) {
+    this.enabled();
+    return this.db.transaction(async (tx) => {
+      const candidate = (
+        await tx
+          .select({ file: cachedFiles, room: rooms })
+          .from(cachedFiles)
+          .innerJoin(
+            rooms,
+            and(
+              eq(cachedFiles.roomId, rooms.id),
+              eq(rooms.userId, userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .where(eq(cachedFiles.id, cachedFileId))
+          .limit(1)
+      )[0];
+      if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
+      await this.lockActiveRoom(
+        tx,
+        userId,
+        candidate.room.desktopDeviceId,
+        candidate.room.id,
+      );
+      const accessedAt = new Date();
+      const updated = (
+        await tx
+          .update(cachedFiles)
+          .set({
+            lastAccessedAt: accessedAt,
+            usageScore: sql`${cachedFiles.usageScore} + 5`,
+          })
+          .where(
+            and(
+              eq(cachedFiles.id, cachedFileId),
+              eq(cachedFiles.roomId, candidate.room.id),
+              eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
+            ),
+          )
+          .returning({
+            id: cachedFiles.id,
+            usageScore: cachedFiles.usageScore,
+            lastAccessedAt: cachedFiles.lastAccessedAt,
+          })
+      )[0];
+      if (!updated) throw new NotFoundException({ code: 'NOT_FOUND' });
+      return {
+        cachedFileId: updated.id,
+        eventType: body.eventType,
+        usageScore: updated.usageScore,
+        lastAccessedAt: updated.lastAccessedAt?.toISOString() ?? null,
       };
     });
   }

@@ -1000,6 +1000,11 @@ export const completeCacheUploadSchema = z
     encryptionMetadata: smartCacheEncryptionMetadataSchema,
   })
   .strict();
+export const cachedFileAccessEventSchema = z
+  .object({
+    eventType: z.literal("DOWNLOAD_COMPLETED"),
+  })
+  .strict();
 
 export const mutationHeadersSchema = z
   .object({

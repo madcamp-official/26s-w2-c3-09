@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13)
 
+- Mobile smart-cache downloads now POST `DOWNLOAD_COMPLETED` to `/v1/cached-files/:cachedFileId/access-events` only after local save and SHA-256 verification; the server records `lastAccessedAt`/usage score from that verified ACK instead of treating signed URL issuance as a completed access.
 - Mobile file browse requests now listen for `file.browse.ready` / `file.browse.failed` WebSocket events and wake only the matching active request; REST status checks are a 5-second safety fallback instead of a fixed 2-second polling loop, and browse events no longer trigger Home summary reloads.
 - Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but HomeController no longer subscribes to that gate as a summary dependency, with regression coverage proving the loop does not trigger another `/v1/home/summary` fetch.
 - Mobile connection safety reads now use one lightweight `/v1/connections/summary` request for ACTIVE device/room gate data only; `/v1/home/summary` remains the richer Home projection and is no longer reused by the 5-second safety reconcile.

@@ -44,6 +44,23 @@ Map<String, dynamic> parseSmartCachePolicyInput({
   };
 }
 
+String smartCacheAccessEventPath(String cachedFileId) =>
+    '/v1/cached-files/$cachedFileId/access-events';
+
+Map<String, dynamic> smartCacheDownloadCompletedAccessEvent() => const {
+  'eventType': 'DOWNLOAD_COMPLETED',
+};
+
+Future<void> recordSmartCacheDownloadCompleted(
+  ApiClient api,
+  String cachedFileId,
+) {
+  return api.post(
+    smartCacheAccessEventPath(cachedFileId),
+    smartCacheDownloadCompletedAccessEvent(),
+  );
+}
+
 class SmartCachePage extends ConsumerStatefulWidget {
   const SmartCachePage({super.key, required this.roomId});
   final String roomId;
@@ -262,6 +279,22 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
           }
         },
       );
+      Object? accessEventError;
+      try {
+        await recordSmartCacheDownloadCompleted(api, id);
+      } catch (error) {
+        accessEventError = error;
+      }
+      if (mounted && accessEventError != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'checksum 확인 후 저장 완료, 사용 기록 동기화 실패: $accessEventError',
+            ),
+          ),
+        );
+        return;
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('checksum 확인 후 저장 완료: ${saved.path}')),

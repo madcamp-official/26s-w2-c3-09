@@ -17,6 +17,7 @@ import {
   roomRemovedEventPayloadSchema,
   MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION,
   chatMessagesQuerySchema,
+  cachedFileAccessEventSchema,
   completeCacheUploadSchema,
   createChatMessageResponseSchema,
   commandDraftSummarySchema,
@@ -51,6 +52,22 @@ describe("push notification token contract", () => {
       registerPushNotificationTokenSchema.safeParse({
         token: "provider-token-with-enough-entropy",
         platform: "WINDOWS",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("records only verified mobile cached-file access events", () => {
+    expect(
+      cachedFileAccessEventSchema.parse({ eventType: "DOWNLOAD_COMPLETED" }),
+    ).toEqual({ eventType: "DOWNLOAD_COMPLETED" });
+    expect(
+      cachedFileAccessEventSchema.safeParse({ eventType: "DOWNLOAD_STARTED" })
+        .success,
+    ).toBe(false);
+    expect(
+      cachedFileAccessEventSchema.safeParse({
+        eventType: "DOWNLOAD_COMPLETED",
+        sourceRelativePath: "docs/report.pdf",
       }).success,
     ).toBe(false);
   });

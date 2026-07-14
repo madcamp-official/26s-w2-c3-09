@@ -960,6 +960,26 @@ paths:
           }
         "409": { description: Stored checksum is unavailable }
         "503": { description: Object storage is not configured }
+  /v1/cached-files/{cachedFileId}/access-events:
+    parameters:
+      - {
+          in: path,
+          name: cachedFileId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      description: Records a mobile cached-file access only after the client has saved and checksum-verified the download.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/CachedFileAccessEvent" } }
+      responses:
+        "201": { description: Verified cached-file access recorded }
+        "404":
+          { description: Cached file is missing or unavailable to this user }
+        "503": { description: Smart cache is not configured }
   /v1/character:
     get:
       responses:
@@ -1819,10 +1839,7 @@ components:
             - { $ref: "#/components/schemas/SafeCommandRelativePath" }
             - { type: "null" }
         reason:
-          {
-            type: string,
-            enum: [SOURCE_CHANGED, SOURCE_REMOVED, REINDEXED],
-          }
+          { type: string, enum: [SOURCE_CHANGED, SOURCE_REMOVED, REINDEXED] }
     CacheUploadReservation:
       type: object
       additionalProperties: false
@@ -1856,8 +1873,7 @@ components:
     CompleteCacheUpload:
       type: object
       additionalProperties: false
-      required:
-        [sizeBytes, sha256, usageScore, manualPin, encryptionMetadata]
+      required: [sizeBytes, sha256, usageScore, manualPin, encryptionMetadata]
       properties:
         sizeBytes: { type: integer, minimum: 1 }
         sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
@@ -1865,6 +1881,12 @@ components:
         manualPin: { type: boolean }
         encryptionMetadata:
           { $ref: "#/components/schemas/SmartCacheEncryptionMetadata" }
+    CachedFileAccessEvent:
+      type: object
+      additionalProperties: false
+      required: [eventType]
+      properties:
+        eventType: { type: string, enum: [DOWNLOAD_COMPLETED] }
     SmartCacheEncryptionMetadata:
       type: object
       additionalProperties: false

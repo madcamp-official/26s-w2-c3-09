@@ -12,6 +12,7 @@ import {
 } from '@nestjs/common';
 import {
   cacheCandidateBatchSchema,
+  cachedFileAccessEventSchema,
   completeCacheUploadSchema,
   idempotencyKeySchema,
   markCachedFilesStaleSchema,
@@ -116,5 +117,15 @@ export class SmartCacheController {
     @Param('cachedFileId') id: string,
   ) {
     return this.cache.download(p.userId, id);
+  }
+
+  @Post('cached-files/:cachedFileId/access-events')
+  recordAccess(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('cachedFileId') id: string,
+    @Body(new ZodValidationPipe(cachedFileAccessEventSchema))
+    body: z.infer<typeof cachedFileAccessEventSchema>,
+  ) {
+    return this.cache.recordAccess(p.userId, id, body);
   }
 }
