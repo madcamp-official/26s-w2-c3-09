@@ -1,0 +1,16 @@
+{
+  "frame_w": 1154,
+  "frame_h": 1200,
+  "frames": 12,
+  "fps": 9,
+  "crop_from_source": [
+    60,
+    30,
+    1214,
+    1230
+  ],
+  "anchor": {
+    "feet_mid_x": 540,
+    "ground_y": 1140
+  }
+}

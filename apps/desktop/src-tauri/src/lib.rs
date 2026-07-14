@@ -180,6 +180,7 @@ pub fn run() {
             commands::overlay::emit_character_event,
             commands::overlay::show_overlay,
             commands::overlay::hide_overlay,
+            commands::overlay::set_house_overlay_locked,
             commands::smart_cache::record_smart_cache_usage_event,
             commands::smart_cache::update_smart_cache_file_preference,
             commands::smart_cache::list_smart_cache_candidates,

@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "desktop-vite",
-      "runtimeExecutable": "C:\\Users\\user\\2026-project\\kaist_madcamp\\week2\\apps\\desktop\\node_modules\\.bin\\vite.CMD",
-      "runtimeArgs": ["C:\\Users\\user\\2026-project\\kaist_madcamp\\week2\\apps\\desktop"],
+      "name": "desktop-ui",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@mousekeeper/desktop", "dev"],
       "port": 1420
     }
   ]

@@ -9,7 +9,7 @@
 use crate::overlay::{CharacterEvent, OverlayRuntime, OverlayStatus};
 
 #[cfg(feature = "tauri-commands")]
-use crate::overlay::{CHARACTER_EVENT_NAME, OVERLAY_WINDOW_LABEL};
+use crate::overlay::{CHARACTER_EVENT_NAME, HOUSE_OVERLAY_WINDOW_LABEL, OVERLAY_WINDOW_LABEL};
 
 #[cfg(feature = "tauri-commands")]
 use tauri::{Emitter, Manager};
@@ -43,6 +43,12 @@ pub fn show_overlay_window(
     app: &tauri::AppHandle,
     runtime: &OverlayRuntime,
 ) -> Result<OverlayStatus, String> {
+    let house = match app.get_webview_window(HOUSE_OVERLAY_WINDOW_LABEL) {
+        Some(window) => window,
+        None => build_house_overlay_window(app)?,
+    };
+    window_show_without_focus(&house, "house overlay")?;
+
     let window = match app.get_webview_window(OVERLAY_WINDOW_LABEL) {
         Some(window) => window,
         None => build_overlay_window(app)?,
@@ -72,7 +78,26 @@ pub fn hide_overlay(
             .hide()
             .map_err(|error| format!("WINDOW_MISSING: cannot hide overlay: {error}"))?;
     }
+    if let Some(window) = app.get_webview_window(HOUSE_OVERLAY_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|error| format!("WINDOW_MISSING: cannot hide house overlay: {error}"))?;
+    }
     runtime.mark_hidden().map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn set_house_overlay_locked(app: tauri::AppHandle, locked: bool) -> Result<(), String> {
+    let window = match app.get_webview_window(HOUSE_OVERLAY_WINDOW_LABEL) {
+        Some(window) => window,
+        None => build_house_overlay_window(&app)?,
+    };
+    let _ = window.set_always_on_bottom(true);
+    if !locked {
+        window_show_without_focus(&window, "house overlay")?;
+    }
+    Ok(())
 }
 
 #[cfg(not(feature = "tauri-commands"))]
@@ -136,13 +161,59 @@ fn build_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, 
         tauri::WebviewUrl::App("index.html".into()),
     )
     .title("MouseKeeper")
-    .inner_size(340.0, 460.0)
+    .inner_size(450.0, 360.0)
     .resizable(false)
     .decorations(false)
+    .transparent(true)
+    .shadow(false)
     .always_on_top(true)
     .skip_taskbar(true)
     .build()
     .map_err(|error| format!("WINDOW_MISSING: cannot create overlay window: {error}"))
+}
+
+#[cfg(feature = "tauri-commands")]
+fn build_house_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        HOUSE_OVERLAY_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("MouseKeeper House")
+    .inner_size(820.0, 590.0)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_bottom(true)
+    .focusable(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|error| format!("WINDOW_MISSING: cannot create house overlay window: {error}"))?;
+
+    position_house_overlay(app, &window);
+    Ok(window)
+}
+
+#[cfg(feature = "tauri-commands")]
+fn window_show_without_focus(window: &tauri::WebviewWindow, name: &str) -> Result<(), String> {
+    window
+        .show()
+        .map_err(|error| format!("WINDOW_MISSING: cannot show {name}: {error}"))?;
+    let _ = window.set_always_on_bottom(true);
+    Ok(())
+}
+
+#[cfg(feature = "tauri-commands")]
+fn position_house_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = app.primary_monitor() else {
+        return;
+    };
+    let monitor_position = monitor.position();
+    let monitor_size = monitor.size();
+    let x = monitor_position.x + 32;
+    let y = monitor_position.y + monitor_size.height as i32 - 590 - 48;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
 fn get_overlay_status_impl(runtime: &OverlayRuntime) -> Result<OverlayStatus, String> {

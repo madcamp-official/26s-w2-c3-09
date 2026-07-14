@@ -38,7 +38,9 @@ export type OverlayStatus = {
 };
 
 export const OVERLAY_WINDOW_LABEL = "character-overlay";
+export const HOUSE_OVERLAY_WINDOW_LABEL = "house-overlay";
 export const CHARACTER_EVENT_NAME = "character-event";
+export const HOUSE_DROP_TARGET_EVENT = "house-drop-target";
 /// Fired by the overlay chat input. This is the ONLY thing overlay chat can do: hand a bounded
 /// text draft to the app for the draft/proposal flow (plan item 12). It never runs a file op.
 export const OVERLAY_DRAFT_REQUEST_EVENT = "overlay:draft-request";
@@ -63,11 +65,28 @@ export function hideOverlay() {
   return invokeOverlayCommand<OverlayStatus>("hide_overlay");
 }
 
+export function setHouseOverlayLocked(locked: boolean) {
+  return invokeOverlayCommand<void>("set_house_overlay_locked", { locked });
+}
+
 /** True when this JS context is running inside the overlay window (vs the main window). */
 export function isOverlayWindow() {
+  return isCharacterOverlayWindow() || isHouseOverlayWindow();
+}
+
+export function isCharacterOverlayWindow() {
   if (!window.__TAURI_INTERNALS__) return false;
   try {
     return getCurrentWindow().label === OVERLAY_WINDOW_LABEL;
+  } catch {
+    return false;
+  }
+}
+
+export function isHouseOverlayWindow() {
+  if (!window.__TAURI_INTERNALS__) return false;
+  try {
+    return getCurrentWindow().label === HOUSE_OVERLAY_WINDOW_LABEL;
   } catch {
     return false;
   }

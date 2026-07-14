@@ -3,6 +3,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 pub const OVERLAY_WINDOW_LABEL: &str = "character-overlay";
+pub const HOUSE_OVERLAY_WINDOW_LABEL: &str = "house-overlay";
 pub const CHARACTER_EVENT_NAME: &str = "character-event";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
