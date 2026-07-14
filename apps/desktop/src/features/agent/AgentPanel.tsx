@@ -12,7 +12,6 @@ import {
   BackgroundRuntimeStatus,
   getAgentConnectionStatus,
   getBackgroundRuntimeStatus,
-  listenForDesktopDeviceRevoked,
   PairingSession,
   pauseBackgroundRuntime,
   processAgentCommands,
@@ -175,22 +174,6 @@ export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean }
         : undefined;
     void resetForNewPairing(message);
   }, [connection?.device_id, connection?.last_error_code, connection?.server_base_url, connection?.state, pairing]);
-
-  useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return;
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    listenForDesktopDeviceRevoked(() => {
-      void resetForNewPairing("이 PC의 연결이 해제됐어요. 계속하려면 다시 페어링해 주세요.");
-    }).then((stop) => {
-      if (cancelled) stop();
-      else unlisten = stop;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
 
   useEffect(() => {
     if (!pairing) return;

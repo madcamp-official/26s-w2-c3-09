@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { getAgentConnectionStatus } from "./features/agent/agentApi";
+import {
+  getAgentConnectionStatus,
+  listenForDesktopDeviceRevoked
+} from "./features/agent/agentApi";
 import { AgentPanel, AutostartSetting } from "./features/agent/AgentPanel";
 import { listManagedRoots } from "./features/files/fileEngineApi";
 import { FileEnginePanel } from "./features/files/FileEnginePanel";
@@ -32,6 +35,7 @@ const DASHBOARD_SECTIONS: ReadonlyArray<{
 export function AppShell() {
   const [rootCount, setRootCount] = useState<number | null>(null);
   const [connectionState, setConnectionState] = useState<string | null>(null);
+  const [pairingEpoch, setPairingEpoch] = useState(0);
   const [section, setSection] = useState<DashboardSection>("rooms");
   const [selectedRootId, setSelectedRootId] = useState("");
 
@@ -63,6 +67,25 @@ export function AppShell() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshSetupState]);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenForDesktopDeviceRevoked(() => {
+      // The native heartbeat is authoritative: switch the entire manager back to setup,
+      // rather than creating a new code inside a dashboard panel that may be hidden.
+      setConnectionState("revoked");
+      setPairingEpoch((current) => current + 1);
+    }).then((stop) => {
+      if (cancelled) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const isPaired =
     connectionState === null
@@ -130,7 +153,7 @@ export function AppShell() {
                   <p>QR 또는 6자리 코드로 이 PC를 계정에 연결합니다.</p>
                 </div>
               </div>
-              <AgentPanel />
+              <AgentPanel key={`setup-pairing-${pairingEpoch}`} />
             </div>
             <div className="setup-card">
               <div className="setup-card-heading">
@@ -184,7 +207,7 @@ export function AppShell() {
 
           <div className="dashboard-main">
             <div className="dashboard-view" hidden={section !== "connection"} aria-label="PC 연결 상태">
-              <AgentPanel showAutostart={false} />
+              <AgentPanel key={`connection-pairing-${pairingEpoch}`} showAutostart={false} />
             </div>
             <div className="dashboard-view" hidden={section !== "settings"} aria-label="설정">
               <section className="panel settings-shell-panel">
