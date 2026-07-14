@@ -1,5 +1,26 @@
 # E2E Scenarios
 
+## Release preflight
+
+Run the preflight before claiming a release E2E pass:
+
+```powershell
+$env:MOUSEKEEPER_API_URL = "https://mousekeeper.madcamp-kaist.org"
+pnpm e2e:preflight
+```
+
+For local development while the working tree is intentionally dirty:
+
+```powershell
+$env:MOUSEKEEPER_API_URL = "http://127.0.0.1:3000"
+pnpm e2e:preflight -- -AllowDirty -RunLocalChecks
+```
+
+The preflight checks only prerequisites and never creates fake success data. A
+missing API URL, Android device, `adb`, `flutter`, `cargo`, `/health`, or
+`/ready` is reported as `UNCONFIGURED` or `FAIL`, and the scenarios below must
+not be marked passed until those blockers are resolved.
+
 This document defines repeatable end-to-end checks for MouseKeeper. It is a
 checklist, not proof that a scenario has passed. Record the command output,
 device IDs, room IDs, screenshots, and server logs in the release notes when a

@@ -4,6 +4,7 @@
   "packageManager": "pnpm@11.11.0",
   "scripts": {
     "check:contracts": "node scripts/check-openapi-coverage.mjs",
+    "e2e:preflight": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mousekeeper-release-e2e-preflight.ps1",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
     "build": "pnpm -r --if-present build"
