@@ -11,6 +11,12 @@ use tokio::time::{interval, Duration};
 
 #[cfg(feature = "tauri-commands")]
 const BACKGROUND_TICK_SECONDS: u64 = 5;
+#[cfg(feature = "tauri-commands")]
+const BACKGROUND_FAST_RECONCILE_EVERY_TICKS: u64 = 3;
+#[cfg(feature = "tauri-commands")]
+const BACKGROUND_FULL_RECONCILE_EVERY_TICKS: u64 = 6;
+#[cfg(feature = "tauri-commands")]
+const AUTO_CLEANUP_INTERVAL_MS: i64 = 15 * 1000;
 /// Delay before retrying the realtime Socket.IO connection after a failed initial connect. The
 /// REST background loop keeps working the whole time, so this only affects push responsiveness.
 #[cfg(feature = "tauri-commands")]
@@ -53,6 +59,9 @@ pub struct BackgroundRuntimeStatus {
     pub last_file_browse_count: usize,
     pub last_file_browse_completed_count: usize,
     pub last_file_browse_failed_count: usize,
+    pub last_file_index_reconcile_unix_ms: Option<i64>,
+    pub last_file_index_reconcile_root_count: usize,
+    pub last_file_index_reconcile_failed_count: usize,
     pub last_file_transfer_poll_unix_ms: Option<i64>,
     pub last_file_transfer_count: usize,
     pub last_file_transfer_uploaded_count: usize,
@@ -61,6 +70,12 @@ pub struct BackgroundRuntimeStatus {
     pub last_smart_cache_candidate_count: usize,
     pub last_smart_cache_uploaded_count: usize,
     pub last_smart_cache_failed_count: usize,
+    pub last_auto_cleanup_unix_ms: Option<i64>,
+    pub last_auto_cleanup_root_count: usize,
+    pub last_auto_cleanup_approved_count: usize,
+    pub last_auto_cleanup_executed_count: usize,
+    pub last_auto_cleanup_failed_count: usize,
+    pub last_auto_submitted_proposal_count: usize,
     pub last_outbox_flush_unix_ms: Option<i64>,
     pub last_outbox_sent_count: usize,
     pub last_outbox_failed_count: usize,
@@ -112,6 +127,9 @@ impl Default for BackgroundRuntime {
                 last_file_browse_count: 0,
                 last_file_browse_completed_count: 0,
                 last_file_browse_failed_count: 0,
+                last_file_index_reconcile_unix_ms: None,
+                last_file_index_reconcile_root_count: 0,
+                last_file_index_reconcile_failed_count: 0,
                 last_file_transfer_poll_unix_ms: None,
                 last_file_transfer_count: 0,
                 last_file_transfer_uploaded_count: 0,
@@ -120,6 +138,12 @@ impl Default for BackgroundRuntime {
                 last_smart_cache_candidate_count: 0,
                 last_smart_cache_uploaded_count: 0,
                 last_smart_cache_failed_count: 0,
+                last_auto_cleanup_unix_ms: None,
+                last_auto_cleanup_root_count: 0,
+                last_auto_cleanup_approved_count: 0,
+                last_auto_cleanup_executed_count: 0,
+                last_auto_cleanup_failed_count: 0,
+                last_auto_submitted_proposal_count: 0,
                 last_outbox_flush_unix_ms: None,
                 last_outbox_sent_count: 0,
                 last_outbox_failed_count: 0,
@@ -146,16 +170,11 @@ impl BackgroundRuntime {
         let agent_status = app
             .state::<crate::agent::AgentRuntime>()
             .connection_status();
-        if agent_status.device_id.is_none() {
-            let reason = if matches!(
-                agent_status.state,
-                crate::agent::AgentConnectionState::Revoked
-            ) {
-                DEVICE_REVOKED_REASON
-            } else {
-                "desktop device pairing is required"
-            };
-            return self.start_suspended(reason);
+        if matches!(
+            agent_status.state,
+            crate::agent::AgentConnectionState::Revoked
+        ) {
+            return self.start_suspended(DEVICE_REVOKED_REASON);
         }
 
         {
@@ -271,7 +290,7 @@ async fn run_background_loop(
     stop_signal: watch::Sender<bool>,
 ) {
     if matches!(
-        run_background_tick(&app, &status).await,
+        run_background_tick(&app, &status, BackgroundTickMode::HeartbeatAndFullReconcile,).await,
         BackgroundTickOutcome::Stop
     ) {
         let _ = stop_signal.send(true);
@@ -280,26 +299,31 @@ async fn run_background_loop(
 
     let mut ticker = interval(Duration::from_secs(BACKGROUND_TICK_SECONDS));
     ticker.tick().await;
+    let mut scheduled_tick_count = 0_u64;
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                scheduled_tick_count = scheduled_tick_count.saturating_add(1);
                 if matches!(
-                    run_background_tick(&app, &status).await,
+                    run_background_tick(
+                        &app,
+                        &status,
+                        scheduled_tick_mode(scheduled_tick_count),
+                    ).await,
                     BackgroundTickOutcome::Stop
                 ) {
                     let _ = stop_signal.send(true);
                     break;
                 }
             }
-            // A realtime notification arrived: run the same REST pass immediately instead of
-            // waiting for the next interval. The event is only a signal; the tick below is what
-            // actually reconciles state over REST.
+            // A realtime notification reconciles work immediately without sending an extra
+            // heartbeat. The five-second scheduled heartbeat remains the sole liveness cadence.
             _ = wake.notified() => {
                 update_status(&status, |status| {
                     status.last_realtime_signal_unix_ms = Some(unix_ms());
                 });
                 if matches!(
-                    run_background_tick(&app, &status).await,
+                    run_background_tick(&app, &status, BackgroundTickMode::FullReconcileOnly).await,
                     BackgroundTickOutcome::Stop
                 ) {
                     let _ = stop_signal.send(true);
@@ -379,68 +403,118 @@ enum BackgroundTickOutcome {
 }
 
 #[cfg(feature = "tauri-commands")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackgroundTickMode {
+    HeartbeatOnly,
+    FullReconcileOnly,
+    HeartbeatAndFastReconcile,
+    HeartbeatAndFullReconcile,
+}
+
+#[cfg(feature = "tauri-commands")]
+impl BackgroundTickMode {
+    fn sends_heartbeat(self) -> bool {
+        matches!(
+            self,
+            Self::HeartbeatOnly | Self::HeartbeatAndFastReconcile | Self::HeartbeatAndFullReconcile
+        )
+    }
+
+    fn reconciles(self) -> bool {
+        !matches!(self, Self::HeartbeatOnly)
+    }
+
+    fn runs_heavy_rest(self) -> bool {
+        matches!(
+            self,
+            Self::FullReconcileOnly | Self::HeartbeatAndFullReconcile
+        )
+    }
+}
+
+#[cfg(feature = "tauri-commands")]
+fn scheduled_tick_mode(tick: u64) -> BackgroundTickMode {
+    if tick % BACKGROUND_FULL_RECONCILE_EVERY_TICKS == 0 {
+        BackgroundTickMode::HeartbeatAndFullReconcile
+    } else if tick % BACKGROUND_FAST_RECONCILE_EVERY_TICKS == 0 {
+        BackgroundTickMode::HeartbeatAndFastReconcile
+    } else {
+        BackgroundTickMode::HeartbeatOnly
+    }
+}
+
+#[cfg(feature = "tauri-commands")]
 async fn run_background_tick(
     app: &tauri::AppHandle,
     status: &Arc<Mutex<BackgroundRuntimeStatus>>,
+    mode: BackgroundTickMode,
 ) -> BackgroundTickOutcome {
     use tauri::{Emitter, Manager};
 
     let agent = app.state::<crate::agent::AgentRuntime>();
     let sync_store = app.state::<crate::storage::agent_sync::AgentSyncStore>();
     let roots = app.state::<crate::storage::managed_roots::ManagedRootStore>();
+    let auto_approval = app.state::<crate::storage::auto_approval::AutoApprovalStore>();
     let outbox = app.state::<crate::storage::outbox::OutboxStore>();
     let smart_cache = app.state::<crate::storage::smart_cache::SmartCacheStore>();
     let watchers = app.state::<crate::storage::watchers::WatcherStore>();
+    let work_limiter = app.state::<crate::work_limiter::WorkLimiter>();
 
     // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
     let mut activity = crate::overlay::OverlayActivity::default();
 
-    let device_id_before_heartbeat = agent.connection_status().device_id;
-    match agent.heartbeat("ONLINE_IDLE".to_string()).await {
-        Ok(_) => update_status(status, |status| {
-            status.state = BackgroundRuntimeState::Running;
-            status.last_heartbeat_unix_ms = Some(unix_ms());
-            status.last_error_message = None;
-        }),
-        Err(error) => {
-            let is_confirmed_device_revoked = error.is_confirmed_device_revoked();
-            let error_message = error.to_string();
-            if is_confirmed_device_revoked {
-                let _ = crate::commands::agent::apply_local_device_revoked(
-                    &agent,
-                    &sync_store,
-                    &roots,
-                    &watchers,
-                )
-                .await;
-                if let Some(device_id) = device_id_before_heartbeat {
-                    let _ = sync_store.clear_device(&device_id).await;
-                    // The structured DEVICE_REVOKED verdict is authoritative even when the
-                    // revoked token can no longer fetch replay. Wake the UI so it starts a fresh
-                    // pairing session instead of waiting for its periodic status refresh.
-                    let _ = app.emit("desktop-device-revoked", device_id);
+    if mode.sends_heartbeat() {
+        let device_id_before_heartbeat = agent.connection_status().device_id;
+        match agent.heartbeat("ONLINE_IDLE".to_string()).await {
+            Ok(_) => update_status(status, |status| {
+                status.state = BackgroundRuntimeState::Running;
+                status.last_heartbeat_unix_ms = Some(unix_ms());
+                status.last_error_message = None;
+            }),
+            Err(error) => {
+                let is_confirmed_device_revoked = error.is_confirmed_device_revoked();
+                let error_message = error.to_string();
+                if is_confirmed_device_revoked {
+                    let _ = crate::commands::agent::apply_local_device_revoked(
+                        &agent,
+                        &sync_store,
+                        &roots,
+                        &watchers,
+                    )
+                    .await;
+                    if let Some(device_id) = device_id_before_heartbeat {
+                        let _ = sync_store.clear_device(&device_id).await;
+                        // The structured DEVICE_REVOKED verdict is authoritative even when the
+                        // revoked token can no longer fetch replay. Wake the UI so it starts a fresh
+                        // pairing session instead of waiting for its periodic status refresh.
+                        let _ = app.emit("desktop-device-revoked", device_id);
+                    }
+                    mark_suspended(status, DEVICE_REVOKED_REASON);
+                } else {
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error_message);
+                    });
                 }
-                mark_suspended(status, DEVICE_REVOKED_REASON);
-            } else {
-                update_status(status, |status| {
-                    status.last_error_message = Some(error_message);
-                });
+                // Heartbeat failure means we are offline; tell the overlay so the character can
+                // reflect it, then stop this pass.
+                emit_overlay_activity(
+                    app,
+                    crate::overlay::OverlayActivity {
+                        had_error: true,
+                        ..crate::overlay::OverlayActivity::default()
+                    },
+                );
+                return if is_confirmed_device_revoked {
+                    BackgroundTickOutcome::Stop
+                } else {
+                    BackgroundTickOutcome::Continue
+                };
             }
-            // Heartbeat failure means we are offline; tell the overlay so the character can reflect
-            // it, then stop this pass.
-            emit_overlay_activity(
-                app,
-                crate::overlay::OverlayActivity {
-                    had_error: true,
-                    ..crate::overlay::OverlayActivity::default()
-                },
-            );
-            return if is_confirmed_device_revoked {
-                BackgroundTickOutcome::Stop
-            } else {
-                BackgroundTickOutcome::Continue
-            };
         }
+    }
+
+    if !mode.reconciles() {
+        return BackgroundTickOutcome::Continue;
     }
 
     if let Some(device_id) = agent.connection_status().device_id {
@@ -452,164 +526,328 @@ async fn run_background_tick(
                 mark_suspended(status, DEVICE_REVOKED_REASON);
                 return BackgroundTickOutcome::Stop;
             }
-            Err(error) => update_status(status, |status| {
-                status.last_error_message = Some(error);
-            }),
+            Err(error) => {
+                update_status(status, |status| {
+                    status.last_error_message = Some(error);
+                });
+                // Replay establishes the durable room/device authority used by every autonomous
+                // action below. Fail closed for this tick so a missed room.removed event cannot be
+                // followed by a stale proposal or file operation.
+                emit_overlay_activity(
+                    app,
+                    crate::overlay::OverlayActivity {
+                        had_error: true,
+                        ..crate::overlay::OverlayActivity::default()
+                    },
+                );
+                return BackgroundTickOutcome::Continue;
+            }
         }
         if stop_if_agent_revoked(app, status, &agent) {
             return BackgroundTickOutcome::Stop;
         }
     }
 
-    match crate::command_processor::process_pending_commands(&agent, &roots, &outbox).await {
-        Ok(report) => {
-            activity.processed_command_count = report.processed_count;
-            activity.submitted_proposal_count = report.submitted_proposal_count;
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_command_poll_unix_ms = Some(unix_ms());
-                status.last_command_count = report.inspected_count;
-                status.last_processed_command_count = report.processed_count;
-                status.last_submitted_proposal_count = report.submitted_proposal_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} command(s) failed during proposal processing",
-                        report.failed_count
-                    ));
+    // Background proposals are computed only after heartbeat and replay have confirmed that this
+    // desktop still owns an active server connection.
+    let mut pending_auto_cleanup = None;
+    if should_run_auto_cleanup(status) {
+        match work_limiter.try_write() {
+            Ok(_permit) => {
+                match crate::auto_cleanup_processor::process_auto_cleanup(&roots, &auto_approval) {
+                    Ok(report) => {
+                        for proposal in &report.proposals {
+                            let _ = app.emit(
+                                crate::auto_cleanup_processor::AUTO_CLEANUP_PROPOSAL_EVENT,
+                                proposal,
+                            );
+                        }
+                        activity.executed_item_count += report.executed_count;
+                        if report.failed_count > 0 {
+                            activity.had_error = true;
+                        }
+                        update_status(status, |status| {
+                            status.state = BackgroundRuntimeState::Running;
+                            status.last_auto_cleanup_unix_ms = Some(unix_ms());
+                            status.last_auto_cleanup_root_count = report.proposed_root_count;
+                            status.last_auto_cleanup_approved_count = report.approved_count;
+                            status.last_auto_cleanup_executed_count = report.executed_count;
+                            status.last_auto_cleanup_failed_count = report.failed_count;
+                            if report.failed_count > 0 {
+                                status.last_error_message = Some(format!(
+                                    "{} auto cleanup root(s) failed",
+                                    report.failed_count
+                                ));
+                            }
+                        });
+                        pending_auto_cleanup = Some(report);
+                    }
+                    Err(error) => {
+                        activity.had_error = true;
+                        update_status(status, |status| {
+                            status.state = BackgroundRuntimeState::Running;
+                            status.last_auto_cleanup_unix_ms = Some(unix_ms());
+                            status.last_error_message = Some(error);
+                        });
+                    }
                 }
-            });
+            }
+            Err(error) => record_busy_skip(status, error),
         }
-        Err(error) => {
+    }
+
+    // Now that the heartbeat proved we are online, push this pass's autonomous cleanup proposals to
+    // the server so they surface on mobile as pending approvals. Deliberately best-effort: a
+    // failure here is counted but never stops the tick.
+    if let Some(cleanup) = pending_auto_cleanup {
+        let auto =
+            crate::auto_proposal::submit_autonomous_proposals(&agent, &roots, &cleanup).await;
+        activity.submitted_proposal_count += auto.submitted_count;
+        if auto.failed_count > 0 {
             activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
         }
+        update_status(status, |status| {
+            status.last_auto_submitted_proposal_count = auto.submitted_count;
+        });
+        if stop_if_agent_revoked(app, status, &agent) {
+            return BackgroundTickOutcome::Stop;
+        }
+    }
+
+    match work_limiter.try_scan() {
+        Ok(_permit) => {
+            match crate::command_processor::process_pending_commands(&agent, &roots, &outbox).await
+            {
+                Ok(report) => {
+                    activity.processed_command_count = report.processed_count;
+                    activity.submitted_proposal_count = report.submitted_proposal_count;
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_command_poll_unix_ms = Some(unix_ms());
+                        status.last_command_count = report.inspected_count;
+                        status.last_processed_command_count = report.processed_count;
+                        status.last_submitted_proposal_count = report.submitted_proposal_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} command(s) failed during proposal processing",
+                                report.failed_count
+                            ));
+                        }
+                    });
+                }
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
+        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }
 
-    match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox).await {
-        Ok(report) => {
-            activity.executed_item_count = report.executed_item_count;
-            activity.execution_failed_count = report.failed_count;
-            update_status(status, |status| {
-                status.last_decision_poll_unix_ms = Some(unix_ms());
-                status.last_decision_count = report.inspected_count;
-                status.last_executed_item_count = report.executed_item_count;
-                status.last_execution_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} decision(s) failed during execution",
-                        report.failed_count
-                    ));
+    match work_limiter.try_write() {
+        Ok(_permit) => {
+            match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox)
+                .await
+            {
+                Ok(report) => {
+                    activity.executed_item_count = report.executed_item_count;
+                    activity.execution_failed_count = report.failed_count;
+                    update_status(status, |status| {
+                        status.last_decision_poll_unix_ms = Some(unix_ms());
+                        status.last_decision_count = report.inspected_count;
+                        status.last_executed_item_count = report.executed_item_count;
+                        status.last_execution_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} decision(s) failed during execution",
+                                report.failed_count
+                            ));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }
 
-    match crate::file_browse_processor::process_pending_file_browse_requests(&agent, &roots).await {
-        Ok(report) => {
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_file_browse_poll_unix_ms = Some(unix_ms());
-                status.last_file_browse_count = report.inspected_count;
-                status.last_file_browse_completed_count = report.completed_count;
-                status.last_file_browse_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} file browse request(s) failed",
-                        report.failed_count
-                    ));
+    if mode.runs_heavy_rest() {
+        match work_limiter.try_scan() {
+            Ok(_permit) => {
+                match crate::watcher_lifecycle::reconcile_watched_root_indexes(
+                    &roots,
+                    &watchers,
+                    |root_id| {
+                        crate::cleanliness::reconcile_cleanliness_snapshot(app, root_id).map(|_| ())
+                    },
+                ) {
+                    Ok(report) => {
+                        if report.failed_root_count > 0 {
+                            activity.had_error = true;
+                        }
+                        update_status(status, |status| {
+                            status.last_file_index_reconcile_unix_ms = Some(unix_ms());
+                            status.last_file_index_reconcile_root_count =
+                                report.inspected_root_count;
+                            status.last_file_index_reconcile_failed_count =
+                                report.failed_root_count;
+                            if report.failed_root_count > 0 {
+                                status.last_error_message = Some(format!(
+                                    "{} managed root index reconcile(s) failed",
+                                    report.failed_root_count
+                                ));
+                            }
+                        });
+                    }
+                    Err(error) => {
+                        activity.had_error = true;
+                        update_status(status, |status| {
+                            status.last_error_message = Some(error);
+                        });
+                    }
                 }
-            });
+            }
+            Err(error) => record_busy_skip(status, error),
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
+    }
+
+    match work_limiter.try_scan() {
+        Ok(_permit) => {
+            match crate::file_browse_processor::process_pending_file_browse_requests(&agent, &roots)
+                .await
+            {
+                Ok(report) => {
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_file_browse_poll_unix_ms = Some(unix_ms());
+                        status.last_file_browse_count = report.inspected_count;
+                        status.last_file_browse_completed_count = report.completed_count;
+                        status.last_file_browse_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} file browse request(s) failed",
+                                report.failed_count
+                            ));
+                        }
+                    });
+                }
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }
 
-    match crate::file_transfer_processor::process_pending_file_transfers(&agent, &roots, &outbox)
-        .await
-    {
-        Ok(report) => {
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_file_transfer_poll_unix_ms = Some(unix_ms());
-                status.last_file_transfer_count = report.inspected_count;
-                status.last_file_transfer_uploaded_count = report.uploaded_count;
-                status.last_file_transfer_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message =
-                        Some(format!("{} file transfer(s) failed", report.failed_count));
+    // Fast reconcile runs every 15 seconds and handles low-cost control-plane work.
+    // File transfer and smart-cache discovery can touch storage/object APIs, so scheduled
+    // polling keeps those on the 30-second full pass. Realtime wakeups still use a full pass
+    // when the server tells us new agent work exists.
+    if !mode.runs_heavy_rest() {
+        flush_background_outbox(&agent, &outbox, status).await;
+        if stop_if_agent_revoked(app, status, &agent) {
+            return BackgroundTickOutcome::Stop;
+        }
+        emit_overlay_activity(app, activity);
+        return BackgroundTickOutcome::Continue;
+    }
+
+    match work_limiter.try_transfer() {
+        Ok(_permit) => {
+            match crate::file_transfer_processor::process_pending_file_transfers(
+                &agent, &roots, &outbox,
+            )
+            .await
+            {
+                Ok(report) => {
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_file_transfer_poll_unix_ms = Some(unix_ms());
+                        status.last_file_transfer_count = report.inspected_count;
+                        status.last_file_transfer_uploaded_count = report.uploaded_count;
+                        status.last_file_transfer_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message =
+                                Some(format!("{} file transfer(s) failed", report.failed_count));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }
 
-    match crate::smart_cache_processor::process_smart_cache_for_enabled_rooms(
-        &agent,
-        &roots,
-        &smart_cache,
-        &outbox,
-        25,
-    )
-    .await
-    {
-        Ok(report) => {
-            if report.failed_count > 0 {
-                activity.had_error = true;
-            }
-            update_status(status, |status| {
-                status.last_smart_cache_poll_unix_ms = Some(unix_ms());
-                status.last_smart_cache_candidate_count = report.inspected_count;
-                status.last_smart_cache_uploaded_count = report.uploaded_count;
-                status.last_smart_cache_failed_count = report.failed_count;
-                if report.failed_count > 0 {
-                    status.last_error_message = Some(format!(
-                        "{} smart cache item(s) failed",
-                        report.failed_count
-                    ));
+    match work_limiter.try_transfer() {
+        Ok(_permit) => {
+            match crate::smart_cache_processor::process_smart_cache_for_enabled_rooms(
+                &agent,
+                &roots,
+                &smart_cache,
+                &outbox,
+                25,
+            )
+            .await
+            {
+                Ok(report) => {
+                    if report.failed_count > 0 {
+                        activity.had_error = true;
+                    }
+                    update_status(status, |status| {
+                        status.last_smart_cache_poll_unix_ms = Some(unix_ms());
+                        status.last_smart_cache_candidate_count = report.inspected_count;
+                        status.last_smart_cache_uploaded_count = report.uploaded_count;
+                        status.last_smart_cache_failed_count = report.failed_count;
+                        if report.failed_count > 0 {
+                            status.last_error_message = Some(format!(
+                                "{} smart cache item(s) failed",
+                                report.failed_count
+                            ));
+                        }
+                    });
                 }
-            });
+                Err(error) => {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(error);
+                    });
+                }
+            }
         }
-        Err(error) => {
-            activity.had_error = true;
-            update_status(status, |status| {
-                status.last_error_message = Some(error);
-            });
-        }
+        Err(error) => record_busy_skip(status, error),
     }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
@@ -618,7 +856,24 @@ async fn run_background_tick(
     // Deliver everything the command and decision passes just queued (plus any backlog from a
     // previous tick when the network was down). This runs last so a result enqueued moments ago
     // is sent in the same tick when the network is healthy.
-    match crate::outbox_processor::flush_outbox(&agent, &outbox).await {
+    flush_background_outbox(&agent, &outbox, status).await;
+    if stop_if_agent_revoked(app, status, &agent) {
+        return BackgroundTickOutcome::Stop;
+    }
+
+    // Turn this whole pass into one character state for the overlay. This is best-effort: if no
+    // overlay window is open it is silently skipped.
+    emit_overlay_activity(app, activity);
+    BackgroundTickOutcome::Continue
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn flush_background_outbox(
+    agent: &crate::agent::AgentRuntime,
+    outbox: &crate::storage::outbox::OutboxStore,
+    status: &Arc<Mutex<BackgroundRuntimeStatus>>,
+) {
+    match crate::outbox_processor::flush_outbox(agent, outbox).await {
         Ok(report) => update_status(status, |status| {
             status.last_outbox_flush_unix_ms = Some(unix_ms());
             status.last_outbox_sent_count = report.sent_count;
@@ -634,14 +889,20 @@ async fn run_background_tick(
             status.last_error_message = Some(error);
         }),
     }
-    if stop_if_agent_revoked(app, status, &agent) {
-        return BackgroundTickOutcome::Stop;
-    }
+}
 
-    // Turn this whole pass into one character state for the overlay. This is best-effort: if no
-    // overlay window is open it is silently skipped.
-    emit_overlay_activity(app, activity);
-    BackgroundTickOutcome::Continue
+#[cfg(feature = "tauri-commands")]
+fn should_run_auto_cleanup(status: &Arc<Mutex<BackgroundRuntimeStatus>>) -> bool {
+    let now = unix_ms();
+    status
+        .lock()
+        .map(|status| {
+            status
+                .last_auto_cleanup_unix_ms
+                .map(|last| now.saturating_sub(last) >= AUTO_CLEANUP_INTERVAL_MS)
+                .unwrap_or(true)
+        })
+        .unwrap_or(false)
 }
 
 /// Emits the derived character state to the overlay window, if one is open. The overlay bridge is
@@ -740,6 +1001,13 @@ fn mark_suspended(status: &Arc<Mutex<BackgroundRuntimeStatus>>, reason: &str) {
     });
 }
 
+#[cfg(feature = "tauri-commands")]
+fn record_busy_skip(status: &Arc<Mutex<BackgroundRuntimeStatus>>, message: String) {
+    update_status(status, |status| {
+        status.last_error_message = Some(message);
+    });
+}
+
 fn update_status(
     status: &Arc<Mutex<BackgroundRuntimeStatus>>,
     update: impl FnOnce(&mut BackgroundRuntimeStatus),
@@ -758,7 +1026,30 @@ fn unix_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "tauri-commands")]
+    use super::{scheduled_tick_mode, BackgroundTickMode};
     use super::{BackgroundRuntime, BackgroundRuntimeState};
+
+    #[cfg(feature = "tauri-commands")]
+    #[test]
+    fn scheduled_ticks_keep_heartbeats_frequent_and_split_rest_reconcile() {
+        assert_eq!(scheduled_tick_mode(1), BackgroundTickMode::HeartbeatOnly);
+        assert_eq!(scheduled_tick_mode(2), BackgroundTickMode::HeartbeatOnly);
+        assert_eq!(
+            scheduled_tick_mode(3),
+            BackgroundTickMode::HeartbeatAndFastReconcile
+        );
+        assert!(scheduled_tick_mode(3).sends_heartbeat());
+        assert!(scheduled_tick_mode(3).reconciles());
+        assert!(!scheduled_tick_mode(3).runs_heavy_rest());
+        assert_eq!(
+            scheduled_tick_mode(6),
+            BackgroundTickMode::HeartbeatAndFullReconcile
+        );
+        assert!(scheduled_tick_mode(6).sends_heartbeat());
+        assert!(scheduled_tick_mode(6).reconciles());
+        assert!(scheduled_tick_mode(6).runs_heavy_rest());
+    }
 
     #[test]
     fn starts_suspended_until_transport_exists() {
@@ -805,6 +1096,9 @@ mod tests {
         assert_eq!(status.last_file_browse_count, 0);
         assert_eq!(status.last_file_browse_completed_count, 0);
         assert_eq!(status.last_file_browse_failed_count, 0);
+        assert!(status.last_file_index_reconcile_unix_ms.is_none());
+        assert_eq!(status.last_file_index_reconcile_root_count, 0);
+        assert_eq!(status.last_file_index_reconcile_failed_count, 0);
         assert!(status.last_file_transfer_poll_unix_ms.is_none());
         assert_eq!(status.last_file_transfer_count, 0);
         assert_eq!(status.last_file_transfer_uploaded_count, 0);

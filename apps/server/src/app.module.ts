@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { SentryGlobalFilter, SentryModule } from '@sentry/nestjs/setup';
 import { HealthModule } from './health/health.module';
+import { HomeModule } from './home/home.module';
 import { AuditModule } from './audit/audit.module';
 import { CommandsModule } from './commands/commands.module';
 import { CharacterModule } from './character/character.module';
@@ -34,6 +35,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     ExecutionsModule,
     FileAccessModule,
     HealthModule,
+    HomeModule,
     NotificationsModule,
     PairingModule,
     PresenceModule,

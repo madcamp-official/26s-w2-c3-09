@@ -35,6 +35,668 @@ final realtimeCharacterKindProvider =
       RealtimeCharacterKindController.new,
     );
 
+enum RealtimeHomeUpdateKind {
+  presence,
+  devicePaired,
+  deviceRemoved,
+  roomRemoved,
+  proposalCreated,
+  decisionCreated,
+  roomSnapshotUpdated,
+  commandStatus,
+  executionStatus,
+  refreshSummary,
+}
+
+class RealtimeHomeUpdate {
+  const RealtimeHomeUpdate({
+    required this.kind,
+    required this.eventType,
+    this.deviceId,
+    this.roomId,
+    this.proposalId,
+    this.decisionId,
+    this.snapshotId,
+    this.commandId,
+    this.executionId,
+    this.device,
+    this.decisionType,
+    this.proposalStatus,
+    this.proposalSummary,
+    this.proposalItemCount,
+    this.pendingProposalCount,
+    this.roomSnapshot,
+    this.presence,
+    this.commandStatus,
+    this.executionStatus,
+  });
+
+  final RealtimeHomeUpdateKind kind;
+  final String eventType;
+  final String? deviceId;
+  final String? roomId;
+  final String? proposalId;
+  final String? decisionId;
+  final String? snapshotId;
+  final String? commandId;
+  final String? executionId;
+  final Map<String, dynamic>? device;
+  final String? decisionType;
+  final String? proposalStatus;
+  final Map<String, dynamic>? proposalSummary;
+  final int? proposalItemCount;
+  final int? pendingProposalCount;
+  final Map<String, dynamic>? roomSnapshot;
+  final String? presence;
+  final String? commandStatus;
+  final String? executionStatus;
+}
+
+final realtimeHomeUpdateProvider =
+    NotifierProvider<RealtimeHomeUpdateController, RealtimeHomeUpdate?>(
+      RealtimeHomeUpdateController.new,
+    );
+
+class RealtimeFileTransferUpdate {
+  const RealtimeFileTransferUpdate({
+    required this.transferId,
+    required this.status,
+    this.roomId,
+    this.failureCode,
+  });
+
+  final String transferId;
+  final String status;
+  final String? roomId;
+  final String? failureCode;
+}
+
+class RealtimeFileBrowseUpdate {
+  const RealtimeFileBrowseUpdate({
+    required this.requestId,
+    required this.status,
+    this.roomId,
+    this.failureCode,
+  });
+
+  final String requestId;
+  final String status;
+  final String? roomId;
+  final String? failureCode;
+}
+
+class RealtimeFileDirectoryUpdate {
+  const RealtimeFileDirectoryUpdate({
+    required this.kind,
+    required this.roomId,
+    this.parentRelativePath,
+    this.relativePath,
+    this.previousRelativePath,
+    this.entry,
+  });
+
+  final String kind;
+  final String roomId;
+  final String? parentRelativePath;
+  final String? relativePath;
+  final String? previousRelativePath;
+  final Map<String, dynamic>? entry;
+}
+
+class RealtimeChatMessageUpdate {
+  const RealtimeChatMessageUpdate({
+    required this.messageId,
+    required this.sessionId,
+    this.roomId,
+    this.senderType,
+    this.messageType,
+  });
+
+  final String messageId;
+  final String sessionId;
+  final String? roomId;
+  final String? senderType;
+  final String? messageType;
+}
+
+final realtimeFileTransferUpdateProvider =
+    NotifierProvider<
+      RealtimeFileTransferUpdateController,
+      RealtimeFileTransferUpdate?
+    >(RealtimeFileTransferUpdateController.new);
+
+final realtimeFileBrowseUpdateProvider =
+    NotifierProvider<
+      RealtimeFileBrowseUpdateController,
+      RealtimeFileBrowseUpdate?
+    >(RealtimeFileBrowseUpdateController.new);
+
+final realtimeFileDirectoryUpdateProvider =
+    NotifierProvider<
+      RealtimeFileDirectoryUpdateController,
+      RealtimeFileDirectoryUpdate?
+    >(RealtimeFileDirectoryUpdateController.new);
+
+final realtimeChatMessageUpdateProvider =
+    NotifierProvider<
+      RealtimeChatMessageUpdateController,
+      RealtimeChatMessageUpdate?
+    >(RealtimeChatMessageUpdateController.new);
+
+class RealtimeHomeUpdateController extends Notifier<RealtimeHomeUpdate?> {
+  @override
+  RealtimeHomeUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeHomeUpdate update) => state = update;
+}
+
+class RealtimeFileTransferUpdateController
+    extends Notifier<RealtimeFileTransferUpdate?> {
+  @override
+  RealtimeFileTransferUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeFileTransferUpdate update) => state = update;
+}
+
+class RealtimeFileBrowseUpdateController
+    extends Notifier<RealtimeFileBrowseUpdate?> {
+  @override
+  RealtimeFileBrowseUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeFileBrowseUpdate update) => state = update;
+}
+
+class RealtimeFileDirectoryUpdateController
+    extends Notifier<RealtimeFileDirectoryUpdate?> {
+  @override
+  RealtimeFileDirectoryUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeFileDirectoryUpdate update) => state = update;
+}
+
+class RealtimeChatMessageUpdateController
+    extends Notifier<RealtimeChatMessageUpdate?> {
+  @override
+  RealtimeChatMessageUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeChatMessageUpdate update) => state = update;
+}
+
+RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
+  if (data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final deviceId = switch (payload['deviceId'] ?? value['deviceId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final commandId = switch (payload['commandId'] ??
+      value['commandId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final proposalId = switch (payload['proposalId'] ??
+      value['proposalId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final decisionId = switch (payload['decisionId'] ??
+      value['decisionId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final snapshotId = switch (payload['snapshotId'] ??
+      value['snapshotId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final executionId = switch (payload['executionId'] ??
+      value['executionId'] ??
+      value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+
+  if (event == 'presence.updated') {
+    final presence = payload['presence'];
+    if (deviceId == null ||
+        presence is! String ||
+        !_validPresences.contains(presence)) {
+      return null;
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.presence,
+      eventType: event,
+      deviceId: deviceId,
+      presence: presence,
+    );
+  }
+  if (event == 'device.paired' && deviceId != null) {
+    final device = payload['device'];
+    if (device is Map) {
+      final devicePatch = Map<String, dynamic>.from(device);
+      if (devicePatch['id'] == deviceId && devicePatch['status'] == 'ACTIVE') {
+        return RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.devicePaired,
+          eventType: event,
+          deviceId: deviceId,
+          device: devicePatch,
+        );
+      }
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (event == 'device.revoked' && deviceId != null) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.deviceRemoved,
+      eventType: event,
+      deviceId: deviceId,
+    );
+  }
+  if (event == 'room.removed' && roomId != null) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.roomRemoved,
+      eventType: event,
+      roomId: roomId,
+    );
+  }
+  if (event == 'proposal.created') {
+    final status = payload['status'];
+    final summary = payload['summary'];
+    final itemCount = payload['itemCount'];
+    final pendingProposalCount = payload['pendingProposalCount'];
+    if (roomId != null &&
+        proposalId != null &&
+        status is String &&
+        status.isNotEmpty &&
+        pendingProposalCount is int) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.proposalCreated,
+        eventType: event,
+        roomId: roomId,
+        proposalId: proposalId,
+        commandId: commandId,
+        proposalStatus: status,
+        proposalSummary: summary is Map
+            ? Map<String, dynamic>.from(summary)
+            : null,
+        proposalItemCount: itemCount is int ? itemCount : null,
+        pendingProposalCount: pendingProposalCount,
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (event == 'decision.created') {
+    final decisionType = payload['decisionType'];
+    final proposalStatus = payload['proposalStatus'];
+    final commandStatus = payload['commandStatus'];
+    final pendingProposalCount = payload['pendingProposalCount'];
+    if (roomId != null &&
+        proposalId != null &&
+        proposalStatus is String &&
+        proposalStatus.isNotEmpty &&
+        pendingProposalCount is int) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.decisionCreated,
+        eventType: event,
+        roomId: roomId,
+        proposalId: proposalId,
+        decisionId: decisionId,
+        commandId: commandId,
+        decisionType: decisionType is String ? decisionType : null,
+        proposalStatus: proposalStatus,
+        commandStatus: commandStatus is String ? commandStatus : null,
+        pendingProposalCount: pendingProposalCount,
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (event == 'room.snapshot.updated') {
+    final score = payload['score'];
+    final metrics = payload['metrics'];
+    final formulaVersion = payload['formulaVersion'];
+    final calculatedAt = payload['calculatedAt'];
+    if (roomId != null &&
+        snapshotId != null &&
+        score is int &&
+        metrics is Map &&
+        formulaVersion is String &&
+        formulaVersion.isNotEmpty &&
+        calculatedAt is String &&
+        calculatedAt.isNotEmpty) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.roomSnapshotUpdated,
+        eventType: event,
+        roomId: roomId,
+        snapshotId: snapshotId,
+        roomSnapshot: {
+          'id': snapshotId,
+          'roomId': roomId,
+          'score': score,
+          'metrics': Map<String, dynamic>.from(metrics),
+          'formulaVersion': formulaVersion,
+          'calculatedAt': calculatedAt,
+        },
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (event == 'command.updated') {
+    final status = payload['status'];
+    if (roomId != null &&
+        commandId != null &&
+        status is String &&
+        status.isNotEmpty) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.commandStatus,
+        eventType: event,
+        roomId: roomId,
+        commandId: commandId,
+        commandStatus: status,
+      );
+    }
+    return null;
+  }
+  if (event == 'execution.updated') {
+    final status = payload['status'];
+    if (roomId != null && status is String && status.isNotEmpty) {
+      return RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.executionStatus,
+        eventType: event,
+        roomId: roomId,
+        executionId: executionId,
+        executionStatus: status,
+      );
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (_summaryRefreshEvents.contains(event)) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  if (_homeIrrelevantEvents.contains(event)) return null;
+
+  // Unknown validated domain envelopes may gain a home projection later.
+  // One summary read is safer than silently displaying stale aggregate data.
+  if (value['eventId'] is String || value['eventType'] is String) {
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
+  return null;
+}
+
+bool realtimeUpdateSuppressesGenericRevision(
+  String event,
+  RealtimeHomeUpdate? update, [
+  RealtimeFileTransferUpdate? fileTransferUpdate,
+  RealtimeFileBrowseUpdate? fileBrowseUpdate,
+  RealtimeFileDirectoryUpdate? fileDirectoryUpdate,
+  RealtimeChatMessageUpdate? chatMessageUpdate,
+]) {
+  if (chatMessageUpdate != null) return true;
+  if (fileTransferUpdate != null) return true;
+  if (fileBrowseUpdate != null || event.startsWith('file.browse.')) {
+    return true;
+  }
+  if (fileDirectoryUpdate != null || event == 'file.directory.updated') {
+    return true;
+  }
+  if (event == 'presence.updated') return true;
+  return switch (update?.kind) {
+    RealtimeHomeUpdateKind.presence ||
+    RealtimeHomeUpdateKind.devicePaired ||
+    RealtimeHomeUpdateKind.deviceRemoved ||
+    RealtimeHomeUpdateKind.roomRemoved ||
+    RealtimeHomeUpdateKind.proposalCreated ||
+    RealtimeHomeUpdateKind.decisionCreated ||
+    RealtimeHomeUpdateKind.roomSnapshotUpdated ||
+    RealtimeHomeUpdateKind.commandStatus ||
+    RealtimeHomeUpdateKind.executionStatus => true,
+    RealtimeHomeUpdateKind.refreshSummary || null => false,
+  };
+}
+
+RealtimeFileTransferUpdate? realtimeFileTransferUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (event != 'file.transfer.updated' || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final transferId = switch (payload['transferId'] ?? value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final status = payload['status'];
+  final failureCode = payload['failureCode'];
+  if (transferId == null ||
+      status is! String ||
+      !_validFileTransferStatuses.contains(status)) {
+    return null;
+  }
+  return RealtimeFileTransferUpdate(
+    transferId: transferId,
+    roomId: roomId,
+    status: status,
+    failureCode: failureCode is String && failureCode.isNotEmpty
+        ? failureCode
+        : null,
+  );
+}
+
+RealtimeFileBrowseUpdate? realtimeFileBrowseUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (!_fileBrowseTerminalEvents.contains(event) || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final requestId = switch (payload['requestId'] ?? value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final status = switch (payload['status']) {
+    final String status when _validFileBrowseStatuses.contains(status) =>
+      status,
+    _ when event == 'file.browse.ready' => 'READY',
+    _ when event == 'file.browse.failed' => 'FAILED',
+    _ => null,
+  };
+  final failureCode = payload['failureCode'];
+  if (requestId == null || status == null) return null;
+  return RealtimeFileBrowseUpdate(
+    requestId: requestId,
+    roomId: roomId,
+    status: status,
+    failureCode: failureCode is String && failureCode.isNotEmpty
+        ? failureCode
+        : null,
+  );
+}
+
+RealtimeFileDirectoryUpdate? realtimeFileDirectoryUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (event != 'file.directory.updated' || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final kind = payload['kind'];
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  if (kind is! String ||
+      !_validFileDirectoryUpdateKinds.contains(kind) ||
+      roomId == null) {
+    return null;
+  }
+  final parentRelativePath = payload['parentRelativePath'];
+  final relativePath = payload['relativePath'];
+  final previousRelativePath = payload['previousRelativePath'];
+  final entry = payload['entry'];
+  return RealtimeFileDirectoryUpdate(
+    kind: kind,
+    roomId: roomId,
+    parentRelativePath: parentRelativePath is String
+        ? parentRelativePath
+        : null,
+    relativePath: relativePath is String ? relativePath : null,
+    previousRelativePath: previousRelativePath is String
+        ? previousRelativePath
+        : null,
+    entry: entry is Map ? Map<String, dynamic>.from(entry) : null,
+  );
+}
+
+RealtimeChatMessageUpdate? realtimeChatMessageUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (event != 'chat.message.created' || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final messageId = switch (payload['messageId'] ?? value['aggregateId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final sessionId = switch (payload['sessionId'] ?? value['sessionId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  if (messageId == null || sessionId == null) return null;
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  final senderType = payload['senderType'];
+  final messageType = payload['messageType'];
+  return RealtimeChatMessageUpdate(
+    messageId: messageId,
+    sessionId: sessionId,
+    roomId: roomId,
+    senderType: senderType is String && senderType.isNotEmpty
+        ? senderType
+        : null,
+    messageType: messageType is String && messageType.isNotEmpty
+        ? messageType
+        : null,
+  );
+}
+
+const _validPresences = <String>{
+  'OFFLINE',
+  'ONLINE_IDLE',
+  'ONLINE_SCANNING',
+  'ONLINE_EXECUTING',
+  'DEGRADED',
+};
+
+const _validFileTransferStatuses = <String>{
+  'REQUESTED',
+  'UPLOADING',
+  'READY',
+  'FAILED',
+  'COMPLETED',
+  'CANCELLED',
+  'EXPIRED',
+};
+
+const _validFileBrowseStatuses = <String>{'READY', 'FAILED'};
+const _fileBrowseTerminalEvents = <String>{
+  'file.browse.ready',
+  'file.browse.failed',
+};
+const _validFileDirectoryUpdateKinds = <String>{
+  'FILE_ADDED',
+  'FILE_REMOVED',
+  'FILE_UPDATED',
+  'FILE_MOVED',
+};
+
+const _summaryRefreshEvents = <String>{};
+
+const _homeIrrelevantEvents = <String>{
+  'character.event',
+  'chat.message.created',
+  'command.available',
+  'command.updated',
+  'file.browse.requested',
+  'file.browse.ready',
+  'file.browse.failed',
+  'file.directory.updated',
+  'file.transfer.requested',
+  'file.transfer.updated',
+  'rule.created',
+  'rule.updated',
+  'smart-cache.updated',
+};
+
 class RealtimeCharacterKindController extends Notifier<CharacterState?> {
   @override
   CharacterState? build() {
@@ -110,9 +772,10 @@ CharacterState? realtimeCharacterKindFor(String event, Object? data) {
     return parseCharacterState(value['kind']);
   }
   if (event != 'presence.updated') return null;
-  final payload = Map<String, dynamic>.from(
-    value['payload'] as Map? ?? const {},
-  );
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
   return switch (payload['presence']) {
     'OFFLINE' => CharacterState.offline,
     'ONLINE_IDLE' => CharacterState.idle,
@@ -238,7 +901,58 @@ class RealtimeController extends Notifier<int> {
     if (characterKind != null && _isActiveSocket(session, socket)) {
       ref.read(realtimeCharacterKindProvider.notifier).emit(characterKind);
     }
-    if (shouldRefresh && _isActiveSocket(session, socket)) state++;
+    final fileTransferUpdate = realtimeFileTransferUpdateFor(event, data);
+    if (shouldRefresh &&
+        fileTransferUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeFileTransferUpdateProvider.notifier)
+          .emit(fileTransferUpdate);
+    }
+    final fileBrowseUpdate = realtimeFileBrowseUpdateFor(event, data);
+    if (shouldRefresh &&
+        fileBrowseUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeFileBrowseUpdateProvider.notifier)
+          .emit(fileBrowseUpdate);
+    }
+    final fileDirectoryUpdate = realtimeFileDirectoryUpdateFor(event, data);
+    if (shouldRefresh &&
+        fileDirectoryUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeFileDirectoryUpdateProvider.notifier)
+          .emit(fileDirectoryUpdate);
+    }
+    final chatMessageUpdate = realtimeChatMessageUpdateFor(event, data);
+    if (shouldRefresh &&
+        chatMessageUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeChatMessageUpdateProvider.notifier)
+          .emit(chatMessageUpdate);
+    }
+    final homeUpdate = realtimeHomeUpdateFor(event, data);
+    if (shouldRefresh &&
+        homeUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
+    }
+    // Complete realtime projections are patched by their owning controllers.
+    // Generic invalidation is reserved for incomplete or unknown projections.
+    if (shouldRefresh &&
+        !realtimeUpdateSuppressesGenericRevision(
+          event,
+          homeUpdate,
+          fileTransferUpdate,
+          fileBrowseUpdate,
+          fileDirectoryUpdate,
+          chatMessageUpdate,
+        ) &&
+        _isActiveSocket(session, socket)) {
+      state++;
+    }
   }
 
   Future<void> _replay(RealtimeAccountSession session) async {
@@ -263,19 +977,72 @@ class RealtimeController extends Notifier<int> {
         );
         if (!_isCurrent(session)) return;
         if (events.isEmpty) break;
+        var requiresGenericRevision = false;
         for (final event in events) {
           if (!_isCurrent(session)) return;
           final eventType = event['eventType'];
           if (eventType is String) {
             await _applyConnectionLifecycle(session, eventType, event);
             if (!_isCurrent(session)) return;
+            final fileTransferUpdate = realtimeFileTransferUpdateFor(
+              eventType,
+              event,
+            );
+            if (fileTransferUpdate != null) {
+              ref
+                  .read(realtimeFileTransferUpdateProvider.notifier)
+                  .emit(fileTransferUpdate);
+            }
+            final fileBrowseUpdate = realtimeFileBrowseUpdateFor(
+              eventType,
+              event,
+            );
+            if (fileBrowseUpdate != null) {
+              ref
+                  .read(realtimeFileBrowseUpdateProvider.notifier)
+                  .emit(fileBrowseUpdate);
+            }
+            final fileDirectoryUpdate = realtimeFileDirectoryUpdateFor(
+              eventType,
+              event,
+            );
+            if (fileDirectoryUpdate != null) {
+              ref
+                  .read(realtimeFileDirectoryUpdateProvider.notifier)
+                  .emit(fileDirectoryUpdate);
+            }
+            final chatMessageUpdate = realtimeChatMessageUpdateFor(
+              eventType,
+              event,
+            );
+            if (chatMessageUpdate != null) {
+              ref
+                  .read(realtimeChatMessageUpdateProvider.notifier)
+                  .emit(chatMessageUpdate);
+            }
+            final homeUpdate = realtimeHomeUpdateFor(eventType, event);
+            if (homeUpdate != null) {
+              ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
+            }
+            if (!realtimeUpdateSuppressesGenericRevision(
+              eventType,
+              homeUpdate,
+              fileTransferUpdate,
+              fileBrowseUpdate,
+              fileDirectoryUpdate,
+              chatMessageUpdate,
+            )) {
+              requiresGenericRevision = true;
+            }
+          } else {
+            requiresGenericRevision = true;
           }
           final sequence = event['sequence'];
           if (sequence is int && sequence > cursor) cursor = sequence;
         }
         await _advanceCursor(session, cursor);
         if (!_isCurrent(session)) return;
-        state++;
+        if (requiresGenericRevision) state++;
         if (events.length < 200) break;
       }
     } finally {

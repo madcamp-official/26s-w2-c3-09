@@ -8,11 +8,33 @@ use std::path::{Path, PathBuf};
 use crate::analyzer::FileEntry;
 use crate::journal::{STATE_DIR, TRASH_DIR};
 use crate::proposal::{proposal_id, Proposal, ProposalAction, ProposalStatus};
+use serde_json::Value;
 
-pub use definition::{Action, Condition, Rule, RuleError, RuleSet, CURRENT_RULES_VERSION};
+pub use definition::{
+    Action, Condition, FileKind, Rule, RuleError, RuleSet, CURRENT_RULES_VERSION,
+};
 
 pub const RULES_FILE: &str = "rules.json";
 const DAY_MS: u128 = 24 * 60 * 60 * 1000;
+
+/// Accepts either MouseKeeper's root-local `rules.json` shape or the server/mobile
+/// `RuleDefinition` contract shape. Draft rules can therefore be validated locally before
+/// they ever produce concrete proposals.
+pub fn rule_set_from_draft_value(value: Value) -> Result<RuleSet, RuleError> {
+    match serde_json::from_value::<RuleSet>(value.clone()) {
+        Ok(set) => {
+            set.validate()?;
+            Ok(set)
+        }
+        Err(internal_error) => RuleSet::from_contract_definition("draft-rule", 0, value).map_err(
+            |contract_error| {
+                RuleError::ParseContract(format!(
+                    "internal RuleSet parse failed: {internal_error}; contract RuleDefinition parse failed: {contract_error}"
+                ))
+            },
+        ),
+    }
+}
 
 pub struct RuleContext {
     pub existing_paths: HashSet<String>,
@@ -44,9 +66,10 @@ fn proposal_from_rule(rule: &Rule, file: &FileEntry, context: &RuleContext) -> O
         return None;
     }
 
-    match (&rule.then.move_to, rule.then.trash) {
-        (Some(move_to), false) => move_proposal_from_rule(rule, file, context, move_to),
-        (None, true) => trash_proposal_from_rule(rule, file),
+    match (&rule.then.move_to, rule.then.trash, &rule.then.create_dir) {
+        (Some(move_to), false, None) => move_proposal_from_rule(rule, file, context, move_to),
+        (None, true, None) => trash_proposal_from_rule(rule, file),
+        (None, false, Some(create_dir)) => create_dir_proposal_from_rule(rule, context, create_dir),
         _ => None,
     }
 }
@@ -82,6 +105,7 @@ fn move_proposal_from_rule(
         content: None,
         source_size_bytes: file.size_bytes,
         source_modified_unix_ms: file.modified_unix_ms,
+        source_file_id: file.file_id.clone(),
         reason: reason_for(rule, file),
         status,
     })
@@ -99,8 +123,36 @@ fn trash_proposal_from_rule(rule: &Rule, file: &FileEntry) -> Option<Proposal> {
         content: None,
         source_size_bytes: file.size_bytes,
         source_modified_unix_ms: file.modified_unix_ms,
+        source_file_id: file.file_id.clone(),
         reason: reason_for(rule, file),
         status: ProposalStatus::Ready,
+    })
+}
+
+fn create_dir_proposal_from_rule(
+    rule: &Rule,
+    context: &RuleContext,
+    target: &str,
+) -> Option<Proposal> {
+    let action = ProposalAction::CreateDir;
+    let normalized_target = normalize_relative_path(target);
+    let status = if context.existing_paths.contains(&normalized_target) {
+        ProposalStatus::DestinationExists
+    } else {
+        ProposalStatus::Ready
+    };
+
+    Some(Proposal {
+        proposal_id: proposal_id(&action, "", target),
+        action,
+        from: String::new(),
+        to: target.to_string(),
+        content: None,
+        source_size_bytes: 0,
+        source_modified_unix_ms: None,
+        source_file_id: None,
+        reason: format!("rule '{}' creates this managed-root directory", rule.id),
+        status,
     })
 }
 
@@ -109,7 +161,10 @@ fn rule_matches(rule: &Rule, file: &FileEntry, context: &RuleContext) -> bool {
 
     if let Some(extensions) = &condition.extension_in {
         match extension_of(&file.path) {
-            Some(extension) if extensions.iter().any(|candidate| candidate == &extension) => {}
+            Some(extension)
+                if extensions
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(&extension)) => {}
             _ => return false,
         }
     }
@@ -127,6 +182,74 @@ fn rule_matches(rule: &Rule, file: &FileEntry, context: &RuleContext) -> bool {
         }
     }
 
+    if let Some(days) = condition.modified_age_days_gte {
+        if !age_days_matches(
+            file.modified_unix_ms,
+            context.now_unix_ms,
+            days,
+            AgeCompare::Gte,
+        ) {
+            return false;
+        }
+    }
+
+    if let Some(days) = condition.modified_age_days_gt {
+        if !age_days_matches(
+            file.modified_unix_ms,
+            context.now_unix_ms,
+            days,
+            AgeCompare::Gt,
+        ) {
+            return false;
+        }
+    }
+
+    if let Some(days) = condition.created_age_days_gte {
+        if !age_days_matches(
+            file.created_unix_ms,
+            context.now_unix_ms,
+            days,
+            AgeCompare::Gte,
+        ) {
+            return false;
+        }
+    }
+
+    if let Some(days) = condition.created_age_days_gt {
+        if !age_days_matches(
+            file.created_unix_ms,
+            context.now_unix_ms,
+            days,
+            AgeCompare::Gt,
+        ) {
+            return false;
+        }
+    }
+
+    if let Some(min_size) = condition.size_bytes_gte {
+        if file.size_bytes < min_size {
+            return false;
+        }
+    }
+
+    if let Some(max_size) = condition.size_bytes_lte {
+        if file.size_bytes > max_size {
+            return false;
+        }
+    }
+
+    if let Some(prefix) = &condition.relative_path_starts_with {
+        if !relative_path_has_prefix(&file.path, prefix) {
+            return false;
+        }
+    }
+
+    if let Some(kind) = condition.file_kind {
+        if kind != FileKind::File {
+            return false;
+        }
+    }
+
     if let Some(pattern) = &condition.name_matches {
         match Path::new(&file.path)
             .file_name()
@@ -134,6 +257,24 @@ fn rule_matches(rule: &Rule, file: &FileEntry, context: &RuleContext) -> bool {
         {
             Some(file_name) if glob::glob_match(pattern, file_name) => {}
             _ => return false,
+        }
+    }
+
+    if let Some(needle) = &condition.name_contains {
+        if !file_name(&file.path).is_some_and(|name| contains_ignore_case(name, needle)) {
+            return false;
+        }
+    }
+
+    if let Some(prefix) = &condition.name_starts_with {
+        if !file_name(&file.path).is_some_and(|name| starts_with_ignore_case(name, prefix)) {
+            return false;
+        }
+    }
+
+    if let Some(suffix) = &condition.name_ends_with {
+        if !file_name(&file.path).is_some_and(|name| ends_with_ignore_case(name, suffix)) {
+            return false;
         }
     }
 
@@ -159,6 +300,59 @@ fn extension_of(path: &str) -> Option<String> {
         .map(|extension| extension.to_ascii_lowercase())
 }
 
+#[derive(Clone, Copy)]
+enum AgeCompare {
+    Gte,
+    Gt,
+}
+
+fn age_days_matches(
+    timestamp_unix_ms: Option<u128>,
+    now_unix_ms: u128,
+    days: u32,
+    compare: AgeCompare,
+) -> bool {
+    let Some(timestamp_unix_ms) = timestamp_unix_ms else {
+        return false;
+    };
+    let age = now_unix_ms.saturating_sub(timestamp_unix_ms);
+    let threshold = u128::from(days) * DAY_MS;
+    match compare {
+        AgeCompare::Gte => age >= threshold,
+        AgeCompare::Gt => age > threshold,
+    }
+}
+
+fn relative_path_has_prefix(path: &str, prefix: &str) -> bool {
+    let path = normalize_relative_path(path).trim_matches('/').to_string();
+    let prefix = normalize_relative_path(prefix)
+        .trim_matches('/')
+        .to_string();
+    path == prefix || path.starts_with(&format!("{prefix}/"))
+}
+
+fn file_name(path: &str) -> Option<&str> {
+    Path::new(path).file_name().and_then(|name| name.to_str())
+}
+
+fn contains_ignore_case(value: &str, needle: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .contains(&needle.to_ascii_lowercase())
+}
+
+fn starts_with_ignore_case(value: &str, prefix: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .starts_with(&prefix.to_ascii_lowercase())
+}
+
+fn ends_with_ignore_case(value: &str, suffix: &str) -> bool {
+    value
+        .to_ascii_lowercase()
+        .ends_with(&suffix.to_ascii_lowercase())
+}
+
 /// The rule set applied when a root has no `rules.json`. It reproduces the original hardcoded
 /// extension buckets so behavior is unchanged out of the box; a root opts into custom behavior
 /// only by writing its own file.
@@ -174,6 +368,7 @@ pub fn default_rule_set() -> RuleSet {
             then: Action {
                 move_to: Some(move_to.to_string()),
                 trash: false,
+                create_dir: None,
             },
         }
     }
@@ -243,6 +438,8 @@ mod tests {
             path: path.to_string(),
             size_bytes: 10,
             modified_unix_ms,
+            created_unix_ms: None,
+            file_id: None,
         }
     }
 
@@ -271,6 +468,7 @@ mod tests {
                 then: Action {
                     move_to: None,
                     trash: true,
+                    create_dir: None,
                 },
             }],
         };
@@ -298,6 +496,7 @@ mod tests {
                 then: Action {
                     move_to: Some("old".to_string()),
                     trash: false,
+                    create_dir: None,
                 },
             }],
         };
@@ -324,6 +523,7 @@ mod tests {
                 then: Action {
                     move_to: Some("billing".to_string()),
                     trash: false,
+                    create_dir: None,
                 },
             }],
         };
@@ -354,6 +554,7 @@ mod tests {
                 then: Action {
                     move_to: Some("archive".to_string()),
                     trash: false,
+                    create_dir: None,
                 },
             }],
         };
@@ -381,6 +582,7 @@ mod tests {
                     then: Action {
                         move_to: Some("vault".to_string()),
                         trash: false,
+                        create_dir: None,
                     },
                 },
                 Rule {
@@ -393,6 +595,7 @@ mod tests {
                     then: Action {
                         move_to: Some("documents".to_string()),
                         trash: false,
+                        create_dir: None,
                     },
                 },
             ],

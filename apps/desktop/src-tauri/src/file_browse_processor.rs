@@ -2,8 +2,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::browse::{browse_root, BrowseEntry, BrowseError};
 use file_engine_cli::file_index::{
-    index_is_initialized, reindex_root, search_index_page, FileIndexError, IndexedSearchEntry,
-    IndexedSearchScope,
+    index_is_initialized, reindex_root, search_index_page_with_extensions, FileIndexError,
+    IndexedSearchEntry, IndexedSearchScope,
 };
 use serde::Serialize;
 
@@ -139,17 +139,20 @@ async fn build_result_for_request(
     }
 
     match request.query.as_deref() {
-        Some(query) => build_search_result_page(
+        Some(query) => build_search_result_page_limited(
             &managed_root.root,
             &request.relative_directory,
             query,
             request.search_scope,
             request.cursor.as_deref(),
+            request.limit,
+            &request.extensions,
         ),
-        None => build_result_page(
+        None => build_result_page_limited(
             &managed_root.root,
             &request.relative_directory,
             request.cursor.as_deref(),
+            request.limit,
         ),
     }
     .map_err(|error| FailureResult {
@@ -169,6 +172,16 @@ pub fn build_result_page(
     relative_directory: &str,
     cursor: Option<&str>,
 ) -> Result<AgentFileBrowseResult, BuildFileBrowseError> {
+    build_result_page_limited(root, relative_directory, cursor, PAGE_SIZE)
+}
+
+pub fn build_result_page_limited(
+    root: &str,
+    relative_directory: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<AgentFileBrowseResult, BuildFileBrowseError> {
+    validate_page_limit(limit)?;
     let offset = parse_cursor(cursor)?;
     let report = browse_root(root, Some(relative_directory)).map_err(map_browse_error)?;
     let entries = report
@@ -187,7 +200,7 @@ pub fn build_result_page(
     let page = entries
         .iter()
         .skip(offset)
-        .take(PAGE_SIZE)
+        .take(limit)
         .map(remote_entry)
         .collect::<Vec<_>>();
     let next_offset = offset + page.len();
@@ -211,12 +224,33 @@ pub fn build_search_result_page(
     scope: AgentFileSearchScope,
     cursor: Option<&str>,
 ) -> Result<AgentFileBrowseResult, BuildFileBrowseError> {
-    let fingerprint = search_fingerprint(relative_directory, query, scope);
+    build_search_result_page_limited(
+        root,
+        relative_directory,
+        query,
+        scope,
+        cursor,
+        PAGE_SIZE,
+        &[],
+    )
+}
+
+pub fn build_search_result_page_limited(
+    root: &str,
+    relative_directory: &str,
+    query: &str,
+    scope: AgentFileSearchScope,
+    cursor: Option<&str>,
+    limit: usize,
+    extensions: &[String],
+) -> Result<AgentFileBrowseResult, BuildFileBrowseError> {
+    validate_page_limit(limit)?;
+    let fingerprint = search_fingerprint(relative_directory, query, scope, limit, extensions);
     let (expected_generation, offset) = parse_search_cursor(cursor, fingerprint)?;
     if !index_is_initialized(root).map_err(map_file_index_error)? {
         reindex_root(root).map_err(map_file_index_error)?;
     }
-    let page = search_index_page(
+    let page = search_index_page_with_extensions(
         root,
         query,
         match scope {
@@ -226,7 +260,8 @@ pub fn build_search_result_page(
         relative_directory,
         expected_generation,
         offset,
-        PAGE_SIZE,
+        limit,
+        extensions,
     )
     .map_err(map_file_index_error)?;
     let next_cursor = page.next_offset.map(|next_offset| {
@@ -262,6 +297,16 @@ fn parse_cursor(cursor: Option<&str>) -> Result<usize, BuildFileBrowseError> {
                 })
         }
     }
+}
+
+fn validate_page_limit(limit: usize) -> Result<(), BuildFileBrowseError> {
+    if (1..=PAGE_SIZE).contains(&limit) {
+        return Ok(());
+    }
+    Err(BuildFileBrowseError {
+        failure_code: AgentFileBrowseFailureCode::CursorInvalidated,
+        message: "file browse limit must be between 1 and 200".to_string(),
+    })
 }
 
 fn parse_search_cursor(
@@ -405,13 +450,26 @@ fn stable_file_id_parts(
     )
 }
 
-fn search_fingerprint(relative_directory: &str, query: &str, scope: AgentFileSearchScope) -> u64 {
+fn search_fingerprint(
+    relative_directory: &str,
+    query: &str,
+    scope: AgentFileSearchScope,
+    limit: usize,
+    extensions: &[String],
+) -> u64 {
+    let mut extensions = extensions
+        .iter()
+        .map(|extension| extension.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    extensions.sort();
     fnv1a_64(
         format!(
-            "{}|{}|{:?}",
+            "{}|{}|{:?}|{}|{}",
             relative_directory.replace('\\', "/"),
             query.to_lowercase(),
-            scope
+            scope,
+            limit,
+            extensions.join(",")
         )
         .as_bytes(),
     )
@@ -475,7 +533,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{build_result_page, build_search_result_page, unix_ms_to_rfc3339};
+    use super::{
+        build_result_page, build_search_result_page, build_search_result_page_limited,
+        unix_ms_to_rfc3339,
+    };
     use crate::agent::{AgentFileBrowseFailureCode, AgentFileSearchScope};
 
     #[test]
@@ -619,6 +680,64 @@ mod tests {
         .expect_err("stale generation");
         assert_eq!(
             stale.failure_code,
+            AgentFileBrowseFailureCode::CursorInvalidated
+        );
+    }
+
+    #[test]
+    fn indexed_search_honors_request_limit_and_extensions() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        for index in 0..20 {
+            fs::write(root.join(format!("report-{index:02}.txt")), "x").expect("txt");
+        }
+        for index in 0..3 {
+            fs::write(root.join(format!("report-{index:02}.pdf")), "x").expect("pdf");
+        }
+
+        let first = build_search_result_page_limited(
+            root.to_str().expect("root path"),
+            "",
+            "report",
+            AgentFileSearchScope::ManagedRoot,
+            None,
+            2,
+            &[".pdf".to_string()],
+        )
+        .expect("filtered first page");
+        assert_eq!(first.entries.len(), 2);
+        assert!(first
+            .entries
+            .iter()
+            .all(|entry| entry.relative_path.ends_with(".pdf")));
+        let cursor = first.next_cursor.as_deref().expect("next cursor");
+
+        let second = build_search_result_page_limited(
+            root.to_str().expect("root path"),
+            "",
+            "report",
+            AgentFileSearchScope::ManagedRoot,
+            Some(cursor),
+            2,
+            &[".pdf".to_string()],
+        )
+        .expect("filtered second page");
+        assert_eq!(second.entries.len(), 1);
+        assert!(second.next_cursor.is_none());
+
+        let mismatched_limit = build_search_result_page_limited(
+            root.to_str().expect("root path"),
+            "",
+            "report",
+            AgentFileSearchScope::ManagedRoot,
+            Some(cursor),
+            3,
+            &[".pdf".to_string()],
+        )
+        .expect_err("search cursor must bind the request limit");
+        assert_eq!(
+            mismatched_limit.failure_code,
             AgentFileBrowseFailureCode::CursorInvalidated
         );
     }

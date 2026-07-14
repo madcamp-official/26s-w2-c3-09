@@ -29,16 +29,110 @@ import {
   startAgentPairing,
   updateAgentCommandStatus
 } from "./agentApi";
-import {
-  MouseKeeperMotion,
-  mousekeeperMotionUrls,
-  motionForAgent,
-  motionFromSyncEvents
-} from "../character/characterMotion";
 
-const backgroundRefreshIntervalMs = 15_000;
-const pairingPollIntervalMs = 1_000;
-export function AgentPanel() {
+const heartbeatIntervalMs = 5_000;
+const backgroundStatusRefreshIntervalMs = 15_000;
+const connectionStatusRefreshIntervalMs = 30_000;
+const pairingPollIntervalMs = 2_000;
+
+const connectionStateLabels: Record<string, string> = {
+  unconfigured: "페어링 필요",
+  offline: "오프라인",
+  connecting: "연결 중",
+  online: "연결됨",
+  revoked: "연결 해제됨"
+};
+
+const backgroundStateLabels: Record<string, string> = {
+  stopped: "중지됨",
+  running: "실행 중",
+  suspended: "일시정지"
+};
+
+const commandStatusLabels: Record<string, string> = {
+  QUEUED: "대기 중",
+  DELIVERED: "전달됨",
+  ANALYZING: "분석 중",
+  WAITING_APPROVAL: "승인 대기",
+  APPROVED: "승인됨",
+  REJECTED: "거절됨",
+  EXECUTING: "실행 중",
+  SUCCEEDED: "완료",
+  PARTIALLY_SUCCEEDED: "일부 완료",
+  FAILED: "실패",
+  EXPIRED: "만료됨",
+  STALE: "변경되어 중단"
+};
+
+function connectionStateLabel(state?: string | null) {
+  return state ? connectionStateLabels[state] ?? state : "확인 중";
+}
+
+function commandStatusLabel(status: string) {
+  return commandStatusLabels[status] ?? status;
+}
+
+function hasRecentHeartbeat(background: BackgroundRuntimeStatus | null) {
+  return (
+    background?.state === "running" &&
+    background.last_heartbeat_unix_ms !== null &&
+    Date.now() - background.last_heartbeat_unix_ms < heartbeatIntervalMs * 3
+  );
+}
+
+export function AutostartSetting() {
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function refreshAutostart() {
+      try {
+        setAutostart(await isAutostartEnabled());
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+    }
+
+    void refreshAutostart();
+  }, []);
+
+  async function changeAutostart(enabled: boolean) {
+    setAutostartBusy(true);
+    setError(null);
+    try {
+      if (enabled) {
+        await enableAutostart();
+      } else {
+        await disableAutostart();
+      }
+      setAutostart(await isAutostartEnabled());
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setAutostartBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {autostart !== null ? (
+        <label className="autostart-setting">
+          <input
+            type="checkbox"
+            checked={autostart}
+            disabled={autostartBusy}
+            onChange={(event) => void changeAutostart(event.target.checked)}
+          />
+          컴퓨터에 로그인하면 MouseKeeper 자동 실행
+        </label>
+      ) : null}
+      {error ? <p className="error-text">{error}</p> : null}
+    </>
+  );
+}
+
+export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean } = {}) {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
   const [background, setBackground] = useState<BackgroundRuntimeStatus | null>(null);
   const [deviceName, setDeviceName] = useState("MouseKeeper Desktop");
@@ -47,9 +141,9 @@ export function AgentPanel() {
   const [smartCacheRoomId, setSmartCacheRoomId] = useState("");
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
-  const [replayMotion, setReplayMotion] = useState<MouseKeeperMotion | null>(null);
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [disconnectFailed, setDisconnectFailed] = useState(false);
@@ -78,7 +172,7 @@ export function AgentPanel() {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     listenForDesktopDeviceRevoked(() => {
-      void resetForNewPairing("This desktop was disconnected. Pair it again to continue.");
+      void resetForNewPairing("이 PC의 연결이 해제됐어요. 계속하려면 다시 페어링해 주세요.");
     }).then((stop) => {
       if (cancelled) stop();
       else unlisten = stop;
@@ -95,7 +189,7 @@ export function AgentPanel() {
     const poll = async () => {
       if (new Date(pairing.expires_at).getTime() <= Date.now()) {
         setPairing(null);
-        setError("Pairing code expired. Start a new pairing session.");
+        setError("페어링 코드가 만료되었습니다. 다시 시작해 주세요.");
         return;
       }
       if (pairingRequestInFlight.current) return;
@@ -127,11 +221,16 @@ export function AgentPanel() {
     if (!connection?.device_id) return;
 
     void resumeBackgroundRuntime({ silent: true });
-    const timer = window.setInterval(() => {
-      void refreshConnection();
+    const backgroundTimer = window.setInterval(() => {
       void refreshBackground();
-    }, backgroundRefreshIntervalMs);
-    return () => window.clearInterval(timer);
+    }, backgroundStatusRefreshIntervalMs);
+    const connectionTimer = window.setInterval(() => {
+      void refreshConnection();
+    }, connectionStatusRefreshIntervalMs);
+    return () => {
+      window.clearInterval(backgroundTimer);
+      window.clearInterval(connectionTimer);
+    };
   }, [connection?.device_id]);
 
   async function refreshConnection() {
@@ -161,9 +260,7 @@ export function AgentPanel() {
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
-      if (!options.silent) {
-        setBusy(false);
-      }
+      if (!options.silent) setBusy(false);
     }
   }
 
@@ -188,7 +285,7 @@ export function AgentPanel() {
   }
 
   async function changeAutostart(enabled: boolean) {
-    setBusy(true);
+    setAutostartBusy(true);
     setError(null);
     try {
       if (enabled) {
@@ -200,7 +297,7 @@ export function AgentPanel() {
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      setAutostartBusy(false);
     }
   }
 
@@ -239,7 +336,7 @@ export function AgentPanel() {
     try {
       const report = await processAgentCommands();
       setLastProcessedSummary(
-        `${report.submitted_proposal_count} proposal batch(es), ${report.failed_count} failed, ${report.skipped_count} skipped`
+        `제안 제출 ${report.submitted_proposal_count}건, 실패 ${report.failed_count}건, 건너뜀 ${report.skipped_count}건`
       );
       setCommands(await pollAgentCommands());
       await refreshBackground();
@@ -258,7 +355,7 @@ export function AgentPanel() {
     try {
       const report = await processAgentDecisions();
       setLastProcessedSummary(
-        `${report.processed_count} execution(s) completed, ${report.failed_count} failed, ${report.executed_item_count} item(s) executed`
+        `승인 실행 ${report.processed_count}건, 실행 항목 ${report.executed_item_count}개, 실패 ${report.failed_count}건`
       );
       await refreshBackground();
       await refreshConnection();
@@ -276,7 +373,7 @@ export function AgentPanel() {
     try {
       const report = await processAgentFileBrowseRequests();
       setLastProcessedSummary(
-        `file browse: ${report.completed_count} completed, ${report.failed_count} failed of ${report.inspected_count}`
+        `파일 조회 요청 ${report.inspected_count}건 중 완료 ${report.completed_count}건, 실패 ${report.failed_count}건`
       );
       await refreshBackground();
       await refreshConnection();
@@ -294,7 +391,7 @@ export function AgentPanel() {
     try {
       const report = await processAgentFileTransfers();
       setLastProcessedSummary(
-        `file transfer: ${report.uploaded_count} uploaded, ${report.failed_count} failed, ${report.skipped_count} skipped of ${report.inspected_count}`
+        `파일 전송 ${report.inspected_count}건 중 업로드 ${report.uploaded_count}건, 실패 ${report.failed_count}건, 건너뜀 ${report.skipped_count}건`
       );
       await refreshBackground();
       await refreshConnection();
@@ -312,7 +409,7 @@ export function AgentPanel() {
     try {
       const report = await processSmartCacheForRoom(smartCacheRoomId.trim());
       setLastProcessedSummary(
-        `smart cache: ${report.uploaded_count} uploaded, ${report.approved_count} approved, ${report.failed_count} failed, ${report.skipped_count} skipped of ${report.inspected_count}${report.message ? ` (${report.message})` : ""}`
+        `스마트 캐시 후보 ${report.inspected_count}건, 승인 ${report.approved_count}건, 업로드 ${report.uploaded_count}건, 실패 ${report.failed_count}건${report.message ? ` (${report.message})` : ""}`
       );
       await refreshBackground();
       await refreshConnection();
@@ -330,7 +427,7 @@ export function AgentPanel() {
     try {
       const report = await flushAgentOutbox();
       setLastProcessedSummary(
-        `outbox: ${report.sent_count} sent, ${report.retried_count} retried, ${report.failed_count} failed of ${report.inspected_count}`
+        `보낼 작업 ${report.inspected_count}건 중 전송 ${report.sent_count}건, 재시도 ${report.retried_count}건, 실패 ${report.failed_count}건`
       );
       await refreshBackground();
       await refreshConnection();
@@ -346,8 +443,6 @@ export function AgentPanel() {
     const replay = await replayAgentEvents();
     setSyncCursor(replay.next_cursor);
     setLastReplayCount(replay.events.length);
-    const motion = motionFromSyncEvents(replay.events);
-    if (motion) setReplayMotion(motion);
     if (replay.events.some((event) => event.event_type === "command.available")) {
       setCommands(await pollAgentCommands());
     }
@@ -374,7 +469,6 @@ export function AgentPanel() {
     setCommands([]);
     setSyncCursor(null);
     setLastReplayCount(0);
-    setReplayMotion(null);
     setPairing(null);
     try {
       setConnection(await getAgentConnectionStatus());
@@ -383,7 +477,7 @@ export function AgentPanel() {
       setConnection(await getAgentConnectionStatus());
       if (message) setLastProcessedSummary(message);
     } catch (cause) {
-      setError(`Disconnected, but a new pairing code could not be created: ${errorMessage(cause)}`);
+      setError(`연결은 해제됐지만 새 페어링 코드를 만들지 못했어요: ${errorMessage(cause)}`);
     } finally {
       pairingStartInFlight.current = false;
     }
@@ -393,7 +487,7 @@ export function AgentPanel() {
     if (
       !disconnectIdempotencyKey.current &&
       !window.confirm(
-        "Disconnect this desktop from MouseKeeper? Local folders and undo history are preserved, but mobile access stops until you pair again."
+        "이 PC를 MouseKeeper에서 연결 해제할까요? 로컬 폴더와 되돌리기 기록은 그대로 유지되지만, 다시 페어링하기 전까지 휴대폰 접근이 중단됩니다."
       )
     ) {
       return;
@@ -417,80 +511,48 @@ export function AgentPanel() {
     }
   }
 
-  const mascotMotion = motionForAgent({
-    connection,
-    pairing: pairing !== null || disconnecting,
-    commandStatuses: commands.map((command) => command.status),
-    replayMotion,
-    localError: error !== null
-  });
+  const heartbeatOnline = hasRecentHeartbeat(background);
+  const effectiveConnectionState =
+    connection?.state === "offline" && heartbeatOnline ? "online" : connection?.state;
+  const effectiveConnection = connection
+    ? { ...connection, state: effectiveConnectionState ?? connection.state }
+    : connection;
+  const showConnectionError = !heartbeatOnline && connection?.last_error_message;
 
   return (
     <section className="panel agent-panel">
-      <div className="section-header">
-        <div className="mascot-heading">
-          <img
-            className={`mascot-image motion-${mascotMotion}`}
-            src={mousekeeperMotionUrls[mascotMotion]}
-            alt={`MouseKeeper ${mascotMotion}`}
-          />
-          <div>
-            <h2>Desktop Agent connection</h2>
-            <p className="path-text">
-              {connection?.server_base_url ?? "MOUSEKEEPER_SERVER_BASE_URL is not configured"}
-            </p>
-          </div>
+      <div className="section-header agent-panel-header">
+        <div>
+          <h2>PC 연결</h2>
+          <p className="path-text">
+            {connection?.server_base_url ?? "서버 주소가 설정되지 않았습니다. MOUSEKEEPER_SERVER_BASE_URL을 확인하세요."}
+          </p>
         </div>
         <span
-          className={`status-badge status-${disconnecting ? "disconnecting" : connection?.state ?? "unconfigured"}`}
+          className={`status-badge status-${disconnecting ? "disconnecting" : effectiveConnectionState ?? "unconfigured"}`}
         >
-          {disconnecting ? "DISCONNECTING" : connection?.state ?? "loading"}
+          {disconnecting ? "연결 해제 중" : connectionStateLabel(effectiveConnectionState)}
         </span>
       </div>
 
       {connection?.device_id ? (
-        <div className="agent-actions">
-          <span className="path-text">Device: {connection.device_id}</span>
-          {syncCursor !== null ? (
-            <span className="path-text">
-              Replay cursor: {syncCursor} ({lastReplayCount} new)
-            </span>
-          ) : null}
-          <button disabled={busy} onClick={() => void refreshCommands()}>
-            Refresh pending commands
-          </button>
-          <button disabled={busy} onClick={() => void processCommandsNow()}>
-            Process commands
-          </button>
-          <button disabled={busy} onClick={() => void processDecisionsNow()}>
-            Process approved decisions
-          </button>
-          <button disabled={busy} onClick={() => void processFileBrowseNow()}>
-            Process file browse
-          </button>
-          <button disabled={busy} onClick={() => void processFileTransfersNow()}>
-            Process file transfers
-          </button>
-          <input
-            aria-label="Smart cache room id"
-            placeholder="Room id for smart cache"
-            value={smartCacheRoomId}
-            onChange={(event) => setSmartCacheRoomId(event.target.value)}
-          />
-          <button disabled={busy || !smartCacheRoomId.trim()} onClick={() => void processSmartCacheNow()}>
-            Process smart cache
-          </button>
-          <button disabled={busy} onClick={() => void flushOutboxNow()}>
-            Flush outbox
-          </button>
-          <button className="danger-button" disabled={busy} onClick={() => void disconnectDevice()}>
-            {disconnectFailed ? "Retry disconnect" : "Disconnect this desktop"}
-          </button>
+        <div className="agent-connected">
+          <p className="path-text">기기 ID · {connection.device_id}</p>
+          <div className="agent-actions">
+            <button className="danger-button" disabled={busy} onClick={() => void disconnectDevice()}>
+              {disconnectFailed ? "연결 해제 재시도" : "이 PC 연결 해제"}
+            </button>
+          </div>
+          <p className="path-text agent-hint">
+            연결을 해제하면 모바일에서 이 PC가 사라지고, 다시 사용하려면 페어링이 필요합니다. 상세 처리 도구는 아래
+            &lsquo;개발자 도구와 상세 상태&rsquo;에 있습니다.
+          </p>
         </div>
       ) : connection?.server_base_url ? (
         <div className="input-row agent-pairing-row">
           <input
-            aria-label="Desktop device name"
+            aria-label="데스크톱 기기 이름"
+            placeholder="기기 이름"
             maxLength={120}
             value={deviceName}
             onChange={(event) => setDeviceName(event.target.value)}
@@ -499,84 +561,102 @@ export function AgentPanel() {
             disabled={busy || pairing !== null || !deviceName.trim()}
             onClick={() => void beginPairing()}
           >
-            {pairing ? "Pairing in progress" : "Start pairing"}
+            {pairing ? "페어링 진행 중" : "페어링 시작"}
           </button>
         </div>
       ) : null}
 
       {background ? (
-        <div className="background-runtime">
-          <div>
-            <strong>Background runtime</strong>
-            <small>
-              {background.state} | commands {background.last_command_count} | heartbeat{" "}
-              {formatRuntimeTime(background.last_heartbeat_unix_ms)}
-            </small>
-            <small>
-              processed {background.last_processed_command_count} | submitted proposals{" "}
-              {background.last_submitted_proposal_count}
-            </small>
-            <small>
-              replay {formatRuntimeTime(background.last_replay_unix_ms)} | command poll{" "}
-              {formatRuntimeTime(background.last_command_poll_unix_ms)}
-            </small>
-            <small>
-              decisions {background.last_decision_count} | executed items{" "}
-              {background.last_executed_item_count} | execution failures{" "}
-              {background.last_execution_failed_count} | decision poll{" "}
-              {formatRuntimeTime(background.last_decision_poll_unix_ms)}
-            </small>
-            <small>
-              realtime signal {formatRuntimeTime(background.last_realtime_signal_unix_ms)}
-            </small>
-            <small>
-              file browse {background.last_file_browse_completed_count}/
-              {background.last_file_browse_count} | failed{" "}
-              {background.last_file_browse_failed_count} | poll{" "}
-              {formatRuntimeTime(background.last_file_browse_poll_unix_ms)}
-            </small>
-            <small>
-              file transfers {background.last_file_transfer_uploaded_count}/
-              {background.last_file_transfer_count} | failed{" "}
-              {background.last_file_transfer_failed_count} | poll{" "}
-              {formatRuntimeTime(background.last_file_transfer_poll_unix_ms)}
-            </small>
-            <small>
-              smart cache {background.last_smart_cache_uploaded_count}/
-              {background.last_smart_cache_candidate_count} | failed{" "}
-              {background.last_smart_cache_failed_count} | poll{" "}
-              {formatRuntimeTime(background.last_smart_cache_poll_unix_ms)}
-            </small>
-            <small>
-              outbox sent {background.last_outbox_sent_count} | failed{" "}
-              {background.last_outbox_failed_count} | flush{" "}
-              {formatRuntimeTime(background.last_outbox_flush_unix_ms)}
-            </small>
-            {lastProcessedSummary ? <small>{lastProcessedSummary}</small> : null}
-            {background.last_error_message ? (
-              <small className="error-text">{background.last_error_message}</small>
-            ) : null}
+        <>
+          <div className="runtime-card">
+            <div className="runtime-card-main">
+              <span className={`runtime-dot runtime-${background.state}`} />
+              <div>
+                <strong>{backgroundStateLabels[background.state] ?? background.state}</strong>
+                <small>
+                  마지막 신호 {formatRuntimeTime(background.last_heartbeat_unix_ms)} · 자동 제안{" "}
+                  {background.last_auto_submitted_proposal_count}건 · 자동 실행{" "}
+                  {background.last_auto_cleanup_executed_count}건
+                </small>
+                {background.last_error_message ? (
+                  <small className="error-text">{background.last_error_message}</small>
+                ) : null}
+              </div>
+            </div>
+            <div className="runtime-actions">
+              <button disabled={busy} onClick={() => void resumeBackgroundRuntime()}>
+                실행
+              </button>
+              <button disabled={busy} onClick={() => void pauseBackground()}>
+                일시정지
+              </button>
+            </div>
           </div>
-          <div className="runtime-actions">
-            <button disabled={busy || !connection?.device_id} onClick={() => void resumeBackgroundRuntime()}>
-              Resume
-            </button>
-            <button disabled={busy} onClick={() => void pauseBackground()}>
-              Pause
-            </button>
-          </div>
-        </div>
+
+          <details className="advanced-tools">
+            <summary>개발자 도구와 상세 상태</summary>
+            <div className="advanced-tools-body">
+              <p className="path-text">
+                기기 ID: {connection?.device_id ?? "-"}
+                {syncCursor !== null ? ` · 동기화 커서 ${syncCursor} · 새 이벤트 ${lastReplayCount}건` : ""}
+              </p>
+              <div className="agent-actions">
+                <button disabled={busy} onClick={() => void refreshCommands()}>
+                  명령 새로고침
+                </button>
+                <button disabled={busy} onClick={() => void processCommandsNow()}>
+                  명령 처리
+                </button>
+                <button disabled={busy} onClick={() => void processDecisionsNow()}>
+                  승인 처리
+                </button>
+                <button disabled={busy} onClick={() => void processFileBrowseNow()}>
+                  파일 조회 처리
+                </button>
+                <button disabled={busy} onClick={() => void processFileTransfersNow()}>
+                  파일 전송 처리
+                </button>
+                <button disabled={busy} onClick={() => void flushOutboxNow()}>
+                  보낼 작업 전송
+                </button>
+              </div>
+              <div className="input-row smart-cache-row">
+                <input
+                  aria-label="스마트 캐시 방 ID"
+                  placeholder="스마트 캐시 방 ID"
+                  value={smartCacheRoomId}
+                  onChange={(event) => setSmartCacheRoomId(event.target.value)}
+                />
+                <button
+                  disabled={busy || !smartCacheRoomId.trim()}
+                  onClick={() => void processSmartCacheNow()}
+                >
+                  스마트 캐시 처리
+                </button>
+              </div>
+              <div className="runtime-telemetry">
+                <small>명령 {background.last_command_count}건 · 처리 {background.last_processed_command_count}건</small>
+                <small>결정 {background.last_decision_count}건 · 실행 항목 {background.last_executed_item_count}개</small>
+                <small>파일 조회 {background.last_file_browse_completed_count}/{background.last_file_browse_count}</small>
+                <small>파일 전송 {background.last_file_transfer_uploaded_count}/{background.last_file_transfer_count}</small>
+                <small>스마트 캐시 {background.last_smart_cache_uploaded_count}/{background.last_smart_cache_candidate_count}</small>
+                <small>보낼 작업 {background.last_outbox_sent_count}건 · 실패 {background.last_outbox_failed_count}건</small>
+                {lastProcessedSummary ? <small>{lastProcessedSummary}</small> : null}
+              </div>
+            </div>
+          </details>
+        </>
       ) : null}
 
-      {autostart !== null ? (
+      {showAutostart && autostart !== null ? (
         <label className="autostart-setting">
           <input
             type="checkbox"
             checked={autostart}
-            disabled={busy}
+            disabled={autostartBusy}
             onChange={(event) => void changeAutostart(event.target.checked)}
           />
-          Start MouseKeeper when I sign in to this computer
+          컴퓨터에 로그인하면 MouseKeeper 자동 실행
         </label>
       ) : null}
 
@@ -590,20 +670,20 @@ export function AgentPanel() {
                 size={156}
                 level="M"
                 includeMargin
-                aria-label="MouseKeeper pairing QR code"
+                aria-label="MouseKeeper 페어링 QR 코드"
               />
             ) : null}
             <div className="pairing-code-copy">
-              <span>Scan this QR or enter this code in the signed-in mobile app</span>
+              <span>모바일 앱에서 QR을 스캔하거나 아래 코드를 입력하세요.</span>
               <strong>{pairing.code}</strong>
-              <small>Expires: {new Date(pairing.expires_at).toLocaleString()}</small>
-              <small>QR contains only pairing claim data. It never contains the device token.</small>
+              <small>만료: {new Date(pairing.expires_at).toLocaleString()}</small>
+              <small>QR에는 페어링 정보만 포함되며 기기 토큰은 포함되지 않습니다.</small>
             </div>
           </div>
         </div>
       ) : null}
 
-      {connection?.last_error_message ? (
+      {showConnectionError ? (
         <p className="error-text">
           {connection.last_error_code}: {connection.last_error_message}
         </p>
@@ -617,18 +697,18 @@ export function AgentPanel() {
               <div>
                 <strong>{command.command_type}</strong>
                 <small>
-                  {command.status} | room {command.room_id}
+                  {commandStatusLabel(command.status)} · 방 {command.room_id}
                 </small>
               </div>
               <div className="command-actions">
                 {command.status === "QUEUED" ? (
                   <button disabled={busy} onClick={() => void advanceCommand(command, "DELIVERED")}>
-                    Mark delivered
+                    전달 처리
                   </button>
                 ) : null}
                 {command.status === "DELIVERED" ? (
                   <button disabled={busy} onClick={() => void advanceCommand(command, "ANALYZING")}>
-                    Start analysis
+                    분석 시작
                   </button>
                 ) : null}
                 {command.status === "ANALYZING" ? (
@@ -637,14 +717,16 @@ export function AgentPanel() {
                     disabled={busy}
                     onClick={() => void advanceCommand(command, "FAILED")}
                   >
-                    Mark failed
+                    실패 처리
                   </button>
                 ) : null}
               </div>
             </article>
           ))}
         </div>
-      ) : connection?.device_id ? <p className="path-text">No loaded pending commands.</p> : null}
+      ) : connection?.device_id ? (
+        <p className="path-text">대기 중인 명령이 없습니다.</p>
+      ) : null}
     </section>
   );
 }
@@ -665,7 +747,7 @@ function pairingQrPayload(pairing: PairingSession, serverBaseUrl: string) {
 }
 
 function formatRuntimeTime(value: number | null) {
-  return value ? new Date(value).toLocaleTimeString() : "never";
+  return value ? new Date(value).toLocaleTimeString() : "없음";
 }
 
 function newIdempotencyKey(prefix: string) {

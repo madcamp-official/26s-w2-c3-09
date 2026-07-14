@@ -102,6 +102,8 @@ impl JournalStatus {
 pub enum JournalAction {
     Move,
     Trash,
+    CreateDir,
+    CreateFile,
     ReadmeWrite,
 }
 
@@ -110,6 +112,8 @@ impl JournalAction {
         match self {
             JournalAction::Move => "move",
             JournalAction::Trash => "trash",
+            JournalAction::CreateDir => "create_dir",
+            JournalAction::CreateFile => "create_file",
             JournalAction::ReadmeWrite => "readme_write",
         }
     }
@@ -118,6 +122,8 @@ impl JournalAction {
         match value {
             "move" => Some(JournalAction::Move),
             "trash" => Some(JournalAction::Trash),
+            "create_dir" => Some(JournalAction::CreateDir),
+            "create_file" => Some(JournalAction::CreateFile),
             "readme_write" => Some(JournalAction::ReadmeWrite),
             _ => None,
         }
@@ -385,12 +391,63 @@ fn undo_blocked_reason_from_filesystem(
 ) -> Option<String> {
     if !matches!(
         operation.action,
-        JournalAction::Move | JournalAction::Trash | JournalAction::ReadmeWrite
+        JournalAction::Move
+            | JournalAction::Trash
+            | JournalAction::CreateDir
+            | JournalAction::CreateFile
+            | JournalAction::ReadmeWrite
     ) {
         return None;
     }
 
     if operation.action == JournalAction::ReadmeWrite {
+        return None;
+    }
+
+    if operation.action == JournalAction::CreateDir {
+        let target = root.join(&operation.to);
+        if !target.exists() {
+            return None;
+        }
+        if !target.is_dir() {
+            return Some(format!(
+                "created path is no longer a directory ({}); undo would be unsafe",
+                operation.to
+            ));
+        }
+        if fs::read_dir(&target)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(true)
+        {
+            return Some(format!(
+                "created directory is not empty ({}); undo would delete user data",
+                operation.to
+            ));
+        }
+        return None;
+    }
+
+    if operation.action == JournalAction::CreateFile {
+        let target = root.join(&operation.to);
+        if !target.exists() {
+            return None;
+        }
+        if !target.is_file() {
+            return Some(format!(
+                "created path is no longer a file ({}); undo would be unsafe",
+                operation.to
+            ));
+        }
+        if fs::metadata(&target)
+            .map(|metadata| metadata.len())
+            .unwrap_or(1)
+            != 0
+        {
+            return Some(format!(
+                "created file is no longer empty ({}); undo would delete user data",
+                operation.to
+            ));
+        }
         return None;
     }
 

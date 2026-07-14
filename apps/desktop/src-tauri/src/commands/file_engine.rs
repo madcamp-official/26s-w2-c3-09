@@ -1,5 +1,7 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use file_engine_cli::analyzer::{analyze_root as analyze_file_root, AnalyzeReport};
 use file_engine_cli::auto_approval::auto_approve_decisions;
@@ -22,16 +24,31 @@ use file_engine_cli::undo::{
     undo_operation as undo_file_operation, undo_root as undo_file_root, UndoReport,
 };
 
+use crate::agent::AgentRuntime;
 use crate::cleanliness::{
     calculate_cleanliness_snapshot as calculate_cleanliness_snapshot_for_root, CleanlinessSnapshot,
 };
 use crate::storage::auto_approval::{
     AutoApprovalPolicyPatch, AutoApprovalPolicyRecord, AutoApprovalStore,
 };
-use crate::storage::managed_roots::{ManagedRoot, ManagedRootStatePatch, ManagedRootStore};
+use crate::storage::managed_roots::{
+    ManagedRoot, ManagedRootStatePatch, ManagedRootStore, RoomBindingStatus,
+};
 use crate::storage::watchers::WatcherStore;
+#[cfg(feature = "tauri-commands")]
+use crate::work_limiter::WorkLimiter;
 
 const DEMO_ROOT_DIR_NAME: &str = "mousekeeper-ui-demo";
+static DEMO_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Outcome of unregistering a managed root. An active mobile room is disconnected first; local
+/// registration is removed only after that server mutation is confirmed.
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct UnregisterManagedRootReport {
+    pub root_id: String,
+    pub server_room_removed: bool,
+    pub server_message: Option<String>,
+}
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
@@ -86,6 +103,94 @@ pub fn update_managed_root_state(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub async fn unregister_managed_root(
+    root_id: String,
+    idempotency_key: String,
+    acknowledge_undoable: bool,
+    window: tauri::Window,
+    runtime: tauri::State<'_, AgentRuntime>,
+    store: tauri::State<'_, ManagedRootStore>,
+    auto_approval: tauri::State<'_, AutoApprovalStore>,
+    watchers: tauri::State<'_, WatcherStore>,
+) -> Result<UnregisterManagedRootReport, String> {
+    crate::commands::permissions::require_main_window(&window)?;
+    unregister_managed_root_impl(
+        root_id,
+        idempotency_key,
+        acknowledge_undoable,
+        &runtime,
+        &store,
+        &auto_approval,
+        &watchers,
+    )
+    .await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn unregister_managed_root(
+    root_id: String,
+    idempotency_key: String,
+    acknowledge_undoable: bool,
+    runtime: &AgentRuntime,
+    store: &ManagedRootStore,
+    auto_approval: &AutoApprovalStore,
+    watchers: &WatcherStore,
+) -> Result<UnregisterManagedRootReport, String> {
+    unregister_managed_root_impl(
+        root_id,
+        idempotency_key,
+        acknowledge_undoable,
+        runtime,
+        store,
+        auto_approval,
+        watchers,
+    )
+    .await
+}
+
+async fn unregister_managed_root_impl(
+    root_id: String,
+    idempotency_key: String,
+    acknowledge_undoable: bool,
+    runtime: &AgentRuntime,
+    store: &ManagedRootStore,
+    auto_approval: &AutoApprovalStore,
+    watchers: &WatcherStore,
+) -> Result<UnregisterManagedRootReport, String> {
+    let root = store.get(&root_id)?;
+    if root.room_binding_status != RoomBindingStatus::Unbound {
+        // Reuse the lifecycle-hardened endpoint and preflight. If the server is offline or rejects
+        // the mutation, this returns before changing the durable local binding, leaving retry state
+        // intact. A detached tombstone replays locally without a second server mutation.
+        crate::commands::agent::disconnect_agent_room_impl(
+            root_id.clone(),
+            idempotency_key,
+            acknowledge_undoable,
+            runtime,
+            store,
+            watchers,
+        )
+        .await?;
+    } else {
+        // An unbound root has never granted mobile authority, so there is no remote room to revoke.
+        // Stop its watcher immediately before removing the local registration.
+        let _ = watchers.stop(&root_id);
+    }
+
+    // Files and the on-disk operation journal remain untouched. Remove local metadata only after
+    // remote authority is absent or was never granted.
+    auto_approval.remove(&root_id)?;
+    store.remove(&root_id)?;
+
+    Ok(UnregisterManagedRootReport {
+        root_id,
+        server_room_removed: true,
+        server_message: None,
+    })
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub fn prepare_demo_root(window: tauri::Window) -> Result<String, String> {
     crate::commands::permissions::require_main_window(&window)?;
     prepare_demo_root_impl()
@@ -101,8 +206,10 @@ pub fn prepare_demo_root() -> Result<String, String> {
 pub fn analyze_root(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<AnalyzeReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     analyze_root_impl(root)
 }
 
@@ -139,8 +246,10 @@ pub fn reindex_managed_root(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
     app: tauri::AppHandle,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileIndexReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     let report = reindex_managed_root_impl(root)?;
     crate::cleanliness::reconcile_cleanliness_snapshot(&app, &root_id)?;
     Ok(report)
@@ -161,8 +270,10 @@ pub fn search_managed_root(
     root_id: String,
     query: String,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileIndexReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     search_managed_root_impl(root, query)
 }
 
@@ -181,8 +292,10 @@ pub fn search_managed_root(
 pub fn propose_file_changes(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<ProposalReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_scan()?;
     propose_file_changes_impl(root)
 }
 
@@ -201,11 +314,13 @@ pub fn calculate_cleanliness_snapshot(
     root_id: String,
     store: tauri::State<'_, ManagedRootStore>,
     app: tauri::AppHandle,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CleanlinessSnapshot, String> {
     use tauri::Manager;
 
     let managed = store.get(&root_id)?;
     let root = managed.root.clone();
+    let _permit = limiter.try_scan()?;
     if managed.room_binding_status == crate::storage::managed_roots::RoomBindingStatus::Detached {
         return calculate_cleanliness_snapshot_impl(root);
     }
@@ -364,9 +479,11 @@ pub fn execute_file_changes(
     decisions: Vec<DecisionEntry>,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<ExecuteReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     execute_file_changes_impl(root, proposal, decisions)
 }
 
@@ -388,9 +505,11 @@ pub fn trash_file(
     path: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<TrashReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     trash_file_impl(root, path)
 }
 
@@ -411,9 +530,11 @@ pub fn create_file(
     path: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CreateFileReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     create_file_impl(root, path)
 }
 
@@ -435,9 +556,11 @@ pub fn rename_file(
     new_name: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<RenameFileReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     rename_file_impl(root, path, new_name)
 }
 
@@ -458,9 +581,11 @@ pub fn undo_last_file_operation(
     root_id: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     undo_last_file_operation_impl(root)
 }
 
@@ -480,9 +605,11 @@ pub fn undo_operation(
     operation_id: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     undo_operation_impl(root, operation_id)
 }
 
@@ -521,9 +648,11 @@ pub fn recover_journal(
     root_id: String,
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<JournalRecoveryReport, String> {
     crate::commands::permissions::require_main_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
     recover_journal_impl(root)
 }
 
@@ -620,16 +749,29 @@ fn prepare_demo_root_impl() -> Result<String, String> {
         .join("ui-demo")
         .canonicalize()
         .map_err(|error| format!("cannot locate ui-demo fixture: {error}"))?;
-    let target = std::env::temp_dir().join(DEMO_ROOT_DIR_NAME);
-
-    if target.exists() {
-        fs::remove_dir_all(&target)
-            .map_err(|error| format!("cannot reset demo root {}: {error}", target.display()))?;
-    }
+    let target = fresh_demo_root_path();
+    fs::create_dir(&target).map_err(|error| {
+        format!(
+            "cannot reserve fresh demo root {}: {error}",
+            target.display()
+        )
+    })?;
 
     copy_demo_tree(&source, &target)?;
 
     Ok(target.display().to_string())
+}
+
+fn fresh_demo_root_path() -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let sequence = DEMO_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "{DEMO_ROOT_DIR_NAME}-{}-{timestamp}-{sequence}",
+        std::process::id()
+    ))
 }
 
 fn copy_demo_tree(source: &Path, target: &Path) -> Result<(), String> {
@@ -904,6 +1046,21 @@ mod tests {
         assert!(root.join("documents").join("note.md").exists());
         assert!(!root.join(".mousekeeper").exists());
         assert!(!root.join(".mousekeeper_trash").exists());
+        fs::remove_dir_all(root).expect("remove fresh demo root");
+    }
+
+    #[test]
+    fn prepare_demo_root_never_resets_a_previous_copy() {
+        let first = std::path::PathBuf::from(prepare_demo_root().expect("first demo"));
+        fs::write(first.join("user-added.txt"), "keep").expect("user fixture");
+
+        let second = std::path::PathBuf::from(prepare_demo_root().expect("second demo"));
+
+        assert_ne!(first, second);
+        assert!(first.join("user-added.txt").exists());
+        assert!(second.join("documents").join("note.md").exists());
+        fs::remove_dir_all(first).expect("remove first demo");
+        fs::remove_dir_all(second).expect("remove second demo");
     }
 
     #[test]

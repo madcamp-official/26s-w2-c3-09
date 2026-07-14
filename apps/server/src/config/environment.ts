@@ -5,6 +5,14 @@ const optionalString = z.preprocess(
   (value) => (value === '' ? undefined : value),
   z.string().min(1).optional(),
 );
+const optionalPositiveInteger = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.coerce.number().int().positive().optional(),
+);
+const aiProvider = z.preprocess(
+  (value) => (value === '' || value === undefined ? 'unconfigured' : value),
+  z.enum(['unconfigured', 'openai']),
+);
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']),
@@ -21,6 +29,11 @@ const schema = z.object({
   FIREBASE_PROJECT_ID: optionalString,
   FIREBASE_CLIENT_EMAIL: optionalString,
   FIREBASE_PRIVATE_KEY: optionalString,
+  AI_PROVIDER: aiProvider,
+  AI_API_KEY: optionalString,
+  AI_MODEL: optionalString,
+  AI_TIMEOUT_MS: optionalPositiveInteger,
+  AI_MAX_OUTPUT_TOKENS: optionalPositiveInteger,
   JWT_OR_DEVICE_TOKEN_SECRET: z.string().min(32),
   FILE_TRANSFER_MAX_BYTES: z.coerce.number().int().positive(),
   FILE_TRANSFER_TTL_SECONDS: z.coerce.number().int().min(60).max(3600),

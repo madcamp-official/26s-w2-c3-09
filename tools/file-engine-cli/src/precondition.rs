@@ -98,8 +98,11 @@ fn precheck_proposal(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
         );
     }
 
-    if proposal.action == ProposalAction::ReadmeWrite {
-        return precheck_readme_write(guard, proposal);
+    match proposal.action {
+        ProposalAction::CreateDir => return precheck_create_dir(guard, proposal),
+        ProposalAction::CreateFile => return precheck_create_file(guard, proposal),
+        ProposalAction::ReadmeWrite => return precheck_readme_write(guard, proposal),
+        ProposalAction::Move | ProposalAction::Trash => {}
     }
 
     let source = match guard.resolve_existing(&proposal.from) {
@@ -133,6 +136,9 @@ fn precheck_proposal(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
 
     let current_size = metadata.len();
     let current_modified = modified_unix_ms(&metadata);
+    if let Some(reason) = source_identity_change_reason(&source, proposal) {
+        return result(proposal, PrecheckStatus::SourceChanged, Some(reason));
+    }
 
     if current_size != proposal.source_size_bytes
         || current_modified != proposal.source_modified_unix_ms
@@ -141,6 +147,75 @@ fn precheck_proposal(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
             proposal,
             PrecheckStatus::SourceChanged,
             Some("source size or modified time changed since proposal".to_string()),
+        );
+    }
+
+    result(proposal, PrecheckStatus::Ready, None)
+}
+
+fn precheck_create_dir(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
+    if proposal.to.is_empty() || proposal.to == "." || proposal.to == ".." {
+        return result(
+            proposal,
+            PrecheckStatus::RejectedPath,
+            Some("CREATE_DIR target must be a relative directory path".to_string()),
+        );
+    }
+
+    let target = match guard.resolve_for_create(&proposal.to) {
+        Ok(target) => target,
+        Err(error) => {
+            return result(
+                proposal,
+                PrecheckStatus::RejectedPath,
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    if target.exists() {
+        return result(
+            proposal,
+            PrecheckStatus::DestinationExists,
+            Some("directory already exists; execution must not overwrite it".to_string()),
+        );
+    }
+
+    result(proposal, PrecheckStatus::Ready, None)
+}
+
+fn precheck_create_file(guard: &PathGuard, proposal: &Proposal) -> PrecheckResult {
+    if proposal.to.is_empty() || proposal.to == "." || proposal.to == ".." {
+        return result(
+            proposal,
+            PrecheckStatus::RejectedPath,
+            Some("CREATE_FILE target must be a relative file path".to_string()),
+        );
+    }
+    if proposal.content.as_deref().unwrap_or_default() != "" {
+        return result(
+            proposal,
+            PrecheckStatus::RejectedPath,
+            Some("CREATE_FILE currently supports empty files only".to_string()),
+        );
+    }
+
+    let target = match guard.resolve_for_create(&proposal.to) {
+        Ok(target) => target,
+        Err(error) => {
+            return result(
+                proposal,
+                PrecheckStatus::RejectedPath,
+                Some(error.to_string()),
+            );
+        }
+    };
+
+    if target.exists() {
+        return result(
+            proposal,
+            PrecheckStatus::DestinationExists,
+            Some("file already exists; execution must not overwrite it".to_string()),
         );
     }
 
@@ -178,7 +253,10 @@ fn precheck_readme_write(guard: &PathGuard, proposal: &Proposal) -> PrecheckResu
     let target = match guard.resolve_existing("README.md") {
         Ok(target) => target,
         Err(PathGuardError::MissingPath(_)) => {
-            if proposal.source_size_bytes == 0 && proposal.source_modified_unix_ms.is_none() {
+            if proposal.source_size_bytes == 0
+                && proposal.source_modified_unix_ms.is_none()
+                && proposal.source_file_id.is_none()
+            {
                 return result(proposal, PrecheckStatus::Ready, None);
             }
             return result(
@@ -207,6 +285,10 @@ fn precheck_readme_write(guard: &PathGuard, proposal: &Proposal) -> PrecheckResu
         }
     };
 
+    if let Some(reason) = source_identity_change_reason(&target, proposal) {
+        return result(proposal, PrecheckStatus::SourceChanged, Some(reason));
+    }
+
     if metadata.len() != proposal.source_size_bytes
         || modified_unix_ms(&metadata) != proposal.source_modified_unix_ms
     {
@@ -218,6 +300,15 @@ fn precheck_readme_write(guard: &PathGuard, proposal: &Proposal) -> PrecheckResu
     }
 
     result(proposal, PrecheckStatus::Ready, None)
+}
+
+fn source_identity_change_reason(path: &Path, proposal: &Proposal) -> Option<String> {
+    let expected = proposal.source_file_id.as_ref()?;
+    match crate::file_identity::file_id_for_path(path) {
+        Some(current) if current == *expected => None,
+        Some(_) => Some("source file identity changed since proposal".to_string()),
+        None => Some("source file identity is unavailable during precheck".to_string()),
+    }
 }
 
 fn result(proposal: &Proposal, status: PrecheckStatus, reason: Option<String>) -> PrecheckResult {
@@ -314,5 +405,25 @@ mod tests {
 
         assert_eq!(report.checks.len(), 1);
         assert_eq!(report.checks[0].status, PrecheckStatus::SourceChanged);
+    }
+
+    #[test]
+    fn detects_source_identity_change_even_when_size_and_mtime_match() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("inbox")).expect("create inbox");
+        fs::write(root.join("inbox").join("note.md"), "# note").expect("write note");
+        let mut proposal = propose_for_root(&root).expect("propose");
+        proposal.proposals[0].source_file_id =
+            Some("test:identity-that-does-not-match-current-file".to_string());
+
+        let report = precheck_proposals(&root, proposal).expect("precheck saved proposal");
+
+        assert_eq!(report.checks.len(), 1);
+        assert_eq!(report.checks[0].status, PrecheckStatus::SourceChanged);
+        assert_eq!(
+            report.checks[0].reason.as_deref(),
+            Some("source file identity changed since proposal")
+        );
     }
 }

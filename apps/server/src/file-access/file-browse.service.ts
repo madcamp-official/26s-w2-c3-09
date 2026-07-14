@@ -21,6 +21,9 @@ import Redis from 'ioredis';
 import { DATABASE } from '../database/database.module';
 import { REDIS } from '../presence/redis.module';
 import { SyncService } from '../sync/sync.service';
+
+type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
 @Injectable()
 export class FileBrowseService {
   constructor(
@@ -35,85 +38,98 @@ export class FileBrowseService {
   ) {
     if (this.redis.status === 'wait') await this.redis.connect();
     return this.db.transaction(async (tx) => {
-      const candidate = (
-        await tx
-          .select()
-          .from(rooms)
-          .where(
-            and(
-              eq(rooms.id, roomId),
-              eq(rooms.userId, userId),
-              eq(rooms.status, 'ACTIVE'),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
-      const device = (
-        await tx
-          .select()
-          .from(devices)
-          .where(
-            and(
-              eq(devices.id, candidate.desktopDeviceId),
-              eq(devices.userId, userId),
-              eq(devices.status, 'ACTIVE'),
-            ),
-          )
-          .for('share')
-          .limit(1)
-      )[0];
-      if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
-      const room = (
-        await tx
-          .select()
-          .from(rooms)
-          .where(
-            and(
-              eq(rooms.id, roomId),
-              eq(rooms.desktopDeviceId, device.id),
-              eq(rooms.userId, userId),
-              eq(rooms.status, 'ACTIVE'),
-            ),
-          )
-          .for('share')
-          .limit(1)
-      )[0];
-      if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
-      const presence = await this.redis.get(`presence:${room.desktopDeviceId}`);
-      const request = (
-        await tx
-          .insert(fileBrowseRequests)
-          .values({
-            roomId,
-            desktopDeviceId: room.desktopDeviceId,
-            relativeDirectory: body.relativeDirectory,
-            cursor: body.cursor,
-            query: presence ? body.query : null,
-            searchScope: body.searchScope,
-            expiresAt: new Date(Date.now() + 60_000),
-            ...(presence
-              ? {}
-              : { status: 'FAILED', failureCode: 'DEVICE_OFFLINE' }),
-          })
-          .returning()
-      )[0];
-      if (!request) throw new Error('Browse insert failed');
-      await this.sync.append(tx, {
-        userId,
-        deviceId: room.desktopDeviceId,
-        roomId,
-        eventType: presence ? 'file.browse.requested' : 'file.browse.failed',
-        aggregateType: 'file_browse_request',
-        aggregateId: request.id,
-        payload: {
-          requestId: request.id,
-          ...(presence ? {} : { failureCode: 'DEVICE_OFFLINE' }),
-        },
-      });
-      return request;
+      return this.createInTransaction(tx, userId, roomId, body);
     });
   }
+
+  async createInTransaction(
+    tx: Transaction,
+    userId: string,
+    roomId: string,
+    body: z.infer<typeof createFileBrowseRequestSchema>,
+  ) {
+    if (this.redis.status === 'wait') await this.redis.connect();
+    const candidate = (
+      await tx
+        .select()
+        .from(rooms)
+        .where(
+          and(
+            eq(rooms.id, roomId),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const device = (
+      await tx
+        .select()
+        .from(devices)
+        .where(
+          and(
+            eq(devices.id, candidate.desktopDeviceId),
+            eq(devices.userId, userId),
+            eq(devices.status, 'ACTIVE'),
+          ),
+        )
+        .for('share')
+        .limit(1)
+    )[0];
+    if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const room = (
+      await tx
+        .select()
+        .from(rooms)
+        .where(
+          and(
+            eq(rooms.id, roomId),
+            eq(rooms.desktopDeviceId, device.id),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
+        )
+        .for('share')
+        .limit(1)
+    )[0];
+    if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const presence = await this.redis.get(`presence:${room.desktopDeviceId}`);
+    const request = (
+      await tx
+        .insert(fileBrowseRequests)
+        .values({
+          roomId,
+          desktopDeviceId: room.desktopDeviceId,
+          relativeDirectory: body.relativeDirectory,
+          cursor: body.cursor,
+          query: presence ? body.query : null,
+          extensions: presence ? body.extensions : [],
+          limit: body.limit,
+          searchScope: body.searchScope,
+          expiresAt: new Date(Date.now() + 60_000),
+          ...(presence
+            ? {}
+            : { status: 'FAILED', failureCode: 'DEVICE_OFFLINE' }),
+        })
+        .returning()
+    )[0];
+    if (!request) throw new Error('Browse insert failed');
+    await this.sync.append(tx, {
+      userId,
+      deviceId: room.desktopDeviceId,
+      roomId,
+      eventType: presence ? 'file.browse.requested' : 'file.browse.failed',
+      aggregateType: 'file_browse_request',
+      aggregateId: request.id,
+      payload: {
+        requestId: request.id,
+        ...(presence ? {} : { failureCode: 'DEVICE_OFFLINE' }),
+      },
+    });
+    return request;
+  }
+
   async pending(userId: string, deviceId: string) {
     const device = (
       await this.db

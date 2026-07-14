@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/files/verified_download.dart';
 import '../../core/network/api_client.dart';
+import '../../core/sync/realtime_controller.dart';
 import '../auth/connection_gate_controller.dart';
 
 // Shared v1.4 contract names the current-directory scope explicitly.
@@ -12,6 +13,7 @@ const fileSearchScopeDirectory = 'CURRENT_DIRECTORY';
 const fileSearchScopeManagedRoot = 'MANAGED_ROOT';
 const fileSearchQueryMinLength = 2;
 const fileSearchQueryMaxLength = 100;
+const fileBrowseStatusFallbackInterval = Duration(seconds: 5);
 
 int fileSearchQueryLength(String value) => value.trim().runes.length;
 
@@ -46,6 +48,59 @@ class ApiFileBrowseGateway implements FileBrowseGateway {
       _api.get('/v1/file-browse-requests/$requestId');
 }
 
+final fileBrowseGatewayProvider = Provider<FileBrowseGateway>((ref) {
+  return ApiFileBrowseGateway(ref.watch(apiClientProvider));
+});
+
+class FileDirectoryBrowseRequest {
+  const FileDirectoryBrowseRequest({
+    required this.roomId,
+    required this.relativeDirectory,
+    this.cursor,
+    this.query,
+    this.searchScope,
+  });
+
+  final String roomId;
+  final String relativeDirectory;
+  final String? cursor;
+  final String? query;
+  final String? searchScope;
+
+  Map<String, dynamic> toBody() {
+    final body = <String, dynamic>{
+      'relativeDirectory': relativeDirectory,
+      'cursor': cursor,
+    };
+    final trimmedQuery = query?.trim();
+    if (trimmedQuery != null && trimmedQuery.isNotEmpty) {
+      body['query'] = trimmedQuery;
+      body['searchScope'] = searchScope ?? fileSearchScopeDirectory;
+    }
+    return body;
+  }
+}
+
+typedef FileDirectoryBrowseRequester =
+    Future<Map<String, dynamic>> Function(FileDirectoryBrowseRequest request);
+
+typedef FileBrowseStatusFetcher =
+    Future<Map<String, dynamic>> Function(String requestId);
+
+final fileDirectoryBrowseRequesterProvider =
+    Provider<FileDirectoryBrowseRequester>((ref) {
+      final gateway = ref.watch(fileBrowseGatewayProvider);
+      return (request) =>
+          gateway.createRequest(request.roomId, request.toBody());
+    });
+
+final fileBrowseStatusFetcherProvider = Provider<FileBrowseStatusFetcher>((
+  ref,
+) {
+  final gateway = ref.watch(fileBrowseGatewayProvider);
+  return gateway.getRequest;
+});
+
 bool shouldClearBrowseEntries({required bool append}) => !append;
 
 List<Map<String, dynamic>> mergeBrowseEntries({
@@ -53,6 +108,355 @@ List<Map<String, dynamic>> mergeBrowseEntries({
   required List<Map<String, dynamic>> received,
   required bool append,
 }) => append ? [...existing, ...received] : [...received];
+
+class FileDirectoryState {
+  FileDirectoryState({
+    required List<Map<String, dynamic>> entries,
+    required this.nextCursor,
+    required this.generation,
+    this.isStale = false,
+  }) : entries = List.unmodifiable(
+         entries.map((entry) => Map<String, dynamic>.unmodifiable(entry)),
+       );
+
+  const FileDirectoryState.empty()
+    : entries = const [],
+      nextCursor = null,
+      generation = null,
+      isStale = false;
+
+  final List<Map<String, dynamic>> entries;
+  final String? nextCursor;
+  final String? generation;
+  final bool isStale;
+
+  bool get isEmpty => entries.isEmpty;
+
+  FileDirectoryState withPage({
+    required List<Map<String, dynamic>> received,
+    required bool append,
+    required String? nextCursor,
+    required String? generation,
+  }) {
+    final nextEntries = mergeBrowseEntries(
+      existing: entries,
+      received: received,
+      append: append,
+    );
+    if (!isStale &&
+        this.nextCursor == nextCursor &&
+        this.generation == generation &&
+        _entryListsShallowEquals(entries, nextEntries)) {
+      return this;
+    }
+    return FileDirectoryState(
+      entries: nextEntries,
+      nextCursor: nextCursor,
+      generation: generation,
+    );
+  }
+
+  FileDirectoryState applyUpdate({
+    required String currentRelativeDirectory,
+    required FileDirectoryUpdate update,
+  }) {
+    final normalizedCurrent = normalizeFileRelativePath(
+      currentRelativeDirectory,
+    );
+    final entry = update.entry;
+    final entryPath = entry == null ? null : _entryRelativePath(entry);
+    final sourcePath = update.previousRelativePath ?? update.relativePath;
+    final sourceParent = sourcePath == null
+        ? null
+        : parentRelativeDirectoryOf(sourcePath);
+    final destinationParent = entryPath == null
+        ? null
+        : parentRelativeDirectoryOf(entryPath);
+
+    return switch (update.kind) {
+      FileDirectoryUpdateKind.added => _addOrMarkStale(
+        normalizedCurrent,
+        update.parentRelativePath ?? destinationParent,
+        entry,
+      ),
+      FileDirectoryUpdateKind.updated => _replaceIfVisible(
+        normalizedCurrent,
+        update.parentRelativePath ?? destinationParent,
+        entry,
+      ),
+      FileDirectoryUpdateKind.removed => _removeIfVisible(
+        normalizedCurrent,
+        update.parentRelativePath ?? sourceParent,
+        sourcePath ?? entryPath,
+      ),
+      FileDirectoryUpdateKind.moved => _moveIfRelevant(
+        normalizedCurrent: normalizedCurrent,
+        sourceParent: sourceParent,
+        sourcePath: sourcePath,
+        destinationParent: update.parentRelativePath ?? destinationParent,
+        entry: entry,
+      ),
+    };
+  }
+
+  FileDirectoryState _addOrMarkStale(
+    String currentRelativeDirectory,
+    String? parentRelativePath,
+    Map<String, dynamic>? entry,
+  ) {
+    if (entry == null ||
+        normalizeFileRelativePath(parentRelativePath ?? '') !=
+            currentRelativeDirectory) {
+      return this;
+    }
+    final path = _entryRelativePath(entry);
+    if (path == null) return this;
+    final existingIndex = _entryIndex(path);
+    if (existingIndex >= 0) return _replaceAt(existingIndex, entry);
+    if (nextCursor != null) return markStale();
+    return _withSortedEntries([...entries, entry]);
+  }
+
+  FileDirectoryState _replaceIfVisible(
+    String currentRelativeDirectory,
+    String? parentRelativePath,
+    Map<String, dynamic>? entry,
+  ) {
+    if (entry == null ||
+        normalizeFileRelativePath(parentRelativePath ?? '') !=
+            currentRelativeDirectory) {
+      return this;
+    }
+    final path = _entryRelativePath(entry);
+    if (path == null) return this;
+    final existingIndex = _entryIndex(path);
+    if (existingIndex < 0) return this;
+    return _replaceAt(existingIndex, entry);
+  }
+
+  FileDirectoryState _removeIfVisible(
+    String currentRelativeDirectory,
+    String? parentRelativePath,
+    String? relativePath,
+  ) {
+    if (relativePath == null ||
+        normalizeFileRelativePath(parentRelativePath ?? '') !=
+            currentRelativeDirectory) {
+      return this;
+    }
+    final existingIndex = _entryIndex(relativePath);
+    if (existingIndex < 0) return this;
+    final next = [...entries]..removeAt(existingIndex);
+    return FileDirectoryState(
+      entries: next,
+      nextCursor: nextCursor,
+      generation: generation,
+      isStale: isStale || nextCursor != null,
+    );
+  }
+
+  FileDirectoryState _moveIfRelevant({
+    required String normalizedCurrent,
+    required String? sourceParent,
+    required String? sourcePath,
+    required String? destinationParent,
+    required Map<String, dynamic>? entry,
+  }) {
+    final sourceInCurrent =
+        sourcePath != null &&
+        normalizeFileRelativePath(sourceParent ?? '') == normalizedCurrent;
+    final destinationInCurrent =
+        entry != null &&
+        normalizeFileRelativePath(destinationParent ?? '') == normalizedCurrent;
+    if (!sourceInCurrent && !destinationInCurrent) return this;
+
+    var nextEntries = [...entries];
+    var changed = false;
+    if (sourcePath != null) {
+      final existingIndex = _entryIndex(sourcePath, nextEntries);
+      if (existingIndex >= 0) {
+        nextEntries.removeAt(existingIndex);
+        changed = true;
+      }
+    }
+    if (destinationInCurrent) {
+      final destinationPath = _entryRelativePath(entry);
+      if (destinationPath == null) return this;
+      final existingIndex = _entryIndex(destinationPath, nextEntries);
+      if (existingIndex >= 0) {
+        final existing = nextEntries[existingIndex];
+        if (!_mapShallowEquals(existing, entry)) {
+          nextEntries[existingIndex] = entry;
+          changed = true;
+        }
+      } else if (nextCursor == null) {
+        nextEntries.add(entry);
+        changed = true;
+      } else {
+        return changed
+            ? FileDirectoryState(
+                entries: nextEntries,
+                nextCursor: nextCursor,
+                generation: generation,
+                isStale: true,
+              )
+            : markStale();
+      }
+    }
+    if (!changed) return this;
+    nextEntries = sortFileDirectoryEntries(nextEntries);
+    return FileDirectoryState(
+      entries: nextEntries,
+      nextCursor: nextCursor,
+      generation: generation,
+      isStale: isStale || nextCursor != null,
+    );
+  }
+
+  FileDirectoryState markStale() => isStale
+      ? this
+      : FileDirectoryState(
+          entries: entries,
+          nextCursor: nextCursor,
+          generation: generation,
+          isStale: true,
+        );
+
+  FileDirectoryState _replaceAt(int index, Map<String, dynamic> entry) {
+    final existing = entries[index];
+    if (_mapShallowEquals(existing, entry)) return this;
+    final next = [...entries]..[index] = entry;
+    return _withSortedEntries(next);
+  }
+
+  FileDirectoryState _withSortedEntries(List<Map<String, dynamic>> next) =>
+      FileDirectoryState(
+        entries: sortFileDirectoryEntries(next),
+        nextCursor: nextCursor,
+        generation: generation,
+        isStale: isStale || nextCursor != null,
+      );
+
+  int _entryIndex(
+    String relativePath, [
+    List<Map<String, dynamic>>? candidates,
+  ]) => (candidates ?? entries).indexWhere(
+    (entry) =>
+        _entryRelativePath(entry) == normalizeFileRelativePath(relativePath),
+  );
+}
+
+enum FileDirectoryUpdateKind { added, removed, updated, moved }
+
+class FileDirectoryUpdate {
+  const FileDirectoryUpdate({
+    required this.kind,
+    this.parentRelativePath,
+    this.relativePath,
+    this.previousRelativePath,
+    this.entry,
+  });
+
+  final FileDirectoryUpdateKind kind;
+  final String? parentRelativePath;
+  final String? relativePath;
+  final String? previousRelativePath;
+  final Map<String, dynamic>? entry;
+}
+
+FileDirectoryUpdate? fileDirectoryUpdateFromRealtime(
+  RealtimeFileDirectoryUpdate update,
+) {
+  final kind = switch (update.kind) {
+    'FILE_ADDED' => FileDirectoryUpdateKind.added,
+    'FILE_REMOVED' => FileDirectoryUpdateKind.removed,
+    'FILE_UPDATED' => FileDirectoryUpdateKind.updated,
+    'FILE_MOVED' => FileDirectoryUpdateKind.moved,
+    _ => null,
+  };
+  if (kind == null) return null;
+  return FileDirectoryUpdate(
+    kind: kind,
+    parentRelativePath: update.parentRelativePath,
+    relativePath: update.relativePath,
+    previousRelativePath: update.previousRelativePath,
+    entry: update.entry,
+  );
+}
+
+String normalizeFileRelativePath(String value) => value
+    .replaceAll('\\', '/')
+    .split('/')
+    .where((segment) => segment.isNotEmpty)
+    .join('/');
+
+String parentRelativeDirectoryOf(String relativePath) {
+  final normalized = normalizeFileRelativePath(relativePath);
+  final lastSeparator = normalized.lastIndexOf('/');
+  if (lastSeparator < 0) return '';
+  return normalized.substring(0, lastSeparator);
+}
+
+List<Map<String, dynamic>> sortFileDirectoryEntries(
+  Iterable<Map<String, dynamic>> entries,
+) {
+  final sorted = entries.map(Map<String, dynamic>.from).toList();
+  sorted.sort((left, right) {
+    final leftIsDirectory = left['type'] == 'DIRECTORY';
+    final rightIsDirectory = right['type'] == 'DIRECTORY';
+    if (leftIsDirectory != rightIsDirectory) {
+      return leftIsDirectory ? -1 : 1;
+    }
+    final leftName = left['name'];
+    final rightName = right['name'];
+    return (leftName is String ? leftName : '').compareTo(
+      rightName is String ? rightName : '',
+    );
+  });
+  return sorted;
+}
+
+String? _entryRelativePath(Map<String, dynamic> entry) {
+  final path = entry['relativePath'];
+  return path is String ? normalizeFileRelativePath(path) : null;
+}
+
+bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
+  if (left.length != right.length) return false;
+  for (final entry in left.entries) {
+    if (right[entry.key] != entry.value) return false;
+  }
+  return true;
+}
+
+bool _entryListsShallowEquals(
+  List<Map<String, dynamic>> left,
+  List<Map<String, dynamic>> right,
+) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (!_mapShallowEquals(left[index], right[index])) return false;
+  }
+  return true;
+}
+
+Map<String, dynamic> patchFileTransferStateForRealtimeUpdate({
+  required Map<String, dynamic> current,
+  required RealtimeFileTransferUpdate update,
+}) {
+  if (current['id'] != update.transferId) return current;
+  if (current['status'] == update.status &&
+      current['failureCode'] == update.failureCode) {
+    return current;
+  }
+  final next = <String, dynamic>{...current, 'status': update.status};
+  if (update.failureCode != null) {
+    next['failureCode'] = update.failureCode;
+  } else {
+    next.remove('failureCode');
+  }
+  return Map<String, dynamic>.unmodifiable(next);
+}
 
 String fileOperationErrorCode(Object error) {
   if (error is DioException) {
@@ -130,17 +534,21 @@ class FilesPage extends ConsumerStatefulWidget {
 }
 
 class _FilesPageState extends ConsumerState<FilesPage> {
-  final List<Map<String, dynamic>> _entries = [];
+  FileDirectoryState _directoryState = const FileDirectoryState.empty();
   final TextEditingController _searchController = TextEditingController();
   String _relativeDirectory = '';
-  String? _nextCursor;
-  String? _generation;
   Object? _error;
   bool _browseLoading = false;
   bool _transferLoading = false;
+  String? _activeBrowseRequestId;
+  RealtimeFileBrowseUpdate? _lastBrowseUpdate;
+  Completer<RealtimeFileBrowseUpdate?>? _browseUpdateWaiter;
   String? _activeTransferId;
+  String? _activeTransferStatus;
   double? _downloadProgress;
   CancelToken? _downloadCancelToken;
+  RealtimeFileTransferUpdate? _lastTransferUpdate;
+  Completer<RealtimeFileTransferUpdate?>? _transferUpdateWaiter;
   Timer? _searchDebounce;
   String _searchQuery = '';
   String _searchScope = fileSearchScopeDirectory;
@@ -148,8 +556,21 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   bool _disposed = false;
   bool _transferCancelled = false;
 
-  FileBrowseGateway get _browseGateway =>
-      widget.browseGateway ?? ApiFileBrowseGateway(ref.read(apiClientProvider));
+  Future<Map<String, dynamic>> _createBrowseRequest(
+    FileDirectoryBrowseRequest request,
+  ) {
+    final gateway = widget.browseGateway;
+    if (gateway != null) {
+      return gateway.createRequest(request.roomId, request.toBody());
+    }
+    return ref.read(fileDirectoryBrowseRequesterProvider)(request);
+  }
+
+  Future<Map<String, dynamic>> _getBrowseRequest(String requestId) {
+    final gateway = widget.browseGateway;
+    if (gateway != null) return gateway.getRequest(requestId);
+    return ref.read(fileBrowseStatusFetcherProvider)(requestId);
+  }
 
   bool get _searchActive => isValidFileSearchQuery(_searchQuery);
   bool get _busy => _browseLoading || _transferLoading;
@@ -169,6 +590,8 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     _requestVersion++;
     _searchDebounce?.cancel();
     _downloadCancelToken?.cancel('Files page disposed');
+    _completeBrowseWaiter();
+    _completeTransferWaiter();
     final transferId = _activeTransferId;
     if (transferId != null) {
       unawaited(
@@ -184,6 +607,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
 
   Future<void> _browse({String? cursor, bool append = false}) async {
     final requestVersion = ++_requestVersion;
+    _completeBrowseWaiter();
     final query = _searchActive ? _searchQuery.trim() : null;
     final relativeDirectory = _relativeDirectory;
     final searchScope = _searchScope;
@@ -191,25 +615,23 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       _browseLoading = true;
       _error = null;
       if (shouldClearBrowseEntries(append: append)) {
-        _entries.clear();
-        _nextCursor = null;
-        _generation = null;
+        _directoryState = const FileDirectoryState.empty();
       }
     });
     try {
-      final body = <String, dynamic>{
-        'relativeDirectory': relativeDirectory,
-        'cursor': cursor,
-      };
-      if (query != null) {
-        body['query'] = query;
-        body['searchScope'] = searchScope;
-      }
-      final created = await _browseGateway.createRequest(widget.roomId, body);
-      final completed = await _pollBrowse(
-        created['id'] as String,
-        requestVersion,
+      final created = await _createBrowseRequest(
+        FileDirectoryBrowseRequest(
+          roomId: widget.roomId,
+          relativeDirectory: relativeDirectory,
+          cursor: cursor,
+          query: query,
+          searchScope: searchScope,
+        ),
       );
+      final requestId = created['id'] as String;
+      if (requestVersion != _requestVersion) return;
+      _activeBrowseRequestId = requestId;
+      final completed = await _waitForBrowseCompletion(created, requestVersion);
       if (requestVersion != _requestVersion) return;
       if (completed['status'] != 'READY') {
         throw StateError(
@@ -223,18 +645,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           .map((entry) => Map<String, dynamic>.from(entry as Map))
           .toList();
       if (!mounted || requestVersion != _requestVersion) return;
-      setState(() {
-        final merged = mergeBrowseEntries(
-          existing: _entries,
-          received: received,
-          append: append,
-        );
-        _entries
-          ..clear()
-          ..addAll(merged);
-        _nextCursor = page['nextCursor'] as String?;
-        _generation = completed['desktopGeneration'] as String?;
-      });
+      final nextDirectoryState = _directoryState.withPage(
+        received: received,
+        append: append,
+        nextCursor: page['nextCursor'] as String?,
+        generation: completed['desktopGeneration'] as String?,
+      );
+      if (!identical(nextDirectoryState, _directoryState)) {
+        setState(() {
+          _directoryState = nextDirectoryState;
+        });
+      }
     } catch (error) {
       if (cursor != null &&
           fileOperationErrorCode(error) == 'CURSOR_INVALIDATED' &&
@@ -252,29 +673,78 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       }
     } finally {
       if (mounted && requestVersion == _requestVersion) {
+        _activeBrowseRequestId = null;
+        _lastBrowseUpdate = null;
         setState(() => _browseLoading = false);
       }
     }
   }
 
-  Future<Map<String, dynamic>> _pollBrowse(
-    String requestId,
+  Future<Map<String, dynamic>> _waitForBrowseCompletion(
+    Map<String, dynamic> initial,
     int requestVersion,
   ) async {
+    var value = initial;
+    if (value['status'] == 'READY' || value['status'] == 'FAILED') {
+      return value;
+    }
+    final requestId = value['id'] as String;
     for (var attempt = 0; attempt < 31; attempt++) {
       if (requestVersion != _requestVersion) {
         throw const _StaleBrowseResponse();
       }
-      final value = await _browseGateway.getRequest(requestId);
+      final realtimeUpdate = await _waitForBrowseUpdate(
+        requestId,
+        requestVersion,
+      );
+      if (requestVersion != _requestVersion) {
+        throw const _StaleBrowseResponse();
+      }
+      value = await _getBrowseRequest(requestId);
       if (requestVersion != _requestVersion) {
         throw const _StaleBrowseResponse();
       }
       if (value['status'] == 'READY' || value['status'] == 'FAILED') {
         return value;
       }
-      await Future<void>.delayed(const Duration(seconds: 2));
+      if (realtimeUpdate?.status == 'FAILED') {
+        throw StateError(realtimeUpdate?.failureCode ?? 'BROWSE_FAILED');
+      }
     }
     throw TimeoutException('TIMED_OUT');
+  }
+
+  Future<RealtimeFileBrowseUpdate?> _waitForBrowseUpdate(
+    String requestId,
+    int requestVersion,
+  ) async {
+    final latest = _lastBrowseUpdate;
+    if (latest != null && latest.requestId == requestId) {
+      _lastBrowseUpdate = null;
+      return latest;
+    }
+    final completer = Completer<RealtimeFileBrowseUpdate?>();
+    _browseUpdateWaiter = completer;
+    final timer = Timer(fileBrowseStatusFallbackInterval, () {
+      if (!completer.isCompleted) completer.complete(null);
+    });
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      if (identical(_browseUpdateWaiter, completer)) {
+        _browseUpdateWaiter = null;
+      }
+      if (requestVersion != _requestVersion) {
+        throw const _StaleBrowseResponse();
+      }
+    }
+  }
+
+  void _completeBrowseWaiter() {
+    final waiter = _browseUpdateWaiter;
+    if (waiter != null && !waiter.isCompleted) waiter.complete(null);
+    _browseUpdateWaiter = null;
   }
 
   Future<void> _openDirectory(String relativePath) async {
@@ -296,14 +766,13 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
     _requestVersion++;
+    _completeBrowseWaiter();
     final query = value.trim();
     setState(() {
       _searchQuery = query;
       _browseLoading = false;
       _error = null;
-      _entries.clear();
-      _nextCursor = null;
-      _generation = null;
+      _directoryState = const FileDirectoryState.empty();
     });
     if (query.isEmpty) {
       unawaited(_browse());
@@ -319,10 +788,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     if (value == null || value == _searchScope) return;
     _searchDebounce?.cancel();
     _requestVersion++;
+    _completeBrowseWaiter();
     setState(() {
       _searchScope = value;
-      _entries.clear();
-      _nextCursor = null;
+      _directoryState = const FileDirectoryState.empty();
       _error = null;
       _browseLoading = false;
     });
@@ -335,6 +804,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       _transferLoading = true;
       _error = null;
       _downloadProgress = null;
+      _activeTransferStatus = 'REQUESTED';
     });
     try {
       final api = ref.read(apiClientProvider);
@@ -351,11 +821,14 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           throw StateError('CANCELLED');
         }
       }
-      setState(() => _activeTransferId = id);
+      setState(() {
+        _activeTransferId = id;
+        _activeTransferStatus = transfer['status'] as String? ?? 'REQUESTED';
+      });
       Map<String, dynamic> state = transfer;
       for (
         var attempt = 0;
-        attempt < 300 && state['status'] != 'READY';
+        attempt < 40 && state['status'] != 'READY';
         attempt++
       ) {
         _throwIfTransferStopped();
@@ -366,9 +839,19 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                 'TRANSFER_FAILED',
           );
         }
-        await Future<void>.delayed(const Duration(seconds: 2));
+        final realtimeUpdate = await _waitForTransferUpdate(id);
         _throwIfTransferStopped();
-        state = await api.get('/v1/file-transfers/$id');
+        if (realtimeUpdate == null) {
+          state = await api.get('/v1/file-transfers/$id');
+        } else {
+          state = patchFileTransferStateForRealtimeUpdate(
+            current: state,
+            update: realtimeUpdate,
+          );
+        }
+        if (mounted) {
+          setState(() => _activeTransferStatus = state['status'] as String?);
+        }
         _throwIfTransferStopped();
       }
       _throwIfTransferStopped();
@@ -406,6 +889,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         setState(() {
           _transferLoading = false;
           _activeTransferId = null;
+          _activeTransferStatus = null;
           _downloadProgress = null;
           _downloadCancelToken = null;
           _transferCancelled = false;
@@ -436,8 +920,82 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
   }
 
+  Future<RealtimeFileTransferUpdate?> _waitForTransferUpdate(
+    String transferId,
+  ) async {
+    final latest = _lastTransferUpdate;
+    if (latest != null && latest.transferId == transferId) {
+      _lastTransferUpdate = null;
+      return latest;
+    }
+    final completer = Completer<RealtimeFileTransferUpdate?>();
+    _transferUpdateWaiter = completer;
+    final timer = Timer(const Duration(seconds: 15), () {
+      if (!completer.isCompleted) completer.complete(null);
+    });
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      if (identical(_transferUpdateWaiter, completer)) {
+        _transferUpdateWaiter = null;
+      }
+    }
+  }
+
+  void _completeTransferWaiter() {
+    final waiter = _transferUpdateWaiter;
+    if (waiter != null && !waiter.isCompleted) waiter.complete(null);
+    _transferUpdateWaiter = null;
+  }
+
   @override
   Widget build(BuildContext context) {
+    ref.listen(realtimeFileBrowseUpdateProvider, (previous, next) {
+      if (next == null ||
+          identical(previous, next) ||
+          next.requestId != _activeBrowseRequestId ||
+          !mounted) {
+        return;
+      }
+      _lastBrowseUpdate = next;
+      final waiter = _browseUpdateWaiter;
+      if (waiter != null && !waiter.isCompleted) {
+        waiter.complete(next);
+      }
+    });
+    ref.listen(realtimeFileTransferUpdateProvider, (previous, next) {
+      if (next == null ||
+          identical(previous, next) ||
+          next.transferId != _activeTransferId ||
+          !mounted) {
+        return;
+      }
+      _lastTransferUpdate = next;
+      final waiter = _transferUpdateWaiter;
+      if (waiter != null && !waiter.isCompleted) {
+        waiter.complete(next);
+      }
+      setState(() => _activeTransferStatus = next.status);
+    });
+    ref.listen(realtimeFileDirectoryUpdateProvider, (previous, next) {
+      if (next == null ||
+          identical(previous, next) ||
+          next.roomId != widget.roomId ||
+          _searchActive ||
+          !mounted) {
+        return;
+      }
+      final update = fileDirectoryUpdateFromRealtime(next);
+      if (update == null) return;
+      final patched = _directoryState.applyUpdate(
+        currentRelativeDirectory: _relativeDirectory,
+        update: update,
+      );
+      if (!identical(patched, _directoryState)) {
+        setState(() => _directoryState = patched);
+      }
+    });
     if (widget.enforceConnectionGuard) {
       ref.listen(connectionGateControllerProvider, (previous, next) {
         final gate = next.asData?.value;
@@ -455,6 +1013,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       body: Column(
         children: [
           if (_busy) LinearProgressIndicator(value: _downloadProgress),
+          if (_activeTransferId != null && _downloadProgress == null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Transfer status: ${_activeTransferStatus ?? 'REQUESTED'}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
             child: Row(
@@ -527,15 +1096,32 @@ class _FilesPageState extends ConsumerState<FilesPage> {
             enabled: !_busy,
             onSelected: _openBreadcrumb,
           ),
-          if (_generation != null)
+          if (_directoryState.generation != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  '목록 버전: $_generation',
+                  '목록 버전: ${_directoryState.generation}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+              ),
+            ),
+          if (_directoryState.isStale)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.sync_problem_outlined, size: 16),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text('파일 목록이 바뀌었을 수 있어요. 필요하면 새로고침하세요.'),
+                  ),
+                  TextButton(
+                    onPressed: _busy ? null : () => _browse(),
+                    child: const Text('새로고침'),
+                  ),
+                ],
               ),
             ),
           if (_error != null)
@@ -589,10 +1175,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         ),
       );
     }
-    if (_entries.isEmpty && _browseLoading) {
+    if (_directoryState.isEmpty && _browseLoading) {
       return const Center(child: Text('PC의 파일 목록을 기다리는 중입니다.'));
     }
-    if (_entries.isEmpty) {
+    if (_directoryState.isEmpty) {
       return Center(
         child: Text(_searchActive ? '검색 결과가 없습니다.' : '이 폴더에 표시할 파일이 없습니다.'),
       );
@@ -601,7 +1187,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       onRefresh: _browse,
       child: ListView(
         children: [
-          ..._entries.map((entry) {
+          ..._directoryState.entries.map((entry) {
             final isFile = entry['type'] == 'FILE';
             return ListTile(
               leading: Icon(
@@ -626,13 +1212,16 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                   : () => _openDirectory(entry['relativePath'] as String),
             );
           }),
-          if (_nextCursor != null)
+          if (_directoryState.nextCursor != null)
             Padding(
               padding: const EdgeInsets.all(16),
               child: OutlinedButton(
                 onPressed: _busy
                     ? null
-                    : () => _browse(cursor: _nextCursor, append: true),
+                    : () => _browse(
+                        cursor: _directoryState.nextCursor,
+                        append: true,
+                      ),
                 child: const Text('다음 파일 불러오기'),
               ),
             ),

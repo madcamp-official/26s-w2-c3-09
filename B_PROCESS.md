@@ -282,7 +282,7 @@
 - loading, empty, offline, error 상태와 다시 시도를 home/room/files/proposal/smart-cache 화면에서 명시한다.
 - 실시간 live/replay sequence는 owner별 cursor transaction에서 단조 증가시키고 이미 처리한 sequence의 UI invalidation을 억제한다.
 - 규칙 생성·수정·활성화와 optimistic version conflict 문구, 제안 파일별 상대 경로·이유·목적지·충돌, 실행의 STALE/ROLLED_BACK/부분 성공 표현을 연결했다.
-- chat은 사용자 메시지만 영속하고 AI provider가 없는 현재 assistant 성공을 만들지 않으며 `UNCONFIGURED`를 표시한다.
+- chat은 사용자 메시지를 영속한 뒤 AI provider 인터페이스를 호출한다. provider가 검증된 `COMMAND_DRAFT`를 반환한 경우에만 기존 사용자 승인 초안 경로로 materialize하고 바로 실행하지 않는다. 현재 기본 provider는 실제 외부 AI가 없음을 `UNCONFIGURED`와 `AI_PROVIDER_UNCONFIGURED`로 명시하고 assistant 성공을 만들지 않는다.
 - 캐릭터 설정 화면에서 털 색상, 액세서리와 방 테마를 저장한다. Rive asset이 없는 현재도 설정 누락을 숨기지 않고 `UNCONFIGURED` 안내와 선택 metadata만 안전하게 저장한다.
 
 ### 운영·문서·빌드
@@ -491,3 +491,48 @@ Private S3 bucket과 EC2 IAM instance role은 아직 없으므로 object lifecyc
 - Android release keystore path/alias/password: signed APK/AAB와 Firebase release SHA 등록.
 - Sentry project DSN/dashboard 권한: 실제 redacted event 수신 확인.
 - A command/FileTransfer/smart-cache local adapter: managed root 전체 통합 E2E.
+
+## 2026-07-14 — 모바일 chat session 연결
+
+- 모바일 채팅 화면을 구형 room 단일 채팅 API에서 `/v1/rooms/:roomId/chat-sessions`, `/v1/chat-sessions/:sessionId/messages` 기반으로 전환했다.
+- 세션 목록 선택, 새 세션 생성, 선택 세션 soft delete 요청, 현재 세션 메시지 조회와 전송을 연결했다.
+- 메시지 전송 후 전체 채팅 reload를 하지 않고 서버가 반환한 사용자 메시지와 assistant 확인 카드만 로컬 목록에 append한다.
+- 채팅 메시지 조회에 cursor/limit pagination을 연결해 “다음 메시지 더 보기”가 기존 목록을 교체하지 않고 다음 page만 append한다.
+- 6번째 세션 생성처럼 서버가 `CHAT_SESSION_LIMIT_REACHED`를 반환하는 경우 성공으로 가장하지 않고 최대 5개 제한 안내를 표시한다.
+- test-scope `ChatGateway` fake로 세션 선택, 전송 append, cursor page append, 5개 제한 안내를 widget test에서 검증했다.
+
+## 2026-07-14 — AI 구조화 출력 검증 경계
+
+- AI provider 결과를 command draft 입력으로 바꾸는 순수 mapper를 분리했다.
+- `COMMAND_DRAFT` 결과는 `createCommandDraftSchema`를 다시 통과해야만 사용자 확인 카드로 저장된다.
+- AI가 server-owned command metadata를 주입하거나 만료 시각 같은 draft 필드를 잘못 만들면 product logic에 들어가기 전에 `AI_OUTPUT_INVALID`로 차단한다.
+- `UNCONFIGURED`와 `NO_ACTION`은 command draft를 만들지 않는 no-draft 경로로 고정했다.
+- DB opt-in ChatService integration suite에 test-only `ScriptedAiProvider`를 추가해 AI `COMMAND_DRAFT`가 command row가 아니라 confirmation draft로만 저장되는 경로를 검증한다.
+
+## 2026-07-14 — Pairing Gate pixel-fill loading
+
+- 접속 로딩 화면을 단순 spinner에서 기존 `mouse_stand.png`를 아래에서 위로 채우는 pixel-fill 캐릭터 UI로 바꿨다.
+- `AUTHENTICATING`, `LOADING_CONNECTIONS`, `CONNECTING_REALTIME`, `RECONCILING_CACHE`, `READY`에 대응하는 진행률과 안내 문구를 enum으로 고정했다.
+- 접근성 reduce-motion 설정에서는 Tween animation 없이 현재 단계의 정적 진행률을 표시한다.
+- loading 화면은 여전히 이전 main 화면을 노출하지 않으며, widget test로 기본 35%와 realtime 60% 단계를 검증했다.
+
+## 2026-07-14 — Rules 화면 부분 갱신
+
+- 모바일 규칙 화면을 `FutureBuilder + setState(_reload)` 중심 구조에서 명시적 local rule list 상태와 `RuleGateway`로 분리했다.
+- rule enable toggle, 생성, 수정은 서버가 반환한 rule 객체만 `upsertRule`로 반영하고 전체 목록 재조회는 초기 진입·수동 새로고침·에러 재시도에만 사용한다.
+- version conflict, room/rule not found는 fake success 없이 사용자 안내로 표시하고 로컬 rule 상태를 임의 성공 처리하지 않는다.
+- test-scope fake gateway로 toggle 후 list reload 없음, 생성 후 upsert, priority 정렬을 widget/unit test에서 검증했다.
+
+## 2026-07-14 — Rule DSL 계약 확장
+
+- `RuleDefinition` 계약에 `modifiedAgeDays`, `createdAgeDays`, `sizeBytes`, `relativePath`, `fileKind` 조건을 additive하게 추가했다.
+- action은 기존 `MOVE`, `QUARANTINE`을 유지하면서 `TRASH`, `CREATE_DIR`을 추가했다.
+- `relativePath` 조건과 `CREATE_DIR.relativePath`는 기존 `relativePathSchema`를 사용해 절대 경로, `..`, 예약명, unsafe segment를 계약 단계에서 거절한다.
+- 이 단계는 서버/API/AI draft가 받을 수 있는 안전 계약 확장이다. 실제 Desktop rule evaluator의 전체 실행 연결은 별도 A-side integration 대상이다.
+
+## 2026-07-14 — 모바일 확장 Rule DSL 폼
+
+- 모바일 규칙 생성/수정 dialog에서 `extension`, legacy `ageDays`뿐 아니라 `modifiedAgeDays`, `createdAgeDays`, `sizeBytes`, `relativePath`, `fileKind`, `name` 조건을 선택할 수 있게 했다.
+- action 선택도 `MOVE`, `TRASH`, `CREATE_DIR`, legacy `QUARANTINE`으로 확장했다. `TRASH`/`QUARANTINE`은 목적지 입력을 숨기고, `MOVE`/`CREATE_DIR`만 상대 경로를 요구한다.
+- 모바일은 직접 JSON을 흩뿌리지 않고 `ruleConditionBody`, `ruleActionBody`를 통해 서버 계약 형태로 payload를 만든다.
+- 확장 DSL 폼은 test-scope fake gateway로 `sizeBytes LTE + TRASH`, `fileKind`, `createdAgeDays`, `CREATE_DIR` payload를 검증했다.

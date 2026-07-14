@@ -1,6 +1,7 @@
 use crate::agent::{
-    AgentCommand, AgentConnectionStatus, AgentRoomSnapshot, AgentRoomSync, AgentRuntime,
-    HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
+    AgentChatMessage, AgentChatSendResult, AgentChatSession, AgentCommand, AgentConnectionStatus,
+    AgentRoomSnapshot, AgentRoomSync, AgentRuntime, HeartbeatResult, PairingSession, PairingStatus,
+    SyncEvent,
 };
 use crate::cleanliness::{calculate_cleanliness_snapshot, CleanlinessSnapshot};
 use crate::command_processor::{process_pending_commands, CommandProcessingReport};
@@ -15,6 +16,8 @@ use crate::storage::agent_sync::AgentSyncStore;
 use crate::storage::managed_roots::{ManagedRootStore, RoomBindingStatus};
 use crate::storage::outbox::OutboxStore;
 use crate::storage::watchers::WatcherStore;
+#[cfg(feature = "tauri-commands")]
+use crate::work_limiter::WorkLimiter;
 use file_engine_cli::journal::{read_operation_history, JournalStatus};
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
@@ -170,7 +173,9 @@ pub async fn process_agent_commands(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
     outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CommandProcessingReport, String> {
+    let _permit = limiter.try_scan()?;
     process_pending_commands(&runtime, &roots, &outbox).await
 }
 
@@ -189,7 +194,9 @@ pub async fn process_agent_decisions(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
     outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<DecisionProcessingReport, String> {
+    let _permit = limiter.try_write()?;
     process_pending_decisions(&runtime, &roots, &outbox).await
 }
 
@@ -207,7 +214,9 @@ pub async fn process_agent_decisions(
 pub async fn process_agent_file_browse_requests(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileBrowseProcessingReport, String> {
+    let _permit = limiter.try_scan()?;
     process_pending_file_browse_requests(&runtime, &roots).await
 }
 
@@ -225,7 +234,9 @@ pub async fn process_agent_file_transfers(
     runtime: tauri::State<'_, AgentRuntime>,
     roots: tauri::State<'_, ManagedRootStore>,
     outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<FileTransferProcessingReport, String> {
+    let _permit = limiter.try_transfer()?;
     process_pending_file_transfers(&runtime, &roots, &outbox).await
 }
 
@@ -318,6 +329,102 @@ fn activate_agent_room_binding(
 ) -> Result<(), String> {
     roots.bind_room(&room.root_id, room.room_id.clone())?;
     Ok(())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn list_agent_chat_sessions(
+    room_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<Vec<AgentChatSession>, String> {
+    runtime
+        .list_chat_sessions(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn list_agent_chat_sessions(
+    runtime: &AgentRuntime,
+    room_id: String,
+) -> Result<Vec<AgentChatSession>, String> {
+    runtime
+        .list_chat_sessions(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn create_agent_chat_session(
+    room_id: String,
+    title: Option<String>,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentChatSession, String> {
+    runtime
+        .create_chat_session(room_id, title)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn create_agent_chat_session(
+    runtime: &AgentRuntime,
+    room_id: String,
+    title: Option<String>,
+) -> Result<AgentChatSession, String> {
+    runtime
+        .create_chat_session(room_id, title)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn list_agent_chat_messages(
+    session_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<Vec<AgentChatMessage>, String> {
+    runtime
+        .list_chat_messages(session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn list_agent_chat_messages(
+    runtime: &AgentRuntime,
+    session_id: String,
+) -> Result<Vec<AgentChatMessage>, String> {
+    runtime
+        .list_chat_messages(session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn send_agent_chat_message(
+    session_id: String,
+    content: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentChatSendResult, String> {
+    runtime
+        .send_chat_message(session_id, content)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn send_agent_chat_message(
+    runtime: &AgentRuntime,
+    session_id: String,
+    content: String,
+) -> Result<AgentChatSendResult, String> {
+    runtime
+        .send_chat_message(session_id, content)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -599,7 +706,7 @@ pub async fn disconnect_agent_room(
     .await
 }
 
-async fn disconnect_agent_room_impl(
+pub(crate) async fn disconnect_agent_room_impl(
     root_id: String,
     idempotency_key: String,
     acknowledge_undoable: bool,
@@ -765,35 +872,6 @@ pub async fn revoke_agent_device(
         .await
         .map_err(|error| error.to_string())?;
     apply_local_device_revoked(runtime, sync_store, roots, watchers).await
-}
-
-#[cfg(feature = "tauri-commands")]
-#[tauri::command]
-pub async fn forget_agent_device(
-    runtime: tauri::State<'_, AgentRuntime>,
-    sync_store: tauri::State<'_, AgentSyncStore>,
-) -> Result<AgentConnectionStatus, String> {
-    forget_agent_device_impl(&runtime, &sync_store).await
-}
-
-#[cfg(not(feature = "tauri-commands"))]
-pub async fn forget_agent_device(
-    runtime: &AgentRuntime,
-    sync_store: &AgentSyncStore,
-) -> Result<AgentConnectionStatus, String> {
-    forget_agent_device_impl(runtime, sync_store).await
-}
-
-async fn forget_agent_device_impl(
-    runtime: &AgentRuntime,
-    sync_store: &AgentSyncStore,
-) -> Result<AgentConnectionStatus, String> {
-    let device_id = runtime.connection_status().device_id;
-    let status = runtime.forget_device().map_err(|error| error.to_string())?;
-    if let Some(device_id) = device_id {
-        sync_store.clear_device(&device_id).await?;
-    }
-    Ok(status)
 }
 
 // These tests exercise the `not(feature = "tauri-commands")` variants above, which take a plain

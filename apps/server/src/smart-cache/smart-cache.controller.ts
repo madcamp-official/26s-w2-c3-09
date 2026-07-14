@@ -12,8 +12,10 @@ import {
 } from '@nestjs/common';
 import {
   cacheCandidateBatchSchema,
+  cachedFileAccessEventSchema,
   completeCacheUploadSchema,
   idempotencyKeySchema,
+  markCachedFilesStaleSchema,
   updateSmartCachePolicySchema,
 } from '@mousekeeper/contracts';
 import { z } from 'zod';
@@ -48,6 +50,15 @@ export class SmartCacheController {
   ) {
     return this.cache.list(p.userId, roomId);
   }
+
+  @Get('rooms/:roomId/smart-cache/files')
+  listSmartCacheFiles(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('roomId') roomId: string,
+  ) {
+    return this.cache.list(p.userId, roomId);
+  }
+
   @Post('agent/cache-candidates') @AgentOnly() submit(
     @CurrentPrincipal() p: AuthPrincipal,
     @Headers('idempotency-key') raw: string | undefined,
@@ -87,6 +98,20 @@ export class SmartCacheController {
     return this.cache.cancelReservation(p.userId, requireAgentDevice(p), id);
   }
 
+  @Post('agent/cached-files/stale')
+  @AgentOnly()
+  markStale(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Headers('idempotency-key') raw: string | undefined,
+    @Body(new ZodValidationPipe(markCachedFilesStaleSchema))
+    body: z.infer<typeof markCachedFilesStaleSchema>,
+  ) {
+    const key = idempotencyKeySchema.safeParse(raw);
+    if (!key.success)
+      throw new BadRequestException({ code: 'VALIDATION_FAILED' });
+    return this.cache.markStale(p.userId, requireAgentDevice(p), body);
+  }
+
   @Delete('cached-files/:cachedFileId')
   remove(
     @CurrentPrincipal() p: AuthPrincipal,
@@ -101,5 +126,15 @@ export class SmartCacheController {
     @Param('cachedFileId') id: string,
   ) {
     return this.cache.download(p.userId, id);
+  }
+
+  @Post('cached-files/:cachedFileId/access-events')
+  recordAccess(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('cachedFileId') id: string,
+    @Body(new ZodValidationPipe(cachedFileAccessEventSchema))
+    body: z.infer<typeof cachedFileAccessEventSchema>,
+  ) {
+    return this.cache.recordAccess(p.userId, id, body);
   }
 }

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::cleanliness::CleanlinessSnapshot;
 use crate::command_processor::AgentProposalSubmission;
+use crate::smart_cache_crypto::SmartCacheEncryptionMetadata;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -87,6 +88,38 @@ pub struct AgentRoomSync {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatSession {
+    pub session_id: String,
+    pub room_id: String,
+    pub title: String,
+    pub status: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub message_preview: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatMessage {
+    pub message_id: String,
+    pub room_id: String,
+    pub session_id: Option<String>,
+    pub sender_type: String,
+    pub message_type: String,
+    pub content: String,
+    pub structured_payload: Value,
+    pub command_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentChatSendResult {
+    pub message: AgentChatMessage,
+    pub assistant: Option<AgentChatMessage>,
+    pub ai_status: String,
+    pub ai: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct AgentProposalItemRecord {
     pub item_order: i64,
     pub action_type: String,
@@ -118,6 +151,8 @@ pub struct AgentFileBrowseRequest {
     pub relative_directory: String,
     pub cursor: Option<String>,
     pub query: Option<String>,
+    pub extensions: Vec<String>,
+    pub limit: usize,
     pub search_scope: AgentFileSearchScope,
 }
 
@@ -210,6 +245,7 @@ pub struct AgentSmartCachePolicy {
     pub quota_bytes: u64,
     pub max_file_bytes: u64,
     pub excluded_patterns: Vec<String>,
+    pub pinned_patterns: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -252,6 +288,16 @@ pub struct AgentCachedFile {
     pub size_bytes: u64,
     pub sha256: String,
     pub freshness_status: String,
+    pub encryption_metadata: Option<SmartCacheEncryptionMetadata>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSmartCacheStaleResult {
+    pub room_id: String,
+    pub source_relative_path: Option<String>,
+    pub reason: String,
+    pub stale_count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -758,6 +804,107 @@ impl AgentRuntime {
         result
     }
 
+    pub async fn list_chat_sessions(
+        &self,
+        room_id: String,
+    ) -> Result<Vec<AgentChatSession>, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<ChatSessionResponse>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/chat-sessions"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|sessions| validate_chat_sessions(&room_id, sessions));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn create_chat_session(
+        &self,
+        room_id: String,
+        title: Option<String>,
+    ) -> Result<AgentChatSession, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let body = match title {
+            Some(title) => {
+                let trimmed = title.trim();
+                if trimmed.is_empty() || trimmed.chars().count() > 120 {
+                    return Err(validation_error(
+                        "chat session title must contain between 1 and 120 characters",
+                    ));
+                }
+                json!({ "title": trimmed })
+            }
+            None => json!({}),
+        };
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ChatSessionResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms/{room_id}/chat-sessions"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&body),
+            )
+            .await
+            .and_then(|session| validate_chat_session(&room_id, session));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn list_chat_messages(
+        &self,
+        session_id: String,
+    ) -> Result<Vec<AgentChatMessage>, AgentError> {
+        validate_opaque_value("chat session id", &session_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<ChatMessageResponse>>(
+                self.http
+                    .get(format!("{base_url}/v1/chat-sessions/{session_id}/messages"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(|messages| validate_chat_messages(Some(&session_id), messages));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn send_chat_message(
+        &self,
+        session_id: String,
+        content: String,
+    ) -> Result<AgentChatSendResult, AgentError> {
+        validate_opaque_value("chat session id", &session_id, 200)?;
+        validate_chat_content(&content)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ChatSendResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/chat-sessions/{session_id}/messages"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({ "content": content.trim() })),
+            )
+            .await
+            .and_then(|response| validate_chat_send_result(&session_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
     pub async fn disconnect_room(
         &self,
         room_id: String,
@@ -868,6 +1015,61 @@ impl AgentRuntime {
                     .json(&proposal),
             )
             .await;
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    /// Creates a room command on the server (`POST /v1/rooms/:id/commands`). The desktop uses this
+    /// to start an *autonomous* cleanup: the background loop synthesizes an `ANALYZE` command it
+    /// immediately attaches a proposal to, so cleanups the desktop found on its own still reach
+    /// mobile through the normal command -> proposal -> decision pipeline (the server requires every
+    /// proposal to originate from an `ANALYZING` command). On an idempotent replay the server
+    /// returns the existing command with its current status, which the caller uses to detect that a
+    /// proposal was already submitted.
+    pub async fn create_command(
+        &self,
+        room_id: String,
+        intent: String,
+        payload: Value,
+        idempotency_key: String,
+    ) -> Result<AgentCommand, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        validate_opaque_value("command idempotency key", &idempotency_key, 128)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ServerCommand>(
+                self.http
+                    .post(format!("{base_url}/v1/rooms/{room_id}/commands"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({ "intent": intent, "payload": payload })),
+            )
+            .await
+            .and_then(validate_server_command);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    /// Counts the proposals still awaiting a decision in a room
+    /// (`GET /v1/rooms/:id/proposals/open`). The autonomous cleanup path uses this to avoid piling
+    /// up duplicate proposals every tick: it only submits a new one when the room has none open.
+    pub async fn open_proposal_count_for_room(&self, room_id: String) -> Result<usize, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<Value>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/proposals/open"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .map(|proposals| proposals.len());
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1202,6 +1404,7 @@ impl AgentRuntime {
         sha256: String,
         usage_score: i64,
         manual_pin: bool,
+        encryption_metadata: SmartCacheEncryptionMetadata,
     ) -> Result<AgentCachedFile, AgentError> {
         validate_opaque_value("smart cache reservation id", &reservation_id, 200)?;
         validate_opaque_value(
@@ -1215,6 +1418,7 @@ impl AgentRuntime {
             ));
         }
         validate_sha256(&sha256)?;
+        validate_smart_cache_encryption_metadata(&encryption_metadata)?;
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
             .send_json::<CachedFileResponse>(
@@ -1229,10 +1433,67 @@ impl AgentRuntime {
                         "sha256": sha256,
                         "usageScore": usage_score,
                         "manualPin": manual_pin,
+                        "encryptionMetadata": encryption_metadata,
                     })),
             )
             .await
             .and_then(validate_cached_file_response);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn mark_smart_cache_stale(
+        &self,
+        idempotency_key: String,
+        room_id: String,
+        source_relative_path: Option<String>,
+        reason: String,
+    ) -> Result<AgentSmartCacheStaleResult, AgentError> {
+        validate_opaque_value("smart cache stale idempotency key", &idempotency_key, 128)?;
+        validate_opaque_value("room id", &room_id, 200)?;
+        validate_smart_cache_stale_reason(&reason)?;
+        match (&source_relative_path, reason.as_str()) {
+            (Some(path), "SOURCE_CHANGED" | "SOURCE_REMOVED") => {
+                validate_relative_path("smart cache stale source path", path)?;
+            }
+            (None, "REINDEXED") => {}
+            (None, _) => {
+                return Err(validation_error(
+                    "smart cache source changes must include sourceRelativePath",
+                ));
+            }
+            (Some(_), "REINDEXED") => {
+                return Err(validation_error(
+                    "smart cache REINDEXED stale reports must not include sourceRelativePath",
+                ));
+            }
+            _ => unreachable!("reason was validated above"),
+        }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<SmartCacheStaleResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/agent/cached-files/stale"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({
+                        "roomId": room_id.clone(),
+                        "sourceRelativePath": source_relative_path.clone(),
+                        "reason": reason.clone(),
+                    })),
+            )
+            .await
+            .and_then(|response| {
+                validate_smart_cache_stale_response(
+                    &room_id,
+                    source_relative_path.as_deref(),
+                    &reason,
+                    response,
+                )
+            });
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1521,6 +1782,41 @@ struct ServerRoom {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ChatSessionResponse {
+    id: String,
+    room_id: String,
+    title: String,
+    status: String,
+    created_at: String,
+    updated_at: String,
+    message_preview: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatMessageResponse {
+    id: String,
+    room_id: String,
+    session_id: Option<String>,
+    sender_type: String,
+    message_type: String,
+    content: String,
+    structured_payload: Value,
+    command_id: Option<String>,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatSendResponse {
+    message: ChatMessageResponse,
+    assistant: Option<ChatMessageResponse>,
+    ai_status: String,
+    ai: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SyncEventResponse {
     event_id: String,
     event_type: String,
@@ -1611,8 +1907,16 @@ struct FileBrowseRequestResponse {
     #[serde(default)]
     query: Option<String>,
     #[serde(default)]
+    extensions: Vec<String>,
+    #[serde(default = "default_file_browse_limit")]
+    limit: usize,
+    #[serde(default)]
     search_scope: AgentFileSearchScope,
     status: String,
+}
+
+fn default_file_browse_limit() -> usize {
+    200
 }
 
 #[derive(Deserialize)]
@@ -1644,6 +1948,8 @@ struct SmartCachePolicyResponse {
     quota_bytes: u64,
     max_file_bytes: u64,
     excluded_patterns: Vec<String>,
+    #[serde(default)]
+    pinned_patterns: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1675,6 +1981,17 @@ struct CachedFileResponse {
     size_bytes: u64,
     sha256: String,
     freshness_status: String,
+    #[serde(default)]
+    encryption_metadata: Option<SmartCacheEncryptionMetadata>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SmartCacheStaleResponse {
+    room_id: String,
+    source_relative_path: Option<String>,
+    reason: String,
+    stale_count: u64,
 }
 
 #[derive(Deserialize)]
@@ -1782,6 +2099,119 @@ fn validate_server_room(
         return Err(invalid_response_error("room failed response validation"));
     }
     Ok(room)
+}
+
+fn validate_chat_sessions(
+    expected_room_id: &str,
+    responses: Vec<ChatSessionResponse>,
+) -> Result<Vec<AgentChatSession>, AgentError> {
+    responses
+        .into_iter()
+        .map(|session| validate_chat_session(expected_room_id, session))
+        .collect()
+}
+
+fn validate_chat_session(
+    expected_room_id: &str,
+    response: ChatSessionResponse,
+) -> Result<AgentChatSession, AgentError> {
+    if response.id.is_empty()
+        || response.room_id != expected_room_id
+        || response.title.trim().is_empty()
+        || response.title.chars().count() > 120
+        || response.status != "ACTIVE"
+        || response.created_at.is_empty()
+        || response.updated_at.is_empty()
+        || response.message_preview.chars().count() > 120
+    {
+        return Err(invalid_response_error(
+            "chat session failed response validation",
+        ));
+    }
+    Ok(AgentChatSession {
+        session_id: response.id,
+        room_id: response.room_id,
+        title: response.title,
+        status: response.status,
+        created_at: response.created_at,
+        updated_at: response.updated_at,
+        message_preview: response.message_preview,
+    })
+}
+
+fn validate_chat_messages(
+    expected_session_id: Option<&str>,
+    responses: Vec<ChatMessageResponse>,
+) -> Result<Vec<AgentChatMessage>, AgentError> {
+    responses
+        .into_iter()
+        .map(|message| validate_chat_message(expected_session_id, message))
+        .collect()
+}
+
+fn validate_chat_message(
+    expected_session_id: Option<&str>,
+    response: ChatMessageResponse,
+) -> Result<AgentChatMessage, AgentError> {
+    let session_matches = match expected_session_id {
+        Some(expected) => response.session_id.as_deref() == Some(expected),
+        None => response.session_id.is_some(),
+    };
+    if response.id.is_empty()
+        || response.room_id.is_empty()
+        || !session_matches
+        || !matches!(response.sender_type.as_str(), "USER" | "ASSISTANT")
+        || !matches!(response.message_type.as_str(), "TEXT" | "COMMAND_DRAFT")
+        || response.content.chars().count() > 2_000
+        || response.created_at.is_empty()
+    {
+        return Err(invalid_response_error(
+            "chat message failed response validation",
+        ));
+    }
+    Ok(AgentChatMessage {
+        message_id: response.id,
+        room_id: response.room_id,
+        session_id: response.session_id,
+        sender_type: response.sender_type,
+        message_type: response.message_type,
+        content: response.content,
+        structured_payload: response.structured_payload,
+        command_id: response.command_id,
+        created_at: response.created_at,
+    })
+}
+
+fn validate_chat_send_result(
+    expected_session_id: &str,
+    response: ChatSendResponse,
+) -> Result<AgentChatSendResult, AgentError> {
+    let message = validate_chat_message(Some(expected_session_id), response.message)?;
+    let assistant = response
+        .assistant
+        .map(|message| validate_chat_message(Some(expected_session_id), message))
+        .transpose()?;
+    if response.ai_status.is_empty() || !response.ai.is_object() {
+        return Err(invalid_response_error(
+            "chat AI result failed response validation",
+        ));
+    }
+    Ok(AgentChatSendResult {
+        message,
+        assistant,
+        ai_status: response.ai_status,
+        ai: response.ai,
+    })
+}
+
+fn validate_chat_content(content: &str) -> Result<(), AgentError> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 2_000 {
+        return Err(validation_error(
+            "chat message content must contain between 1 and 2000 characters",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_sync_events(
@@ -1933,6 +2363,10 @@ fn validate_file_browse_request(
         || response.query.as_ref().is_some_and(|query| {
             !(2..=100).contains(&query.trim().chars().count()) || query != query.trim()
         })
+        || response.limit == 0
+        || response.limit > 200
+        || !file_browse_extensions_are_valid(&response.extensions)
+        || (response.query.is_none() && !response.extensions.is_empty())
         || response.status != "REQUESTED"
     {
         return Err(invalid_response_error(
@@ -1945,8 +2379,21 @@ fn validate_file_browse_request(
         relative_directory: response.relative_directory,
         cursor: response.cursor,
         query: response.query,
+        extensions: response.extensions,
+        limit: response.limit,
         search_scope: response.search_scope,
     })
+}
+
+fn file_browse_extensions_are_valid(extensions: &[String]) -> bool {
+    extensions.is_empty()
+        || (extensions.len() <= 50
+            && extensions.iter().all(|extension| {
+                let bytes = extension.as_bytes();
+                bytes.len() >= 2
+                    && bytes[0] == b'.'
+                    && bytes[1..].iter().all(|byte| byte.is_ascii_alphanumeric())
+            }))
 }
 
 fn validate_file_transfers(
@@ -2045,6 +2492,7 @@ fn validate_smart_cache_policy(
         quota_bytes: response.quota_bytes,
         max_file_bytes: response.max_file_bytes,
         excluded_patterns: response.excluded_patterns,
+        pinned_patterns: response.pinned_patterns,
     })
 }
 
@@ -2115,6 +2563,9 @@ fn validate_cached_file_response(
     validate_relative_path("cached file path", &response.source_relative_path)?;
     validate_sha256(&response.source_version_hash)?;
     validate_sha256(&response.sha256)?;
+    if let Some(metadata) = &response.encryption_metadata {
+        validate_smart_cache_encryption_metadata(metadata)?;
+    }
     if response.id.is_empty()
         || response.size_bytes == 0
         || !matches!(
@@ -2133,7 +2584,71 @@ fn validate_cached_file_response(
         size_bytes: response.size_bytes,
         sha256: response.sha256,
         freshness_status: response.freshness_status,
+        encryption_metadata: response.encryption_metadata,
     })
+}
+
+fn validate_smart_cache_stale_reason(reason: &str) -> Result<(), AgentError> {
+    if !matches!(reason, "SOURCE_CHANGED" | "SOURCE_REMOVED" | "REINDEXED") {
+        return Err(validation_error(
+            "smart cache stale reason must be SOURCE_CHANGED, SOURCE_REMOVED, or REINDEXED",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_smart_cache_stale_response(
+    expected_room_id: &str,
+    expected_source_relative_path: Option<&str>,
+    expected_reason: &str,
+    response: SmartCacheStaleResponse,
+) -> Result<AgentSmartCacheStaleResult, AgentError> {
+    validate_smart_cache_stale_reason(&response.reason)
+        .map_err(|_| invalid_response_error("smart cache stale response reason is invalid"))?;
+    if response.room_id != expected_room_id
+        || response.source_relative_path.as_deref() != expected_source_relative_path
+        || response.reason != expected_reason
+    {
+        return Err(invalid_response_error(
+            "smart cache stale response did not match the request",
+        ));
+    }
+    if let Some(path) = &response.source_relative_path {
+        validate_relative_path("smart cache stale response path", path)
+            .map_err(|_| invalid_response_error("smart cache stale response path is invalid"))?;
+    }
+    Ok(AgentSmartCacheStaleResult {
+        room_id: response.room_id,
+        source_relative_path: response.source_relative_path,
+        reason: response.reason,
+        stale_count: response.stale_count,
+    })
+}
+
+fn validate_smart_cache_encryption_metadata(
+    metadata: &SmartCacheEncryptionMetadata,
+) -> Result<(), AgentError> {
+    if metadata.algorithm != crate::smart_cache_crypto::SMART_CACHE_ENCRYPTION_ALGORITHM
+        || metadata.format != crate::smart_cache_crypto::SMART_CACHE_ENCRYPTION_FORMAT
+        || metadata.key_id.trim().len() < 16
+        || metadata.key_id.len() > 128
+        || metadata.nonce_hex.len() != 24
+        || !metadata
+            .nonce_hex
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+        || metadata.plaintext_size_bytes == 0
+        || metadata.plaintext_sha256.len() != 64
+        || !metadata
+            .plaintext_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(invalid_response_error(
+            "smart cache encryption metadata failed response validation",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_cleanliness_snapshot(snapshot: &CleanlinessSnapshot) -> Result<(), AgentError> {
@@ -2244,7 +2759,7 @@ fn validate_proposal_item(
         || item.reason_code.is_empty()
         || !matches!(
             item.action_type.as_str(),
-            "MOVE" | "QUARANTINE" | "CREATE_DIR" | "README_WRITE"
+            "MOVE" | "QUARANTINE" | "CREATE_DIR" | "CREATE_FILE" | "README_WRITE"
         )
         || !matches!(
             item.conflict_state.as_str(),
@@ -2781,6 +3296,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forbidden_heartbeat_stays_offline_without_dropping_pairing() {
+        // A 403 is a per-endpoint authorization decision, not a pairing revocation, so it must not
+        // delete local credentials or force a re-pair — the device simply goes Offline and retries.
+        let (server_url, server) = one_shot_error_server(
+            "/v1/devices/device-1/heartbeat",
+            "HTTP/1.1 403 Forbidden",
+            r#"{"code":"FORBIDDEN","message":"forbidden"}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/devices/device-1/heartbeat HTTP/1.1"));
+            },
+        );
+        let store = Arc::new(MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        });
+        let runtime = AgentRuntime::for_test(Some(&server_url), store.clone());
+
+        let error = runtime
+            .heartbeat("ONLINE_IDLE".to_string())
+            .await
+            .expect_err("forbidden heartbeat still fails");
+        server.join().expect("server thread");
+
+        let status = runtime.connection_status();
+        assert_eq!(error.code, AgentErrorCode::Forbidden);
+        assert_eq!(status.state, AgentConnectionState::Offline);
+        // The pairing survives: device id, saved credential, and realtime credential all remain.
+        assert_eq!(status.device_id.as_deref(), Some("device-1"));
+        assert!(runtime.realtime_credentials().is_some());
+        assert!(store.load().expect("credential store").is_some());
+    }
+
+    #[tokio::test]
     async fn managed_root_creates_a_mobile_room_through_the_server_contract() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind room server");
         let address = listener.local_addr().expect("room server address");
@@ -2896,6 +3447,8 @@ mod tests {
                 "relativeDirectory":"docs",
                 "cursor":null,
                 "query":"report",
+                "extensions":[".pdf"],
+                "limit":25,
                 "searchScope":"MANAGED_ROOT",
                 "status":"REQUESTED"
             }]"#,
@@ -2921,6 +3474,8 @@ mod tests {
 
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].query.as_deref(), Some("report"));
+        assert_eq!(requests[0].extensions, vec![".pdf"]);
+        assert_eq!(requests[0].limit, 25);
         assert_eq!(requests[0].search_scope, AgentFileSearchScope::ManagedRoot);
     }
 
@@ -2934,6 +3489,8 @@ mod tests {
             relative_directory: String::new(),
             cursor: None,
             query: Some(query.clone()),
+            extensions: Vec::new(),
+            limit: 200,
             search_scope: AgentFileSearchScope::ManagedRoot,
             status: "REQUESTED".to_string(),
         })
@@ -3144,6 +3701,82 @@ mod tests {
             crate::cleanliness::CLEANLINESS_FORMULA_VERSION
         );
         assert_eq!(saved.score, 88);
+    }
+
+    #[tokio::test]
+    async fn smart_cache_stale_report_uses_the_agent_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/agent/cached-files/stale",
+            r#"{"roomId":"room-1","sourceRelativePath":"docs/a.pdf","reason":"SOURCE_CHANGED","staleCount":1}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/agent/cached-files/stale HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+                assert!(request.contains("idempotency-key: stale-1"));
+                assert!(request.contains(r#""roomId":"room-1""#));
+                assert!(request.contains(r#""sourceRelativePath":"docs/a.pdf""#));
+                assert!(request.contains(r#""reason":"SOURCE_CHANGED""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let result = runtime
+            .mark_smart_cache_stale(
+                "stale-1".to_string(),
+                "room-1".to_string(),
+                Some("docs/a.pdf".to_string()),
+                "SOURCE_CHANGED".to_string(),
+            )
+            .await
+            .expect("stale report");
+        server.join().expect("server thread");
+
+        assert_eq!(result.room_id, "room-1");
+        assert_eq!(result.source_relative_path.as_deref(), Some("docs/a.pdf"));
+        assert_eq!(result.reason, "SOURCE_CHANGED");
+        assert_eq!(result.stale_count, 1);
+    }
+
+    #[tokio::test]
+    async fn desktop_chat_messages_use_the_shared_server_session_contract() {
+        let (server_url, server) = one_shot_json_server(
+            "/v1/chat-sessions/session-1/messages",
+            r#"{"message":{"id":"message-1","roomId":"room-1","sessionId":"session-1","senderType":"USER","messageType":"TEXT","content":"정리해줘","structuredPayload":{},"commandId":null,"createdAt":"2026-07-14T00:00:00.000Z"},"assistant":null,"aiStatus":"UNCONFIGURED","ai":{"status":"UNCONFIGURED","code":"AI_PROVIDER_UNCONFIGURED"}}"#,
+            |request| {
+                assert!(request.starts_with("POST /v1/chat-sessions/session-1/messages HTTP/1.1"));
+                assert!(request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer secret-token"));
+                assert!(request.contains(r#""content":"정리해줘""#));
+            },
+        );
+        let store = MemoryCredentialStore {
+            credential: Mutex::new(Some(DeviceCredential {
+                server_base_url: server_url.clone(),
+                device_id: "device-1".to_string(),
+                device_token: "secret-token".to_string(),
+            })),
+        };
+        let runtime = AgentRuntime::for_test(Some(&server_url), Arc::new(store));
+
+        let result = runtime
+            .send_chat_message("session-1".to_string(), "정리해줘".to_string())
+            .await
+            .expect("chat send");
+        server.join().expect("server thread");
+
+        assert_eq!(result.message.message_id, "message-1");
+        assert_eq!(result.message.session_id.as_deref(), Some("session-1"));
+        assert_eq!(result.ai_status, "UNCONFIGURED");
+        assert!(result.assistant.is_none());
     }
 
     #[tokio::test]

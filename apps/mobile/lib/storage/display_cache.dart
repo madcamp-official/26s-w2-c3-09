@@ -74,6 +74,59 @@ class DisplayCache {
     });
   }
 
+  /// Adds home-only fields to rows that the authoritative pairing gate has
+  /// already cached. Missing rows are never inserted, so a late summary
+  /// response cannot resurrect a revoked device or removed room.
+  Future<void> enrichConnectionState({
+    required List<Map<String, dynamic>> devices,
+    required List<Map<String, dynamic>> rooms,
+  }) async {
+    final ownerUid = _ownerUid;
+    await _database.transaction(() async {
+      final now = DateTime.now();
+      for (final value in devices) {
+        final id = value['id'];
+        if (id is! String) continue;
+        final existing =
+            await (_database.select(_database.cachedDevices)..where(
+                  (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+                ))
+                .getSingleOrNull();
+        if (existing == null) continue;
+        final merged = {..._decode(existing.payloadJson), ...value};
+        await (_database.update(_database.cachedDevices)..where(
+              (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+            ))
+            .write(
+              CachedDevicesCompanion(
+                payloadJson: Value(jsonEncode(merged)),
+                updatedAt: Value(now),
+              ),
+            );
+      }
+      for (final value in rooms) {
+        final id = value['id'];
+        if (id is! String) continue;
+        final existing =
+            await (_database.select(_database.cachedRooms)..where(
+                  (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+                ))
+                .getSingleOrNull();
+        if (existing == null) continue;
+        final merged = {..._decode(existing.payloadJson), ...value};
+        await (_database.update(_database.cachedRooms)..where(
+              (row) => row.ownerUid.equals(ownerUid) & row.id.equals(id),
+            ))
+            .write(
+              CachedRoomsCompanion(
+                payloadJson: Value(jsonEncode(merged)),
+                updatedAt: Value(now),
+              ),
+            );
+      }
+    });
+  }
+
   Future<void> removeRoomCascade(String roomId) {
     return _database.transaction(() => _deleteRoomRows(_ownerUid, roomId));
   }
@@ -117,6 +170,9 @@ class DisplayCache {
       )..where((row) => row.ownerUid.equals(ownerUid))).go();
       await (_database.delete(
         _database.cachedRoomSnapshots,
+      )..where((row) => row.ownerUid.equals(ownerUid))).go();
+      await (_database.delete(
+        _database.cachedSmartCacheFiles,
       )..where((row) => row.ownerUid.equals(ownerUid))).go();
       // A queued room mutation must not cross an unpaired -> re-paired
       // boundary, even if the new pairing happens to reuse an identifier.
@@ -343,6 +399,91 @@ class DisplayCache {
     return row == null ? null : _decode(row.payloadJson);
   }
 
+  Future<void> replaceSmartCacheFiles(
+    String roomId,
+    List<Map<String, dynamic>> values,
+  ) async {
+    final ownerUid = _ownerUid;
+    await _database.transaction(() async {
+      if (!await _cachedRoomExists(ownerUid, roomId)) return;
+      await (_database.delete(_database.cachedSmartCacheFiles)..where(
+            (row) => row.ownerUid.equals(ownerUid) & row.roomId.equals(roomId),
+          ))
+          .go();
+      final now = DateTime.now();
+      for (final value in values) {
+        await _database
+            .into(_database.cachedSmartCacheFiles)
+            .insert(_smartCacheFileCompanion(ownerUid, roomId, value, now));
+      }
+    });
+  }
+
+  Future<void> markSmartCacheFileDownloaded({
+    required String roomId,
+    required Map<String, dynamic> file,
+    required Map<String, dynamic> downloadTarget,
+    required String localDownloadPath,
+  }) async {
+    final ownerUid = _ownerUid;
+    final cachedFileId = _requiredString(file, 'id');
+    final now = DateTime.now();
+    await _database.transaction(() async {
+      if (!await _cachedRoomExists(ownerUid, roomId)) return;
+      final existing =
+          await (_database.select(_database.cachedSmartCacheFiles)..where(
+                (row) =>
+                    row.ownerUid.equals(ownerUid) & row.id.equals(cachedFileId),
+              ))
+              .getSingleOrNull();
+      final previousPayload = existing == null
+          ? const <String, dynamic>{}
+          : _decode(existing.payloadJson);
+      final encryptionMetadata = downloadTarget['encryptionMetadata'];
+      final plaintextSha256 = encryptionMetadata is Map
+          ? encryptionMetadata['plaintextSha256']
+          : null;
+      final plaintextSizeBytes = encryptionMetadata is Map
+          ? encryptionMetadata['plaintextSizeBytes']
+          : null;
+      final objectSha256 = downloadTarget['sha256'];
+      final merged = {
+        ...previousPayload,
+        ...file,
+        'id': cachedFileId,
+        'roomId': roomId,
+        'localDownloadPath': localDownloadPath,
+        if (objectSha256 is String) 'objectSha256': objectSha256,
+        'sha256': plaintextSha256 is String
+            ? plaintextSha256
+            : downloadTarget['sha256'] ?? file['sha256'],
+        'sizeBytes': plaintextSizeBytes is num
+            ? plaintextSizeBytes
+            : downloadTarget['sizeBytes'] ?? file['sizeBytes'],
+        'freshnessStatus':
+            downloadTarget['freshnessStatus'] ?? file['freshnessStatus'],
+        'lastVerifiedAt':
+            downloadTarget['lastVerifiedAt'] ?? file['lastVerifiedAt'],
+        'downloadedAt': now.toUtc().toIso8601String(),
+      };
+      await _database
+          .into(_database.cachedSmartCacheFiles)
+          .insertOnConflictUpdate(
+            _smartCacheFileCompanion(ownerUid, roomId, merged, now),
+          );
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> smartCacheFiles(String roomId) async {
+    final rows =
+        await (_database.select(_database.cachedSmartCacheFiles)..where(
+              (row) =>
+                  row.ownerUid.equals(_ownerUid) & row.roomId.equals(roomId),
+            ))
+            .get();
+    return rows.map((row) => _decode(row.payloadJson)).toList();
+  }
+
   Future<void> _deleteRoomRows(String ownerUid, String roomId) async {
     await (_database.delete(_database.cachedRooms)..where(
           (row) => row.ownerUid.equals(ownerUid) & row.id.equals(roomId),
@@ -361,6 +502,10 @@ class DisplayCache {
         ))
         .go();
     await (_database.delete(_database.cachedRoomSnapshots)..where(
+          (row) => row.ownerUid.equals(ownerUid) & row.roomId.equals(roomId),
+        ))
+        .go();
+    await (_database.delete(_database.cachedSmartCacheFiles)..where(
           (row) => row.ownerUid.equals(ownerUid) & row.roomId.equals(roomId),
         ))
         .go();
@@ -448,4 +593,45 @@ class DisplayCache {
   Map<String, dynamic> _decode(String value) {
     return Map<String, dynamic>.from(jsonDecode(value) as Map);
   }
+
+  CachedSmartCacheFilesCompanion _smartCacheFileCompanion(
+    String ownerUid,
+    String roomId,
+    Map<String, dynamic> value,
+    DateTime now,
+  ) {
+    return CachedSmartCacheFilesCompanion.insert(
+      ownerUid: ownerUid,
+      roomId: roomId,
+      id: _requiredString(value, 'id'),
+      sourceRelativePath: _requiredString(value, 'sourceRelativePath'),
+      payloadJson: jsonEncode(value),
+      availabilityStatus: value['availabilityStatus'] as String? ?? 'AVAILABLE',
+      freshnessStatus: value['freshnessStatus'] as String? ?? 'UNKNOWN',
+      updatedAt: now,
+      localDownloadPath: Value(value['localDownloadPath'] as String?),
+      sha256: Value(value['sha256'] as String?),
+      sizeBytes: Value(_intValue(value['sizeBytes'])),
+      lastVerifiedAt: Value(_dateTimeValue(value['lastVerifiedAt'])),
+      downloadedAt: Value(_dateTimeValue(value['downloadedAt'])),
+    );
+  }
+
+  String _requiredString(Map<String, dynamic> value, String key) {
+    final raw = value[key];
+    if (raw is String && raw.isNotEmpty) return raw;
+    throw FormatException('INVALID_SMART_CACHE_FILE_$key');
+  }
+
+  int? _intValue(Object? value) => switch (value) {
+    final int parsed => parsed,
+    final num parsed => parsed.toInt(),
+    _ => null,
+  };
+
+  DateTime? _dateTimeValue(Object? value) => switch (value) {
+    final DateTime parsed => parsed,
+    final String raw => DateTime.tryParse(raw),
+    _ => null,
+  };
 }

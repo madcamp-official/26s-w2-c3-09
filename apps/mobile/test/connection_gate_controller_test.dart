@@ -126,6 +126,90 @@ void main() {
   );
 
   test(
+    'connection summary parser validates the lightweight gate aggregate',
+    () {
+      final summary = {
+        'devices': [
+          {'id': 'device-a', 'status': 'ACTIVE'},
+        ],
+        'rooms': [
+          {'id': 'room-a', 'desktopDeviceId': 'device-a', 'status': 'ACTIVE'},
+        ],
+      };
+
+      expect(connectionGateSummaryPath, '/v1/connections/summary');
+      expect(
+        connectionItemsFromSummary(summary, 'devices').single['id'],
+        'device-a',
+      );
+      expect(
+        connectionItemsFromSummary(summary, 'rooms').single['id'],
+        'room-a',
+      );
+      expect(
+        () => connectionItemsFromSummary({'devices': 'bad'}, 'devices'),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test(
+    'reconcile reports and caches only an actual connection change',
+    () async {
+      api.devices = [
+        {
+          'id': 'device-a',
+          'deviceName': 'Desk',
+          'platform': 'WINDOWS',
+          'status': 'ACTIVE',
+          'lastSeenAt': '2026-07-13T10:00:00.000Z',
+        },
+      ];
+      startGate();
+      await container.read(connectionGateControllerProvider.future);
+      final controller = container.read(
+        connectionGateControllerProvider.notifier,
+      );
+
+      expect(await controller.reconcile(), isFalse);
+      expect(cache.connectionReplacementCount, 1);
+
+      api.devices = [
+        {
+          'id': 'device-a',
+          'deviceName': 'Desk',
+          'platform': 'WINDOWS',
+          'status': 'ACTIVE',
+          'lastSeenAt': '2026-07-13T10:00:05.000Z',
+          'presence': 'ONLINE_IDLE',
+        },
+      ];
+      expect(await controller.reconcile(), isFalse);
+      expect(cache.connectionReplacementCount, 1);
+
+      api.devices = [
+        {
+          'id': 'device-a',
+          'deviceName': 'Renamed desk',
+          'platform': 'WINDOWS',
+          'status': 'ACTIVE',
+          'lastSeenAt': '2026-07-13T10:00:10.000Z',
+        },
+      ];
+      expect(await controller.reconcile(), isTrue);
+      expect(cache.connectionReplacementCount, 2);
+      expect(
+        container
+            .read(connectionGateControllerProvider)
+            .requireValue
+            .devices
+            .single['deviceName'],
+        'Renamed desk',
+      );
+    },
+  );
+
+  test(
     'pairing claim creates main state only after authoritative confirmation',
     () async {
       startGate();
@@ -150,6 +234,91 @@ void main() {
       );
     },
   );
+
+  test(
+    'paired device event upserts the gate without a REST reconcile',
+    () async {
+      startGate();
+      await container.read(connectionGateControllerProvider.future);
+      final initialDeviceListCalls = api.deviceListCalls;
+      final lifecycle = container.read(
+        connectionLifecycleEventProvider.notifier,
+      );
+
+      lifecycle.emit(
+        const ConnectionLifecycleEvent(
+          eventId: 'paired-device-event',
+          eventType: 'device.paired',
+          deviceId: 'device-a',
+          device: {
+            'id': 'device-a',
+            'platform': 'WINDOWS',
+            'deviceName': 'Desktop',
+            'status': 'ACTIVE',
+            'lastSeenAt': null,
+            'createdAt': '2026-07-13T01:02:03.000Z',
+          },
+        ),
+      );
+
+      for (var attempt = 0; attempt < 20; attempt++) {
+        if (container
+            .read(connectionGateControllerProvider)
+            .requireValue
+            .devices
+            .isNotEmpty) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+
+      final gate = container
+          .read(connectionGateControllerProvider)
+          .requireValue;
+      expect(gate.devices.single['deviceName'], 'Desktop');
+      expect(api.deviceListCalls, initialDeviceListCalls);
+      expect((await cache.devices()).single['deviceName'], 'Desktop');
+    },
+  );
+
+  test('incomplete paired device event falls back to one reconcile', () async {
+    startGate();
+    await container.read(connectionGateControllerProvider.future);
+    final initialDeviceListCalls = api.deviceListCalls;
+    api.devices = [
+      {'id': 'device-a', 'status': 'ACTIVE', 'deviceName': 'Desktop'},
+    ];
+    container
+        .read(connectionLifecycleEventProvider.notifier)
+        .emit(
+          const ConnectionLifecycleEvent(
+            eventId: 'legacy-paired-device-event',
+            eventType: 'device.paired',
+            deviceId: 'device-a',
+          ),
+        );
+
+    for (var attempt = 0; attempt < 20; attempt++) {
+      if (container
+          .read(connectionGateControllerProvider)
+          .requireValue
+          .devices
+          .isNotEmpty) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+
+    expect(api.deviceListCalls, initialDeviceListCalls + 1);
+    expect(
+      container
+          .read(connectionGateControllerProvider)
+          .requireValue
+          .devices
+          .single['id'],
+      'device-a',
+    );
+  });
 
   test(
     'duplicate device disconnect is suppressed while request is pending',
@@ -302,6 +471,9 @@ void main() {
     final controller = container.read(
       connectionGateControllerProvider.notifier,
     );
+    api.devices = [
+      {'id': 'device-a', 'deviceName': 'Updated', 'status': 'ACTIVE'},
+    ];
     cache.blockNextConnectionReplacement();
 
     final reconciling = controller.reconcile();
@@ -368,6 +540,7 @@ class _ControllableDisplayCache extends DisplayCache {
 
   Completer<void>? _replacementStarted;
   Completer<void>? _replacementRelease;
+  int connectionReplacementCount = 0;
 
   Future<void> get connectionReplacementStarted =>
       _replacementStarted?.future ?? Future<void>.value();
@@ -384,6 +557,7 @@ class _ControllableDisplayCache extends DisplayCache {
     required List<Map<String, dynamic>> devices,
     required List<Map<String, dynamic>> rooms,
   }) async {
+    connectionReplacementCount++;
     final started = _replacementStarted;
     final release = _replacementRelease;
     if (started != null && release != null) {
@@ -401,6 +575,8 @@ class _ControllableDisplayCache extends DisplayCache {
 class _FakeConnectionControlApi implements ConnectionControlApi {
   List<Map<String, dynamic>> devices = [];
   List<Map<String, dynamic>> rooms = [];
+  int deviceListCalls = 0;
+  int roomListCalls = 0;
   Future<void> Function(String code)? onClaim;
   Completer<void>? revokeCompleter;
   Completer<List<Map<String, dynamic>>>? deviceListCompleter;
@@ -410,7 +586,13 @@ class _FakeConnectionControlApi implements ConnectionControlApi {
   final List<String> roomKeys = [];
 
   @override
-  Future<List<Map<String, dynamic>>> listDevices() async {
+  Future<ConnectionGateData> summary() async {
+    final results = await Future.wait([_listDevices(), _listRooms()]);
+    return ConnectionGateData(devices: results[0], rooms: results[1]);
+  }
+
+  Future<List<Map<String, dynamic>>> _listDevices() async {
+    deviceListCalls++;
     final completer = deviceListCompleter;
     if (completer != null) {
       deviceListCompleter = null;
@@ -419,8 +601,8 @@ class _FakeConnectionControlApi implements ConnectionControlApi {
     return devices.map(Map<String, dynamic>.from).toList();
   }
 
-  @override
-  Future<List<Map<String, dynamic>>> listRooms() async {
+  Future<List<Map<String, dynamic>>> _listRooms() async {
+    roomListCalls++;
     final completer = roomListCompleter;
     if (completer != null) {
       roomListCompleter = null;

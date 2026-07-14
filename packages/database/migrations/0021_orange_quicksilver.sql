@@ -1,0 +1,1 @@
+ALTER TABLE "cached_files" ADD COLUMN "encryption_metadata" jsonb;

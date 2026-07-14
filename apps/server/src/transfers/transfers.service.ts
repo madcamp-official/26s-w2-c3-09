@@ -43,104 +43,114 @@ export class TransfersService {
     key: string,
     body: z.infer<typeof createFileTransferSchema>,
   ) {
+    return this.db.transaction((tx) =>
+      this.createInTransaction(tx, userId, roomId, key, body),
+    );
+  }
+
+  async createInTransaction(
+    tx: Transaction,
+    userId: string,
+    roomId: string,
+    key: string,
+    body: z.infer<typeof createFileTransferSchema>,
+  ) {
     this.storage.assertConfigured();
     if (this.redis.status === 'wait') await this.redis.connect();
     const ttl = loadEnvironment().FILE_TRANSFER_TTL_SECONDS;
-    return this.db.transaction(async (tx) => {
-      const candidate = (
-        await tx
-          .select()
-          .from(rooms)
-          .where(
-            and(
-              eq(rooms.id, roomId),
-              eq(rooms.userId, userId),
-              eq(rooms.status, 'ACTIVE'),
-            ),
-          )
-          .limit(1)
-      )[0];
-      if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
-      const device = (
-        await tx
-          .select()
-          .from(devices)
-          .where(
-            and(
-              eq(devices.id, candidate.desktopDeviceId),
-              eq(devices.userId, userId),
-              eq(devices.status, 'ACTIVE'),
-            ),
-          )
-          .for('share')
-          .limit(1)
-      )[0];
-      if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
-      const room = (
-        await tx
-          .select()
-          .from(rooms)
-          .where(
-            and(
-              eq(rooms.id, roomId),
-              eq(rooms.desktopDeviceId, device.id),
-              eq(rooms.userId, userId),
-              eq(rooms.status, 'ACTIVE'),
-            ),
-          )
-          .for('share')
-          .limit(1)
-      )[0];
-      if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
-      if (!(await this.redis.exists(`presence:${room.desktopDeviceId}`)))
-        throw new ConflictException({ code: 'DEVICE_OFFLINE' });
-      const inserted = (
-        await tx
-          .insert(fileTransfers)
-          .values({
-            roomId,
-            desktopDeviceId: room.desktopDeviceId,
-            requestedByUserId: userId,
-            sourceRelativePath: body.sourceRelativePath,
-            idempotencyKey: key,
-            expiresAt: new Date(Date.now() + ttl * 1000),
-          })
-          .onConflictDoNothing()
-          .returning()
-      )[0];
-      if (!inserted) {
-        const existing = (
-          await tx
-            .select()
-            .from(fileTransfers)
-            .where(
-              and(
-                eq(fileTransfers.requestedByUserId, userId),
-                eq(fileTransfers.idempotencyKey, key),
-              ),
-            )
-            .limit(1)
-        )[0];
-        if (!existing) throw new ConflictException({ code: 'CONFLICT' });
-        if (
-          existing.roomId !== roomId ||
-          existing.sourceRelativePath !== body.sourceRelativePath
+    const candidate = (
+      await tx
+        .select()
+        .from(rooms)
+        .where(
+          and(
+            eq(rooms.id, roomId),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
         )
-          throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
-        return this.publicTransfer(existing);
-      }
-      const created = inserted;
-      await this.sync.append(tx, {
-        userId,
-        deviceId: room.desktopDeviceId,
-        roomId,
-        eventType: 'file.transfer.requested',
-        aggregateType: 'file_transfer',
-        aggregateId: created.id,
-        payload: { transferId: created.id },
-      });
-      return this.publicTransfer(created);
+        .limit(1)
+    )[0];
+    if (!candidate) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const device = (
+      await tx
+        .select()
+        .from(devices)
+        .where(
+          and(
+            eq(devices.id, candidate.desktopDeviceId),
+            eq(devices.userId, userId),
+            eq(devices.status, 'ACTIVE'),
+          ),
+        )
+        .for('share')
+        .limit(1)
+    )[0];
+    if (!device) throw new NotFoundException({ code: 'NOT_FOUND' });
+    const room = (
+      await tx
+        .select()
+        .from(rooms)
+        .where(
+          and(
+            eq(rooms.id, roomId),
+            eq(rooms.desktopDeviceId, device.id),
+            eq(rooms.userId, userId),
+            eq(rooms.status, 'ACTIVE'),
+          ),
+        )
+        .for('share')
+        .limit(1)
+    )[0];
+    if (!room) throw new NotFoundException({ code: 'NOT_FOUND' });
+    if (!(await this.redis.exists(`presence:${room.desktopDeviceId}`)))
+      throw new ConflictException({ code: 'DEVICE_OFFLINE' });
+    const inserted = (
+      await tx
+        .insert(fileTransfers)
+        .values({
+          roomId,
+          desktopDeviceId: room.desktopDeviceId,
+          requestedByUserId: userId,
+          sourceRelativePath: body.sourceRelativePath,
+          idempotencyKey: key,
+          expiresAt: new Date(Date.now() + ttl * 1000),
+        })
+        .onConflictDoNothing()
+        .returning()
+    )[0];
+    if (!inserted) {
+      const existing = (
+        await tx
+          .select()
+          .from(fileTransfers)
+          .where(
+            and(
+              eq(fileTransfers.requestedByUserId, userId),
+              eq(fileTransfers.idempotencyKey, key),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!existing) throw new ConflictException({ code: 'CONFLICT' });
+      if (
+        existing.roomId !== roomId ||
+        existing.sourceRelativePath !== body.sourceRelativePath
+      )
+        throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+      return this.publicTransfer(existing);
+    }
+    const created = inserted;
+    await this.sync.append(tx, {
+      userId,
+      deviceId: room.desktopDeviceId,
+      roomId,
+      eventType: 'file.transfer.requested',
+      aggregateType: 'file_transfer',
+      aggregateId: created.id,
+      payload: { transferId: created.id },
     });
+    return this.publicTransfer(created);
   }
   async pending(userId: string, deviceId: string) {
     return this.db.transaction(async (tx) => {

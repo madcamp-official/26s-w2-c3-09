@@ -142,16 +142,38 @@ void main() {
             message: 'done',
           ),
         );
+    container
+        .read(realtimeHomeUpdateProvider.notifier)
+        .emit(
+          const RealtimeHomeUpdate(
+            kind: RealtimeHomeUpdateKind.presence,
+            eventType: 'presence.updated',
+            deviceId: 'device-a',
+            presence: 'ONLINE_IDLE',
+          ),
+        );
+    container
+        .read(realtimeFileTransferUpdateProvider.notifier)
+        .emit(
+          const RealtimeFileTransferUpdate(
+            transferId: 'transfer-a',
+            status: 'READY',
+          ),
+        );
     expect(
       container.read(realtimeCharacterKindProvider),
       CharacterState.success,
     );
     expect(container.read(realtimeNoticeProvider), isNotNull);
+    expect(container.read(realtimeHomeUpdateProvider), isNotNull);
+    expect(container.read(realtimeFileTransferUpdateProvider), isNotNull);
 
     container.read(_testOwnerUidProvider.notifier).setUid('account-b');
 
     expect(container.read(realtimeCharacterKindProvider), isNull);
     expect(container.read(realtimeNoticeProvider), isNull);
+    expect(container.read(realtimeHomeUpdateProvider), isNull);
+    expect(container.read(realtimeFileTransferUpdateProvider), isNull);
   });
 }
 

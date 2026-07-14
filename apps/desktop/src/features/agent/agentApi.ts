@@ -60,6 +60,35 @@ export type AgentRoomSync = {
   created: boolean;
 };
 
+export type AgentChatSession = {
+  session_id: string;
+  room_id: string;
+  title: string;
+  status: "ACTIVE";
+  created_at: string;
+  updated_at: string;
+  message_preview: string;
+};
+
+export type AgentChatMessage = {
+  message_id: string;
+  room_id: string;
+  session_id: string | null;
+  sender_type: "USER" | "ASSISTANT";
+  message_type: "TEXT" | "COMMAND_DRAFT";
+  content: string;
+  structured_payload: unknown;
+  command_id: string | null;
+  created_at: string;
+};
+
+export type AgentChatSendResult = {
+  message: AgentChatMessage;
+  assistant: AgentChatMessage | null;
+  ai_status: string;
+  ai: unknown;
+};
+
 export type CleanlinessSnapshot = {
   formulaVersion: string;
   score: number;
@@ -130,6 +159,9 @@ export type BackgroundRuntimeStatus = {
   last_file_browse_count: number;
   last_file_browse_completed_count: number;
   last_file_browse_failed_count: number;
+  last_file_index_reconcile_unix_ms: number | null;
+  last_file_index_reconcile_root_count: number;
+  last_file_index_reconcile_failed_count: number;
   last_file_transfer_poll_unix_ms: number | null;
   last_file_transfer_count: number;
   last_file_transfer_uploaded_count: number;
@@ -138,6 +170,12 @@ export type BackgroundRuntimeStatus = {
   last_smart_cache_candidate_count: number;
   last_smart_cache_uploaded_count: number;
   last_smart_cache_failed_count: number;
+  last_auto_cleanup_unix_ms: number | null;
+  last_auto_cleanup_root_count: number;
+  last_auto_cleanup_approved_count: number;
+  last_auto_cleanup_executed_count: number;
+  last_auto_cleanup_failed_count: number;
+  last_auto_submitted_proposal_count: number;
   last_outbox_flush_unix_ms: number | null;
   last_outbox_sent_count: number;
   last_outbox_failed_count: number;
@@ -320,6 +358,28 @@ export function ensureAgentRoom(rootId: string, displayName: string) {
   return invokeAgentCommand<AgentRoomSync>("ensure_agent_room", { rootId, displayName });
 }
 
+export function listAgentChatSessions(roomId: string) {
+  return invokeAgentCommand<AgentChatSession[]>("list_agent_chat_sessions", { roomId });
+}
+
+export function createAgentChatSession(roomId: string, title?: string) {
+  return invokeAgentCommand<AgentChatSession>("create_agent_chat_session", {
+    roomId,
+    title: title ?? null
+  });
+}
+
+export function listAgentChatMessages(sessionId: string) {
+  return invokeAgentCommand<AgentChatMessage[]>("list_agent_chat_messages", { sessionId });
+}
+
+export function sendAgentChatMessage(sessionId: string, content: string) {
+  return invokeAgentCommand<AgentChatSendResult>("send_agent_chat_message", {
+    sessionId,
+    content
+  });
+}
+
 export function submitCleanlinessSnapshot(rootId: string) {
   return invokeAgentCommand<CleanlinessSnapshotSyncReport>("submit_cleanliness_snapshot", {
     rootId
@@ -332,10 +392,6 @@ export function replayAgentEvents() {
 
 export function updateAgentCommandStatus(commandId: string, status: string) {
   return invokeAgentCommand<AgentCommand>("update_agent_command_status", { commandId, status });
-}
-
-export function forgetAgentDevice() {
-  return invokeAgentCommand<AgentConnectionStatus>("forget_agent_device");
 }
 
 export function revokeAgentDevice(idempotencyKey: string) {

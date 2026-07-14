@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -148,6 +148,28 @@ fn execute_prechecked(
                     reason: None,
                 });
             }
+            ProposalAction::CreateDir => match execute_create_dir(&guard, &store, check, index)? {
+                Ok(result) => {
+                    executed_count += 1;
+                    results.push(result);
+                }
+                Err(reason) => {
+                    skipped_count += 1;
+                    results.push(skipped_result(check, Some(reason)));
+                }
+            },
+            ProposalAction::CreateFile => {
+                match execute_create_file(&guard, &store, check, index)? {
+                    Ok(result) => {
+                        executed_count += 1;
+                        results.push(result);
+                    }
+                    Err(reason) => {
+                        skipped_count += 1;
+                        results.push(skipped_result(check, Some(reason)));
+                    }
+                }
+            }
             ProposalAction::ReadmeWrite => {
                 match execute_readme_write(&guard, &store, check, index)? {
                     Ok(result) => {
@@ -171,6 +193,98 @@ fn execute_prechecked(
         rejected_count: 0,
         results,
     })
+}
+
+fn execute_create_dir(
+    guard: &PathGuard,
+    store: &JournalStore,
+    check: &PrecheckResult,
+    index: usize,
+) -> Result<Result<ExecuteResult, String>, ExecuteError> {
+    let operation_id = format!("op-{}-{index}", unix_ms());
+    store
+        .append(&planned_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    let target = match guard.resolve_for_create(&check.to) {
+        Ok(target) => target,
+        Err(error) => return Ok(Err(error.to_string())),
+    };
+    if target.exists() {
+        return Ok(Err(
+            "directory appeared before create; refusing to overwrite".to_string(),
+        ));
+    }
+
+    fs::create_dir(&target).map_err(|error| ExecuteError::CreateParentDir {
+        path: target.clone(),
+        message: error.to_string(),
+    })?;
+
+    store
+        .append(&executed_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    Ok(Ok(ExecuteResult {
+        action: check.action.clone(),
+        from: check.from.clone(),
+        to: check.to.clone(),
+        status: ExecuteStatus::Executed,
+        reason: None,
+    }))
+}
+
+fn execute_create_file(
+    guard: &PathGuard,
+    store: &JournalStore,
+    check: &PrecheckResult,
+    index: usize,
+) -> Result<Result<ExecuteResult, String>, ExecuteError> {
+    let operation_id = format!("op-{}-{index}", unix_ms());
+    store
+        .append(&planned_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    if check.content.as_deref().unwrap_or_default() != "" {
+        return Ok(Err(
+            "CREATE_FILE currently supports empty files only".to_string()
+        ));
+    }
+
+    let target = match guard.resolve_for_create(&check.to) {
+        Ok(target) => target,
+        Err(error) => return Ok(Err(error.to_string())),
+    };
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+    {
+        Ok(_) => {}
+        Err(_error) if target.exists() => {
+            return Ok(Err(
+                "file appeared before create; refusing to overwrite".to_string()
+            ));
+        }
+        Err(error) => {
+            return Err(ExecuteError::Write {
+                path: target.clone(),
+                message: error.to_string(),
+            });
+        }
+    }
+
+    store
+        .append(&executed_entry(&operation_id, check))
+        .map_err(ExecuteError::Journal)?;
+
+    Ok(Ok(ExecuteResult {
+        action: check.action.clone(),
+        from: check.from.clone(),
+        to: check.to.clone(),
+        status: ExecuteStatus::Executed,
+        reason: None,
+    }))
 }
 
 fn execute_readme_write(
@@ -373,6 +487,8 @@ fn journal_entry(
         action: match check.action {
             ProposalAction::Move => JournalAction::Move,
             ProposalAction::Trash => JournalAction::Trash,
+            ProposalAction::CreateDir => JournalAction::CreateDir,
+            ProposalAction::CreateFile => JournalAction::CreateFile,
             ProposalAction::ReadmeWrite => JournalAction::ReadmeWrite,
         },
         from: check.from.clone(),
@@ -468,7 +584,9 @@ mod tests {
 
     use crate::decision::{Decision, DecisionEntry};
     use crate::journal::{JournalAction, JournalEntry, JournalStatus, JournalStore};
-    use crate::proposal::propose_for_root;
+    use crate::proposal::{
+        proposal_id, propose_for_root, Proposal, ProposalAction, ProposalReport, ProposalStatus,
+    };
 
     use super::{execute_decision_application, execute_proposals, execute_root, ExecuteStatus};
 
@@ -583,6 +701,209 @@ mod tests {
         assert!(root.join(trashed_dir).join("original.json").exists());
         assert!(trashed_relative.starts_with(crate::journal::TRASH_DIR));
         assert_eq!(history.operations[0].action, JournalAction::Trash);
+    }
+
+    #[test]
+    fn create_dir_proposal_executes_and_is_undoable_when_empty() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("archive")).expect("archive parent");
+        let action = ProposalAction::CreateDir;
+        let proposal = ProposalReport {
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "archive/reports"),
+                action,
+                from: String::new(),
+                to: "archive/reports".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                source_file_id: None,
+                reason: "USER_REQUESTED_CREATE_DIR".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+
+        let report = execute_proposals(&root, proposal).expect("execute create dir");
+        let history = crate::journal::read_operation_history(&root).expect("history");
+
+        assert_eq!(report.executed_count, 1);
+        assert_eq!(report.skipped_count, 0);
+        assert!(root.join("archive/reports").is_dir());
+        assert_eq!(history.operations[0].action, JournalAction::CreateDir);
+        assert!(history.operations[0].can_undo);
+
+        let undo = crate::undo::undo_operation(&root, &history.operations[0].operation_id)
+            .expect("undo create dir");
+        assert_eq!(undo.undone_count, 1);
+        assert!(!root.join("archive/reports").exists());
+    }
+
+    #[test]
+    fn create_dir_proposal_requires_existing_parent_and_no_overwrite() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        let action = ProposalAction::CreateDir;
+        let proposal = ProposalReport {
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "missing/reports"),
+                action,
+                from: String::new(),
+                to: "missing/reports".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                source_file_id: None,
+                reason: "USER_REQUESTED_CREATE_DIR".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+
+        let report = execute_proposals(&root, proposal).expect("execute create dir");
+
+        assert_eq!(report.executed_count, 0);
+        assert_eq!(report.skipped_count, 1);
+        assert!(!root.join("missing").exists());
+
+        fs::create_dir_all(root.join("archive/reports")).expect("existing target");
+        let action = ProposalAction::CreateDir;
+        let existing = ProposalReport {
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "archive/reports"),
+                action,
+                from: String::new(),
+                to: "archive/reports".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                source_file_id: None,
+                reason: "USER_REQUESTED_CREATE_DIR".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+        let report = execute_proposals(&root, existing).expect("execute existing create dir");
+        assert_eq!(report.executed_count, 0);
+        assert_eq!(report.skipped_count, 1);
+    }
+
+    #[test]
+    fn create_file_proposal_executes_empty_file_and_is_undoable_while_empty() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("notes")).expect("notes parent");
+        let action = ProposalAction::CreateFile;
+        let proposal = ProposalReport {
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "notes/todo.txt"),
+                action,
+                from: String::new(),
+                to: "notes/todo.txt".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                source_file_id: None,
+                reason: "USER_REQUESTED_CREATE_FILE".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+
+        let report = execute_proposals(&root, proposal).expect("execute create file");
+        let history = crate::journal::read_operation_history(&root).expect("history");
+
+        assert_eq!(report.executed_count, 1);
+        assert_eq!(
+            fs::metadata(root.join("notes/todo.txt"))
+                .expect("file")
+                .len(),
+            0
+        );
+        assert_eq!(history.operations[0].action, JournalAction::CreateFile);
+        assert!(history.operations[0].can_undo);
+
+        let undo = crate::undo::undo_operation(&root, &history.operations[0].operation_id)
+            .expect("undo create file");
+        assert_eq!(undo.undone_count, 1);
+        assert!(!root.join("notes/todo.txt").exists());
+    }
+
+    #[test]
+    fn create_file_proposal_refuses_non_empty_content_and_overwrite() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(root.join("notes")).expect("notes parent");
+        let action = ProposalAction::CreateFile;
+        let with_content = ProposalReport {
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "notes/todo.txt"),
+                action: action.clone(),
+                from: String::new(),
+                to: "notes/todo.txt".to_string(),
+                content: Some("not empty".to_string()),
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                source_file_id: None,
+                reason: "USER_REQUESTED_CREATE_FILE".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+        let report = execute_proposals(&root, with_content).expect("execute content create");
+        assert_eq!(report.executed_count, 0);
+        assert_eq!(report.skipped_count, 1);
+        assert!(!root.join("notes/todo.txt").exists());
+
+        fs::write(root.join("notes/todo.txt"), "existing").expect("existing");
+        let existing = ProposalReport {
+            root: root
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string(),
+            proposals: vec![Proposal {
+                proposal_id: proposal_id(&action, "", "notes/todo.txt"),
+                action,
+                from: String::new(),
+                to: "notes/todo.txt".to_string(),
+                content: None,
+                source_size_bytes: 0,
+                source_modified_unix_ms: None,
+                source_file_id: None,
+                reason: "USER_REQUESTED_CREATE_FILE".to_string(),
+                status: ProposalStatus::Ready,
+            }],
+        };
+        let report = execute_proposals(&root, existing).expect("execute existing create file");
+        assert_eq!(report.executed_count, 0);
+        assert_eq!(report.skipped_count, 1);
+        assert_eq!(
+            fs::read_to_string(root.join("notes/todo.txt")).expect("existing"),
+            "existing"
+        );
     }
 
     #[test]
