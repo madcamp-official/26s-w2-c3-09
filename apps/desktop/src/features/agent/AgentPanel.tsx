@@ -29,12 +29,6 @@ import {
   startAgentPairing,
   updateAgentCommandStatus
 } from "./agentApi";
-import {
-  MouseKeeperMotion,
-  mousekeeperMotionUrls,
-  motionForAgent,
-  motionFromSyncEvents
-} from "../character/characterMotion";
 
 const backgroundRefreshIntervalMs = 15_000;
 const pairingPollIntervalMs = 2_000;
@@ -93,7 +87,6 @@ export function AgentPanel() {
   const [smartCacheRoomId, setSmartCacheRoomId] = useState("");
   const [syncCursor, setSyncCursor] = useState<number | null>(null);
   const [lastReplayCount, setLastReplayCount] = useState(0);
-  const [replayMotion, setReplayMotion] = useState<MouseKeeperMotion | null>(null);
   const [lastProcessedSummary, setLastProcessedSummary] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [autostartBusy, setAutostartBusy] = useState(false);
@@ -125,7 +118,7 @@ export function AgentPanel() {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     listenForDesktopDeviceRevoked(() => {
-      void resetForNewPairing("This desktop was disconnected. Pair it again to continue.");
+      void resetForNewPairing("이 PC의 연결이 해제됐어요. 계속하려면 다시 페어링해 주세요.");
     }).then((stop) => {
       if (cancelled) stop();
       else unlisten = stop;
@@ -391,8 +384,6 @@ export function AgentPanel() {
     const replay = await replayAgentEvents();
     setSyncCursor(replay.next_cursor);
     setLastReplayCount(replay.events.length);
-    const motion = motionFromSyncEvents(replay.events);
-    if (motion) setReplayMotion(motion);
     if (replay.events.some((event) => event.event_type === "command.available")) {
       setCommands(await pollAgentCommands());
     }
@@ -419,7 +410,6 @@ export function AgentPanel() {
     setCommands([]);
     setSyncCursor(null);
     setLastReplayCount(0);
-    setReplayMotion(null);
     setPairing(null);
     try {
       setConnection(await getAgentConnectionStatus());
@@ -428,7 +418,7 @@ export function AgentPanel() {
       setConnection(await getAgentConnectionStatus());
       if (message) setLastProcessedSummary(message);
     } catch (cause) {
-      setError(`Disconnected, but a new pairing code could not be created: ${errorMessage(cause)}`);
+      setError(`연결은 해제됐지만 새 페어링 코드를 만들지 못했어요: ${errorMessage(cause)}`);
     } finally {
       pairingStartInFlight.current = false;
     }
@@ -438,7 +428,7 @@ export function AgentPanel() {
     if (
       !disconnectIdempotencyKey.current &&
       !window.confirm(
-        "Disconnect this desktop from MouseKeeper? Local folders and undo history are preserved, but mobile access stops until you pair again."
+        "이 PC를 MouseKeeper에서 연결 해제할까요? 로컬 폴더와 되돌리기 기록은 그대로 유지되지만, 다시 페어링하기 전까지 휴대폰 접근이 중단됩니다."
       )
     ) {
       return;
@@ -470,29 +460,14 @@ export function AgentPanel() {
     : connection;
   const showConnectionError = !heartbeatOnline && connection?.last_error_message;
 
-  const mascotMotion = motionForAgent({
-    connection: effectiveConnection,
-    pairing: pairing !== null || disconnecting,
-    commandStatuses: commands.map((command) => command.status),
-    replayMotion,
-    localError: error !== null && !heartbeatOnline
-  });
-
   return (
     <section className="panel agent-panel">
-      <div className="section-header">
-        <div className="mascot-heading">
-          <img
-            className={`mascot-image motion-${mascotMotion}`}
-            src={mousekeeperMotionUrls[mascotMotion]}
-            alt={`MouseKeeper ${mascotMotion}`}
-          />
-          <div>
-            <h2>PC 연결</h2>
-            <p className="path-text">
-              {connection?.server_base_url ?? "서버 주소가 설정되지 않았습니다. MOUSEKEEPER_SERVER_BASE_URL을 확인하세요."}
-            </p>
-          </div>
+      <div className="section-header agent-panel-header">
+        <div>
+          <h2>PC 연결</h2>
+          <p className="path-text">
+            {connection?.server_base_url ?? "서버 주소가 설정되지 않았습니다. MOUSEKEEPER_SERVER_BASE_URL을 확인하세요."}
+          </p>
         </div>
         <span
           className={`status-badge status-${disconnecting ? "disconnecting" : effectiveConnectionState ?? "unconfigured"}`}
@@ -502,46 +477,17 @@ export function AgentPanel() {
       </div>
 
       {connection?.device_id ? (
-        <div className="agent-actions">
-          <span className="path-text">Device: {connection.device_id}</span>
-          {syncCursor !== null ? (
-            <span className="path-text">
-              Replay cursor: {syncCursor} ({lastReplayCount} new)
-            </span>
-          ) : null}
-          <button disabled={busy} onClick={() => void refreshCommands()}>
-            Refresh pending commands
-          </button>
-          <button disabled={busy} onClick={() => void processCommandsNow()}>
-            Process commands
-          </button>
-          <button disabled={busy} onClick={() => void processDecisionsNow()}>
-            Process approved decisions
-          </button>
-          <button disabled={busy} onClick={() => void processFileBrowseNow()}>
-            Process file browse
-          </button>
-          <button disabled={busy} onClick={() => void processFileTransfersNow()}>
-            Process file transfers
-          </button>
-          <input
-            aria-label="Smart cache room id"
-            placeholder="Room id for smart cache"
-            value={smartCacheRoomId}
-            onChange={(event) => setSmartCacheRoomId(event.target.value)}
-          />
-          <button disabled={busy || !smartCacheRoomId.trim()} onClick={() => void processSmartCacheNow()}>
-            Process smart cache
-          </button>
-          <button disabled={busy} onClick={() => void flushOutboxNow()}>
-            Flush outbox
-          </button>
-          <button className="danger-button" disabled={busy} onClick={() => void disconnectDevice()}>
-            {disconnectFailed ? "연결 해제 재시도" : "이 PC 연결 해제"}
-          </button>
-          <span className="path-text agent-hint">
-            연결을 해제하면 모바일에서 이 PC가 사라지고, 다시 사용하려면 페어링이 필요합니다.
-          </span>
+        <div className="agent-connected">
+          <p className="path-text">기기 ID · {connection.device_id}</p>
+          <div className="agent-actions">
+            <button className="danger-button" disabled={busy} onClick={() => void disconnectDevice()}>
+              {disconnectFailed ? "연결 해제 재시도" : "이 PC 연결 해제"}
+            </button>
+          </div>
+          <p className="path-text agent-hint">
+            연결을 해제하면 모바일에서 이 PC가 사라지고, 다시 사용하려면 페어링이 필요합니다. 상세 처리 도구는 아래
+            &lsquo;개발자 도구와 상세 상태&rsquo;에 있습니다.
+          </p>
         </div>
       ) : connection?.server_base_url ? (
         <div className="input-row agent-pairing-row">

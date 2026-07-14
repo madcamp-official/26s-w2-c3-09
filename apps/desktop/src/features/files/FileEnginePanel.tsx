@@ -61,7 +61,12 @@ type PrecheckSnapshot = {
 
 const demoRootHint = "test-fixtures/file-trees/ui-demo의 임시 복사본을 만들어요";
 
-export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {}) {
+type FileSection = "organize" | "explore" | "history";
+
+export function FileEnginePanel({
+  embedded = false,
+  activeSection = "organize"
+}: { embedded?: boolean; activeSection?: FileSection } = {}) {
   const [pathInput, setPathInput] = useState("");
   const [roots, setRoots] = useState<ManagedRoot[]>([]);
   const [selectedRootId, setSelectedRootId] = useState("");
@@ -444,7 +449,7 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
   async function disconnectRootFromMobile(root: ManagedRoot) {
     setRoomSyncStates((current) => ({ ...current, [root.root_id]: "syncing" }));
     setError(null);
-    setStatus("Checking mobile disconnect safety");
+    setStatus("휴대폰 연결 해제 안전성 확인 중");
     try {
       const preflight = await preflightAgentRoomDisconnect(root.root_id);
       if (preflight.blocking_reasons.length > 0) {
@@ -455,12 +460,12 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
         !roomDisconnectAcknowledgements.current.has(root.root_id)
       ) {
         const confirmed = window.confirm(
-          `This folder has ${preflight.undoable_operation_count} undoable local operation(s). ` +
-            "Disconnecting stops mobile access and clears only the disposable file index; local files and undo history remain. Continue?"
+          `이 폴더에는 되돌릴 수 있는 로컬 작업이 ${preflight.undoable_operation_count}건 있어요. ` +
+            "연결을 해제하면 휴대폰 접근이 중단되고 임시 파일 색인만 지워집니다. 로컬 파일과 되돌리기 기록은 그대로 남아요. 계속할까요?"
         );
         if (!confirmed) {
           setRoomSyncStates((current) => ({ ...current, [root.root_id]: "synced" }));
-          setStatus("Mobile disconnect cancelled");
+          setStatus("휴대폰 연결 해제 취소됨");
           return;
         }
         roomDisconnectAcknowledgements.current.add(root.root_id);
@@ -480,15 +485,15 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
       });
       await reloadDurableRootBindings();
       setResultLines([
-        `Disconnected room ${report.room_id}`,
-        "Local files and operation journal preserved",
-        report.index_cleared ? "Disposable mobile browse index cleared" : "Browse index unchanged"
+        `방 ${report.room_id} 연결 해제됨`,
+        "로컬 파일과 작업 기록은 그대로 보존됨",
+        report.index_cleared ? "임시 휴대폰 탐색 색인 삭제됨" : "탐색 색인 변경 없음"
       ]);
-      setStatus("Mobile folder disconnected");
+      setStatus("휴대폰 폴더 연결 해제됨");
     } catch (caught) {
       setRoomSyncStates((current) => ({ ...current, [root.root_id]: "failed" }));
       setError(errorMessage(caught));
-      setStatus("Mobile disconnect failed; retry uses the same request key");
+      setStatus("휴대폰 연결 해제 실패 · 재시도 시 동일한 요청 키를 사용합니다");
     }
   }
 
@@ -985,18 +990,58 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
     return commandDecisions;
   }
 
+  // In embedded (dashboard) mode the sidebar picks one section at a time so the window is not
+  // crammed. Standalone mode keeps every panel visible.
+  const showOrganize = !embedded || activeSection === "organize";
+  const showExplore = !embedded || activeSection === "explore";
+  const showHistory = !embedded || activeSection === "history";
+  const sectionTitle = { organize: "폴더 정리", explore: "검색 · 탐색", history: "작업 기록" }[
+    activeSection
+  ];
+
   return (
     <div className={embedded ? "file-engine-panel embedded-file-engine" : "app-shell file-engine-panel"}>
-      <section className="toolbar file-engine-topbar">
-        <div>
-          <h1>파일 정리</h1>
-          <p>{status}</p>
+      <section className="file-engine-topbar">
+        {embedded ? (
+          <div className="fe-topbar-lead">
+            <h1>{sectionTitle}</h1>
+            <div className="fe-folder-picker">
+              <label htmlFor="fe-root-select">관리 폴더</label>
+              <select
+                id="fe-root-select"
+                value={selectedRootId}
+                onChange={(event) => selectRoot(event.target.value)}
+              >
+                <option value="">선택된 폴더 없음</option>
+                {roots.map((root) => (
+                  <option key={root.root_id} value={root.root_id}>
+                    {root.display_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <h1>파일 정리</h1>
+          </div>
+        )}
+        <div className="fe-topbar-actions">
+          <span className="fe-status-text" title={status}>
+            {status}
+          </span>
+          <button type="button" onClick={refreshRoots}>
+            새로고침
+          </button>
         </div>
-        <button type="button" onClick={refreshRoots}>
-          새로고침
-        </button>
       </section>
 
+      {embedded && selectedRoot ? (
+        <p className="path-text fe-folder-path">{selectedRoot.root}</p>
+      ) : null}
+
+      {showOrganize ? (
+      <>
       <section className="panel root-register-panel">
         <label htmlFor="root-path">관리 폴더 경로</label>
         <div className="input-row">
@@ -1023,20 +1068,24 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
 
       <section className="workspace-grid file-engine-workspace">
         <div className="panel">
-          <label htmlFor="root-select">등록된 폴더</label>
-          <select
-            id="root-select"
-            value={selectedRootId}
-            onChange={(event) => selectRoot(event.target.value)}
-          >
-            <option value="">선택된 폴더 없음</option>
-            {roots.map((root) => (
-              <option key={root.root_id} value={root.root_id}>
-                {root.display_name}
-              </option>
-            ))}
-          </select>
-          {selectedRoot ? <p className="path-text">{selectedRoot.root}</p> : null}
+          {!embedded ? (
+            <>
+              <label htmlFor="root-select">등록된 폴더</label>
+              <select
+                id="root-select"
+                value={selectedRootId}
+                onChange={(event) => selectRoot(event.target.value)}
+              >
+                <option value="">선택된 폴더 없음</option>
+                {roots.map((root) => (
+                  <option key={root.root_id} value={root.root_id}>
+                    {root.display_name}
+                  </option>
+                ))}
+              </select>
+              {selectedRoot ? <p className="path-text">{selectedRoot.root}</p> : null}
+            </>
+          ) : null}
           {selectedRoot ? (
             <div className="root-state-grid">
               <label>
@@ -1096,8 +1145,8 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
                   onClick={() => void disconnectRootFromMobile(selectedRoot)}
                 >
                   {roomDisconnectKeys.current[selectedRoot.root_id]
-                    ? "Retry mobile disconnect"
-                    : "Disconnect mobile folder"}
+                    ? "휴대폰 연결 해제 재시도"
+                    : "휴대폰 폴더 연결 해제"}
                 </button>
               ) : null}
             </div>
@@ -1276,7 +1325,11 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           </div>
         </div>
       </section>
+      </>
+      ) : null}
 
+      {showExplore ? (
+      <div className="file-engine-duo">
       <section className="panel search-panel">
         <div className="section-header">
           <h2>검색</h2>
@@ -1377,7 +1430,11 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           {!selectedRootId ? <p>탐색할 폴더를 먼저 선택하세요.</p> : null}
         </div>
       </section>
+      </div>
+      ) : null}
 
+      {showHistory ? (
+      <div className="file-engine-duo">
       <section className="panel output-panel">
         <h2>결과</h2>
         {error ? <p className="error-text">{error}</p> : null}
@@ -1426,6 +1483,8 @@ export function FileEnginePanel({ embedded = false }: { embedded?: boolean } = {
           {history.length === 0 ? <p>아직 작업 기록이 없습니다.</p> : null}
         </div>
       </section>
+      </div>
+      ) : null}
     </div>
   );
 }

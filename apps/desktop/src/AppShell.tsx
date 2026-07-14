@@ -13,6 +13,21 @@ const setupMascotUrl = new URL(
   import.meta.url
 ).href;
 
+type DashboardSection = "connection" | "organize" | "explore" | "history";
+type FileSection = Exclude<DashboardSection, "connection">;
+
+const DASHBOARD_SECTIONS: ReadonlyArray<{
+  id: DashboardSection;
+  icon: string;
+  label: string;
+  hint: string;
+}> = [
+  { id: "organize", icon: "🧹", label: "폴더 정리", hint: "분석 · 제안 · 실행" },
+  { id: "explore", icon: "🔍", label: "검색 · 탐색", hint: "파일 찾기 · 열기" },
+  { id: "history", icon: "🗂️", label: "작업 기록", hint: "결과 · 되돌리기" },
+  { id: "connection", icon: "🔌", label: "PC 연결", hint: "페어링 · 백그라운드" }
+];
+
 /**
  * Main-window shell. The setup screen stays visible until both halves are ready: one paired
  * desktop device and at least one managed folder. That keeps users from registering a folder,
@@ -22,6 +37,7 @@ export function AppShell() {
   // null = unknown (loading or no Tauri runtime); confirmed values drive the setup gate.
   const [rootCount, setRootCount] = useState<number | null>(null);
   const [connectionState, setConnectionState] = useState<string | null>(null);
+  const [section, setSection] = useState<DashboardSection>("organize");
 
   const reloadRootCount = useCallback(async () => {
     try {
@@ -107,7 +123,7 @@ export function AppShell() {
             마스코트 열기
           </button>
           <button type="button" onClick={() => void unlockHouseOverlay()}>
-            House unlock
+            집 위치 조정
           </button>
         </div>
         {overlayError ? <span className="error-text">{overlayError}</span> : null}
@@ -120,7 +136,7 @@ export function AppShell() {
               <img src={splashUrl} alt="MOUSEKEEPER" />
             </div>
             <div className="manager-hero-copy">
-              <span className="setup-kicker">Desktop Manager Setup</span>
+              <span className="setup-kicker">초기 설정</span>
               <h1 id="manager-hero-title">PC 방을 생쥐 매니저에게 맡길 준비를 해요</h1>
               <p>
                 모바일 앱과 PC를 연결하고, 정리할 폴더를 한 번만 등록하면 됩니다. 순서가
@@ -164,21 +180,52 @@ export function AppShell() {
         </div>
       ) : (
         <div className="manager-dashboard">
-          <section className="manager-dashboard-hero">
-            <div>
-              <span className="setup-kicker">Manager Console</span>
-              <h1>오늘도 안전하게 정리할 준비가 됐어요</h1>
-              <p>마스코트는 상태를 알려주고, 실제 파일 변경은 승인과 사전 검사를 거친 뒤에만 실행됩니다.</p>
+          <aside className="dashboard-rail" aria-label="섹션 이동">
+            <div className="dashboard-rail-brand">
+              <img src={setupMascotUrl} alt="" aria-hidden="true" />
+              <div>
+                <strong>관리 콘솔</strong>
+                <small>안전하게 정리할 준비 완료</small>
+              </div>
             </div>
-            <img src={setupMascotUrl} alt="" aria-hidden="true" />
-          </section>
-          <div className="manager-dashboard-body">
-            <aside className="manager-sidebar" id="agent-panel" aria-label="PC 연결 상태">
+            <nav className="dashboard-nav">
+              {DASHBOARD_SECTIONS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`dashboard-nav-item ${section === item.id ? "is-active" : ""}`}
+                  aria-current={section === item.id ? "page" : undefined}
+                  onClick={() => setSection(item.id)}
+                >
+                  <span className="dashboard-nav-icon" aria-hidden="true">
+                    {item.icon}
+                  </span>
+                  <span className="dashboard-nav-text">
+                    <strong>{item.label}</strong>
+                    <small>{item.hint}</small>
+                  </span>
+                  {item.id === "connection" ? (
+                    <span className={`dashboard-nav-dot ${isPaired ? "is-online" : ""}`} aria-hidden="true" />
+                  ) : null}
+                </button>
+              ))}
+            </nav>
+          </aside>
+
+          <div className="dashboard-main">
+            <div className="dashboard-view" hidden={section !== "connection"} aria-label="PC 연결 상태">
               <AgentPanel />
-            </aside>
-            <section className="manager-workbench" id="file-engine-panel" aria-label="파일 관리 작업대">
-              <FileEnginePanel embedded />
-            </section>
+            </div>
+            <div
+              className="dashboard-view"
+              hidden={section === "connection"}
+              aria-label="파일 관리 작업대"
+            >
+              <FileEnginePanel
+                embedded
+                activeSection={(section === "connection" ? "organize" : section) as FileSection}
+              />
+            </div>
           </div>
         </div>
       )}
