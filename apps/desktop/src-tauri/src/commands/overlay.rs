@@ -161,7 +161,7 @@ fn build_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, 
         tauri::WebviewUrl::App("index.html".into()),
     )
     .title("MouseKeeper")
-    .inner_size(184.0, 160.0)
+    .inner_size(450.0, 360.0)
     .resizable(false)
     .decorations(false)
     .transparent(true)
@@ -186,7 +186,7 @@ fn build_house_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWi
     .transparent(true)
     .shadow(false)
     .always_on_bottom(true)
-    .focusable(false)
+    .focusable(true)
     .skip_taskbar(true)
     .build()
     .map_err(|error| format!("WINDOW_MISSING: cannot create house overlay window: {error}"))?;

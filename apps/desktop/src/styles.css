@@ -778,8 +778,8 @@ body.overlay-body .character-overlay {
 
 body.overlay-body .character-drag-surface {
   position: absolute;
-  top: 21px;
-  right: 0;
+  top: 214px;
+  right: 8px;
   display: grid;
   place-items: center;
   width: 96px;
@@ -819,8 +819,8 @@ body.overlay-body .character-motion {
 
 body.overlay-body .character-bubble {
   position: absolute;
-  top: 49px;
-  left: 10px;
+  top: 244px;
+  right: 98px;
   box-sizing: border-box;
   width: 72px;
   min-height: 44px;
@@ -852,11 +852,21 @@ body.overlay-body .character-bubble::after {
 }
 
 body.overlay-body .character-bubble.is-chatting {
-  top: 50px;
-  left: 6px;
-  width: 78px;
-  border-radius: 8px;
-  padding: 5px;
+  top: 10px;
+  right: 116px;
+  width: 318px;
+  height: 336px;
+  min-height: 0;
+  place-items: stretch;
+  border-radius: 14px;
+  background: #b7d7ea;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 10px 26px rgba(32, 40, 48, 0.22);
+}
+
+body.overlay-body .character-bubble.is-chatting::after {
+  display: none;
 }
 
 body.overlay-body .character-bubble-prompt {
@@ -891,7 +901,7 @@ body.overlay-body .character-bubble-dots span {
 }
 
 body.overlay-body .character-notice {
-  margin: 0;
+  margin: 0 10px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -906,11 +916,11 @@ body.overlay-body .character-notice {
 body.overlay-body .character-chat {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px;
+  gap: 6px;
   border: 0;
   border-radius: 0;
-  background: transparent;
-  padding: 0;
+  background: #f7f7f7;
+  padding: 8px;
   box-shadow: none;
   backdrop-filter: none;
   pointer-events: auto;
@@ -918,20 +928,157 @@ body.overlay-body .character-chat {
 
 body.overlay-body .character-chat input {
   min-width: 0;
-  min-height: 24px;
-  border-radius: 6px;
-  padding: 0 5px;
-  font-size: 10px;
+  min-height: 34px;
+  border: 1px solid #d8dde2;
+  border-radius: 17px;
+  background: #ffffff;
+  padding: 0 12px;
+  font-size: 12px;
 }
 
 body.overlay-body .character-chat button {
-  min-height: 24px;
-  border-color: #9e1017;
-  border-radius: 6px;
-  background: linear-gradient(180deg, #f03a40, #d81920);
-  color: #ffffff;
-  padding: 0 6px;
+  min-height: 34px;
+  border: 0;
+  border-radius: 17px;
+  background: #fee500;
+  color: #2f2500;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+body.overlay-body .room-chat-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: #202124;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+body.overlay-body .room-chat-header {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 7px;
+  min-height: 42px;
+  background: rgba(151, 188, 210, 0.72);
+  padding: 5px 8px;
+}
+
+body.overlay-body .room-chat-header button {
+  min-width: 0;
+  min-height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #26313b;
+  padding: 0;
+  font-size: 17px;
+  box-shadow: none;
+}
+
+body.overlay-body .room-chat-header div {
+  display: grid;
+  min-width: 0;
+}
+
+body.overlay-body .room-chat-header strong,
+body.overlay-body .room-chat-header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.overlay-body .room-chat-header strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+body.overlay-body .room-chat-header small {
+  color: rgba(32, 40, 48, 0.64);
   font-size: 10px;
+  line-height: 1.2;
+}
+
+body.overlay-body .room-chat-status {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #19a45b;
+  box-shadow: 0 0 0 3px rgba(25, 164, 91, 0.14);
+}
+
+body.overlay-body .room-chat-thread {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #b7d7ea;
+  padding: 10px;
+}
+
+body.overlay-body .room-chat-message {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+body.overlay-body .room-chat-message.is-mouse {
+  grid-template-columns: 30px minmax(0, 1fr);
+  justify-self: start;
+  max-width: 270px;
+}
+
+body.overlay-body .room-chat-message.is-mouse img {
+  width: 30px;
+  height: 30px;
+  border-radius: 12px;
+  background: #fff6d9;
+  object-fit: cover;
+  object-position: center;
+  transform: scaleX(-1);
+}
+
+body.overlay-body .room-chat-message.is-mouse div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+body.overlay-body .room-chat-message.is-mouse strong {
+  color: rgba(32, 40, 48, 0.76);
+  font-size: 10px;
+  line-height: 1;
+}
+
+body.overlay-body .room-chat-message p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  border-radius: 13px;
+  padding: 8px 9px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+body.overlay-body .room-chat-message.is-mouse p {
+  border-top-left-radius: 3px;
+  background: #ffffff;
+}
+
+body.overlay-body .room-chat-message.is-user {
+  justify-self: end;
+  max-width: 246px;
+}
+
+body.overlay-body .room-chat-message.is-user p {
+  border-top-right-radius: 3px;
+  background: #fee500;
+  color: #2d2500;
 }
 
 body.house-overlay-body {
@@ -987,8 +1134,19 @@ body.house-overlay-body .house-overlay-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  transition: filter 180ms ease, opacity 180ms ease;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+body.house-overlay-body .house-overlay:not(.is-locked) .house-overlay-image {
+  filter:
+    drop-shadow(0 0 5px rgba(254, 229, 0, 0.42))
+    drop-shadow(0 0 11px rgba(102, 181, 218, 0.28));
+}
+
+body.house-overlay-body .house-overlay.is-locked .house-overlay-image {
+  filter: none;
 }
 
 /* ============================================================
@@ -2758,5 +2916,394 @@ html.overlay-root .house-overlay-image {
   outline: 0 !important;
   background: transparent !important;
   background-color: transparent !important;
+  box-shadow: none !important;
+}
+
+html.overlay-root .house-quick-menu,
+html.overlay-root .house-detail-panel {
+  position: absolute;
+  z-index: 5;
+  pointer-events: auto;
+  color: #202830;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background:
+    linear-gradient(90deg, rgba(43, 54, 64, 0.04) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(43, 54, 64, 0.04) 1px, transparent 1px),
+    rgba(255, 253, 248, 0.96) !important;
+  background-size: 8px 8px;
+  border: 2px dotted #2b3640 !important;
+  border-radius: 0 !important;
+  box-shadow: 4px 4px 0 rgba(32, 40, 48, 0.28) !important;
+}
+
+html.overlay-root .house-quick-menu {
+  top: 78px;
+  right: 34px;
+  display: grid;
+  gap: 6px;
+  width: 188px;
+  padding: 8px;
+}
+
+html.overlay-root .house-quick-menu button {
+  pointer-events: auto;
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 0;
+  padding: 8px 9px;
+  text-align: left;
+  border: 2px dotted rgba(43, 54, 64, 0.72) !important;
+  border-radius: 0 !important;
+  background: rgba(232, 244, 255, 0.94) !important;
+  box-shadow: 2px 2px 0 rgba(32, 40, 48, 0.18) !important;
+}
+
+html.overlay-root .house-quick-menu button:hover {
+  transform: translate(-1px, -1px);
+  background: #fff1ee !important;
+}
+
+html.overlay-root .house-quick-menu strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+html.overlay-root .house-quick-menu small {
+  color: #63717d;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+html.overlay-root .house-detail-panel {
+  top: 34px;
+  right: 24px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  width: 384px;
+  max-height: 512px;
+  padding: 10px;
+  overflow: hidden;
+}
+
+html.overlay-root .house-detail-panel header {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+html.overlay-root .house-detail-panel header button {
+  pointer-events: auto;
+  min-height: 30px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  border: 2px dotted #2b3640 !important;
+  border-radius: 0 !important;
+  background: #e8f4ff !important;
+  box-shadow: 2px 2px 0 rgba(32, 40, 48, 0.18) !important;
+}
+
+html.overlay-root .house-detail-panel header div {
+  display: grid;
+  min-width: 0;
+}
+
+html.overlay-root .house-detail-panel header strong {
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.overlay-root .house-detail-panel header small {
+  overflow: hidden;
+  color: #63717d;
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.overlay-root .house-detail-content {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+}
+
+html.overlay-root .house-stat,
+html.overlay-root .house-list article {
+  border: 2px dotted rgba(43, 54, 64, 0.58);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 2px 2px 0 rgba(32, 40, 48, 0.12);
+}
+
+html.overlay-root .house-stat {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+}
+
+html.overlay-root .house-stat span {
+  color: #63717d;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+html.overlay-root .house-stat strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.overlay-root .house-list {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+html.overlay-root .house-list article {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+}
+
+html.overlay-root .house-list article strong,
+html.overlay-root .house-list article small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.overlay-root .house-list article strong {
+  font-size: 12px;
+}
+
+html.overlay-root .house-list article span {
+  justify-self: start;
+  padding: 2px 5px;
+  color: #9e1f1a;
+  font-size: 10px;
+  font-weight: 800;
+  background: #fff1ee;
+  border: 1px dotted #9e1f1a;
+}
+
+html.overlay-root .house-list article small,
+html.overlay-root .house-panel-muted {
+  color: #63717d;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+html.overlay-root .house-panel-muted,
+html.overlay-root .house-panel-error {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+html.overlay-root .house-panel-error {
+  color: #9e1f1a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+html.overlay-root .house-manager-panel.house-detail-panel {
+  top: 16px;
+  right: 16px;
+  left: 16px;
+  width: auto;
+  max-height: calc(100vh - 32px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+html.overlay-root .house-manager-content {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+html.overlay-root .house-manager-content,
+html.overlay-root .house-manager-content * {
+  font-size: 12px;
+  letter-spacing: 0;
+}
+
+html.overlay-root .house-manager-content h1 {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+html.overlay-root .house-manager-content h2 {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+html.overlay-root .house-manager-content .file-engine-panel,
+html.overlay-root .house-manager-content .embedded-file-engine,
+html.overlay-root .house-manager-content .agent-panel {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+}
+
+html.overlay-root .house-manager-content .file-engine-topbar,
+html.overlay-root .house-manager-content .panel,
+html.overlay-root .house-manager-content .runtime-card,
+html.overlay-root .house-manager-content .advanced-tools,
+html.overlay-root .house-manager-content .mode-note,
+html.overlay-root .house-manager-content .command-row,
+html.overlay-root .house-manager-content .proposal-row,
+html.overlay-root .house-manager-content .browse-row,
+html.overlay-root .house-manager-content .search-row-item,
+html.overlay-root .house-manager-content .history-row {
+  margin-bottom: 8px;
+  padding: 9px;
+}
+
+html.overlay-root .house-manager-content .file-engine-topbar,
+html.overlay-root .house-manager-content .section-header,
+html.overlay-root .house-manager-content .fe-topbar-lead,
+html.overlay-root .house-manager-content .input-row,
+html.overlay-root .house-manager-content .search-row,
+html.overlay-root .house-manager-content .button-row,
+html.overlay-root .house-manager-content .actions-row,
+html.overlay-root .house-manager-content .proposal-actions,
+html.overlay-root .house-manager-content .explore-actions {
+  gap: 6px;
+}
+
+html.overlay-root .house-manager-content .file-engine-topbar,
+html.overlay-root .house-manager-content .fe-topbar-lead {
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html.overlay-root .house-manager-content .fe-topbar-actions,
+html.overlay-root .house-manager-content .fe-folder-picker,
+html.overlay-root .house-manager-content .input-row,
+html.overlay-root .house-manager-content .search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+html.overlay-root .house-manager-content input,
+html.overlay-root .house-manager-content select,
+html.overlay-root .house-manager-content button {
+  min-height: 30px;
+  min-width: 0;
+  padding: 5px 8px;
+}
+
+html.overlay-root .house-manager-content .room-card-list,
+html.overlay-root .house-manager-content .file-engine-duo,
+html.overlay-root .house-manager-content .runtime-grid,
+html.overlay-root .house-manager-content .root-state-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+html.overlay-root .house-manager-content .browse-panel,
+html.overlay-root .house-manager-content .room-list-panel {
+  min-height: 260px !important;
+}
+
+html.overlay-root .house-manager-content .browse-list,
+html.overlay-root .house-manager-content .history-list,
+html.overlay-root .house-manager-content .proposal-list,
+html.overlay-root .house-manager-content .command-list {
+  max-height: 250px;
+  overflow: auto;
+}
+
+html.overlay-root .house-manager-content .browse-row {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+html.overlay-root .house-manager-content .browse-row > button,
+html.overlay-root .house-manager-content .browse-row > span:nth-last-child(-n + 2) {
+  justify-self: start;
+}
+
+html.overlay-root .house-manager-content .pairing-code {
+  font-size: 18px;
+  word-break: break-all;
+}
+
+html.overlay-root body.overlay-body .room-chat-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  color: #202124;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+html.overlay-root body.overlay-body .character-bubble.is-chatting {
+  width: 318px;
+  height: 336px;
+  min-height: 0;
+}
+
+html.overlay-root body.overlay-body .room-chat-thread {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+html.overlay-root body.overlay-body .character-chat {
+  flex: none;
+  align-self: end;
+}
+
+html.overlay-root body.overlay-body .room-chat-header,
+html.overlay-root body.overlay-body .room-chat-thread,
+html.overlay-root body.overlay-body .character-chat {
+  box-shadow: none !important;
+}
+
+html.overlay-root body.overlay-body .room-chat-header button,
+html.overlay-root body.overlay-body .room-chat-header button:hover,
+html.overlay-root body.overlay-body .character-chat button,
+html.overlay-root body.overlay-body .character-chat button:hover {
+  transform: none !important;
+}
+
+html.overlay-root body.overlay-body .room-chat-header button {
+  min-width: 0;
+  min-height: 28px;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: transparent !important;
+  color: #26313b;
+  padding: 0;
+  box-shadow: none !important;
+}
+
+html.overlay-root body.overlay-body .character-chat input {
+  min-height: 34px;
+  border: 1px solid #d8dde2 !important;
+  border-radius: 17px !important;
+  background: #ffffff !important;
+  padding: 0 12px;
+  box-shadow: none !important;
+}
+
+html.overlay-root body.overlay-body .character-chat button {
+  min-height: 34px;
+  border: 0 !important;
+  border-radius: 17px !important;
+  background: #fee500 !important;
+  color: #2f2500;
   box-shadow: none !important;
 }

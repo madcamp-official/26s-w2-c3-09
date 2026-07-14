@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { getCurrentWindow, LogicalPosition } from "@tauri-apps/api/window";
 
+import { listManagedRoots } from "../files/fileEngineApi";
+import type { ManagedRoot } from "../files/fileEngineApi";
 import {
   CharacterEvent,
   CharacterEventKind,
@@ -10,8 +12,6 @@ import {
 } from "./overlayApi";
 import { useCharacterWander } from "./characterWander";
 
-// Animations played while the mouse roams the desktop on its own. Paths are kept as static string
-// literals so Vite can resolve the assets at build time.
 const wanderMotionUrls = {
   walking: new URL(
     "../../../../../packages/character-assets/new_mouse/gif/mouse_walk_preview.gif",
@@ -42,9 +42,12 @@ const overlayMotionUrls: Record<CharacterEventKind, string> = {
   OFFLINE: new URL("../../../../../packages/character-assets/new_mouse/gif/mouse_idle_preview.gif", import.meta.url).href
 };
 
-// Shown while the user is dragging the mouse around by the cursor.
 const danglingMotionUrl = new URL(
   "../../../../../packages/character-assets/new_mouse/gif/mouse_dangling_preview.gif",
+  import.meta.url
+).href;
+const chatAvatarUrl = new URL(
+  "../../../../../packages/character-assets/new_mouse/mouse_walk_clean.png",
   import.meta.url
 ).href;
 
@@ -61,14 +64,12 @@ const KIND_LABELS: Record<CharacterEventKind, string> = {
 };
 
 type DragStart = {
-  // Cursor position at grab time, in screen (CSS) pixels — stable while the window itself moves.
   x: number;
   y: number;
   at: number;
 };
 
 type DragOrigin = {
-  // Window's outer position at grab time, in logical (CSS) pixels — same space as pointer.screenX.
   winX: number;
   winY: number;
 };
@@ -76,19 +77,23 @@ type DragOrigin = {
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
   const [draft, setDraft] = useState("");
+  const [sentDrafts, setSentDrafts] = useState<string[]>([]);
+  const [rooms, setRooms] = useState<ManagedRoot[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bubbleOpen, setBubbleOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [isDraggingOverlay, setIsDraggingOverlay] = useState(false);
   const [pointerHeld, setPointerHeld] = useState(false);
-  // Bumped each time an actual drag (movement past the threshold, not just a click) ends, so the
-  // wander hook can tell "user dropped it here" apart from other reasons roaming paused.
   const [dragReleaseTick, setDragReleaseTick] = useState(0);
   const dragStart = useRef<DragStart | null>(null);
   const dragOrigin = useRef<DragOrigin | null>(null);
   const draggingStarted = useRef(false);
   const suppressClick = useRef(false);
+
+  const activeRoom = rooms.find((root) => root.room_binding_status === "active") ?? rooms[0] ?? null;
+  const activeRoomName = activeRoom?.display_name ?? "방 없음";
+  const activeRoomId = activeRoom?.room_id ?? activeRoom?.root_id ?? "unbound";
 
   useEffect(() => {
     document.documentElement.classList.add("overlay-root");
@@ -106,11 +111,13 @@ export function CharacterOverlay() {
     };
   }, []);
 
-  // Shared by the button's own pointerup/cancel handler and the window-level fallback below.
-  // Whichever fires first (they both run for a normal release, since the button's handler runs
-  // before the event bubbles to `window`) reports the drag and clears the flag, so the other is a
-  // harmless no-op — this avoids a race where the button's handler clears `draggingStarted` before
-  // the window listener gets a chance to see it was a real drag.
+  useEffect(() => {
+    if (!bubbleOpen) return;
+    void listManagedRoots()
+      .then(setRooms)
+      .catch(() => setRooms([]));
+  }, [bubbleOpen]);
+
   function releaseDrag() {
     if (draggingStarted.current) {
       setDragReleaseTick((tick) => tick + 1);
@@ -122,11 +129,6 @@ export function CharacterOverlay() {
     setPointerHeld(false);
   }
 
-  // Drag tracking lives on `window` rather than the drag-surface button's own pointer capture.
-  // The button visually moves out from under the cursor every time we reposition the native
-  // window mid-drag, and some WebView engines drop pointer capture when that happens; a
-  // window-level listener keeps receiving move/up events regardless of which element the browser
-  // currently thinks is "under" the pointer.
   useEffect(() => {
     const onPointerMoveGlobal = (pointerEvent: globalThis.PointerEvent) => {
       const start = dragStart.current;
@@ -141,8 +143,6 @@ export function CharacterOverlay() {
 
       const origin = dragOrigin.current;
       if (!origin) return;
-      // pointerEvent.screenX/Y and LogicalPosition are both in CSS pixels, so the cursor delta
-      // maps straight onto the window position with no DPI conversion.
       const nextX = origin.winX + (pointerEvent.screenX - start.x);
       const nextY = origin.winY + (pointerEvent.screenY - start.y);
       void getCurrentWindow()
@@ -163,11 +163,7 @@ export function CharacterOverlay() {
     };
   }, []);
 
-  // The mouse only roams on its own when it is idle and the user is not touching it. Any real
-  // MouseKeeper activity (connecting, analyzing, working, …) parks it so its state animation reads
-  // clearly at a fixed spot.
-  const wanderActive =
-    event.kind === "IDLE" && !isDraggingOverlay && !pointerHeld && !bubbleOpen;
+  const wanderActive = event.kind === "IDLE" && !isDraggingOverlay && !pointerHeld && !bubbleOpen;
   const { phase: wanderPhase, facing } = useCharacterWander(wanderActive, dragReleaseTick);
 
   const motionUrl = useMemo(() => {
@@ -176,8 +172,6 @@ export function CharacterOverlay() {
     return overlayMotionUrls[event.kind];
   }, [event.kind, isDraggingOverlay, wanderActive, wanderPhase]);
 
-  // Sprites are authored facing left; mirror horizontally when the mouse walks to the right so it
-  // always faces the direction it is travelling.
   const spriteFlip = wanderActive && facing === 1 ? "scaleX(-1)" : "none";
 
   function beginOverlayDrag(pointer: PointerEvent<HTMLButtonElement>) {
@@ -186,12 +180,8 @@ export function CharacterOverlay() {
     dragOrigin.current = null;
     draggingStarted.current = false;
     suppressClick.current = false;
-    // Freeze roaming the moment the mouse is grabbed so it can be clicked or dragged cleanly.
     setPointerHeld(true);
     pointer.currentTarget.setPointerCapture(pointer.pointerId);
-    // Record where the window starts so pointer deltas can move it directly. We drive the drag
-    // ourselves (rather than the native startDragging move-loop) so the dangling animation keeps
-    // rendering and updating for the whole drag.
     if (window.__TAURI_INTERNALS__) {
       const win = getCurrentWindow();
       void Promise.all([win.outerPosition(), win.scaleFactor()])
@@ -235,13 +225,14 @@ export function CharacterOverlay() {
   }
 
   async function submitDraft() {
+    const trimmed = draft.trim();
     setNotice(null);
     setBusy(true);
     try {
-      await submitOverlayDraftRequest(draft);
+      await submitOverlayDraftRequest(trimmed);
+      setSentDrafts((items) => [...items.slice(-3), trimmed]);
       setDraft("");
-      setChatOpen(false);
-      setBubbleOpen(false);
+      setNotice("이 방의 초안으로 보냈어요.");
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -258,7 +249,7 @@ export function CharacterOverlay() {
         onPointerDown={beginOverlayDrag}
         onPointerUp={finishOverlayPointer}
         onPointerCancel={finishOverlayPointer}
-        aria-label={`MouseKeeper ${KIND_LABELS[event.kind]}. 클릭하면 말풍선을 열고, 드래그하면 위치를 옮깁니다.`}
+        aria-label={`MouseKeeper ${KIND_LABELS[event.kind]}`}
         title="클릭: 말풍선 / 드래그: 이동"
       >
         <img
@@ -272,27 +263,24 @@ export function CharacterOverlay() {
       </button>
 
       {bubbleOpen ? (
-        <section className={`character-bubble ${chatOpen ? "is-chatting" : ""}`} aria-label="MouseKeeper 말풍선">
+        <section className={`character-bubble ${chatOpen ? "is-chatting" : ""}`} aria-label="MouseKeeper chat">
           {chatOpen ? (
-            <form
-              className="character-chat"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void submitDraft();
+            <RoomChatPanel
+              avatarUrl={chatAvatarUrl}
+              busy={busy}
+              draft={draft}
+              event={event}
+              notice={notice}
+              roomId={activeRoomId}
+              roomName={activeRoomName}
+              sentDrafts={sentDrafts}
+              onChangeDraft={setDraft}
+              onClose={() => {
+                setChatOpen(false);
+                setNotice(null);
               }}
-            >
-              <input
-                aria-label="정리 제안 요청하기"
-                placeholder="정리 요청"
-                maxLength={2000}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                autoFocus
-              />
-              <button type="submit" disabled={busy || draft.trim().length === 0}>
-                전송
-              </button>
-            </form>
+              onSubmit={() => void submitDraft()}
+            />
           ) : (
             <button
               type="button"
@@ -310,9 +298,93 @@ export function CharacterOverlay() {
               </span>
             </button>
           )}
-          {notice ? <p className="character-notice">{notice}</p> : null}
         </section>
       ) : null}
+    </div>
+  );
+}
+
+function RoomChatPanel({
+  avatarUrl,
+  busy,
+  draft,
+  event,
+  notice,
+  roomId,
+  roomName,
+  sentDrafts,
+  onChangeDraft,
+  onClose,
+  onSubmit
+}: {
+  avatarUrl: string;
+  busy: boolean;
+  draft: string;
+  event: CharacterEvent;
+  notice: string | null;
+  roomId: string;
+  roomName: string;
+  sentDrafts: string[];
+  onChangeDraft: (value: string) => void;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <div className="room-chat-panel" data-room-id={roomId}>
+      <header className="room-chat-header">
+        <button type="button" onClick={onClose} aria-label="Close chat">
+          &lt;
+        </button>
+        <div>
+          <strong>{roomName}</strong>
+          <small>방별 채팅 준비 중</small>
+        </div>
+        <span className="room-chat-status" title={event.kind} aria-label={event.kind} />
+      </header>
+
+      <div className="room-chat-thread" aria-live="polite">
+        <article className="room-chat-message is-mouse">
+          <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+          <div>
+            <strong>MouseKeeper</strong>
+            <p>{event.message ?? "이 방 기준으로 이야기할게요. 나중에는 방별 대화가 여기에 따로 쌓여요."}</p>
+          </div>
+        </article>
+        <article className="room-chat-message is-mouse">
+          <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+          <div>
+            <strong>MouseKeeper</strong>
+            <p>집 이미지, 청결도, 채팅 스레드는 같은 roomId로 연결될 예정이에요.</p>
+          </div>
+        </article>
+        {sentDrafts.map((item, index) => (
+          <article className="room-chat-message is-user" key={`${index}-${item}`}>
+            <p>{item}</p>
+          </article>
+        ))}
+      </div>
+
+      {notice ? <p className="character-notice">{notice}</p> : null}
+
+      <form
+        className="character-chat"
+        onSubmit={(submitEvent) => {
+          submitEvent.preventDefault();
+          onSubmit();
+        }}
+      >
+        <input
+          aria-label="Send message draft"
+          placeholder={`${roomName}에 메시지 입력`}
+          maxLength={2000}
+          value={draft}
+          onChange={(inputEvent) => onChangeDraft(inputEvent.target.value)}
+          autoFocus
+        />
+        <button type="submit" disabled={busy || draft.trim().length === 0}>
+          전송
+        </button>
+      </form>
     </div>
   );
 }
