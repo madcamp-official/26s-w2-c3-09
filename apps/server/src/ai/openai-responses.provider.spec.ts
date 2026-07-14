@@ -176,4 +176,30 @@ describe('OpenAiResponsesProvider', () => {
       code: 'AI_PROVIDER_UNCONFIGURED',
     });
   });
+
+  it('returns UNCONFIGURED when the configured model is not available to the provider', async () => {
+    const unavailableModel = providerWith(
+      jest.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { message: 'The model `gpt-5.4` does not exist.' },
+            }),
+            { status: 404 },
+          ),
+      ),
+    );
+
+    await expect(
+      unavailableModel.classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: { id: 'message-1', content: 'hello' },
+      }),
+    ).resolves.toEqual({
+      status: 'UNCONFIGURED',
+      code: 'AI_PROVIDER_UNCONFIGURED',
+    });
+  });
 });
