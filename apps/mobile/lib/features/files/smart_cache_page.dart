@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/files/verified_download.dart';
 import '../../core/network/api_client.dart';
+import '../../storage/display_cache.dart';
 
 void ensureSmartCacheDownloadDecryptable(Map<String, dynamic> target) {
   final metadata = target['encryptionMetadata'];
@@ -82,11 +83,23 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
   }
 
   void reload() {
+    content = loadContent();
+  }
+
+  Future<List<Map<String, dynamic>>> loadContent() async {
     final api = ref.read(apiClientProvider);
-    content = Future.wait([
+    final results = await Future.wait([
       api.get('/v1/rooms/${widget.roomId}/smart-cache-policy'),
       api.get(smartCacheFilesPath(widget.roomId)),
     ]);
+    final cache = results[1];
+    final files = (cache['files'] as List<dynamic>? ?? const [])
+        .map((raw) => Map<String, dynamic>.from(raw as Map))
+        .toList(growable: false);
+    await ref
+        .read(displayCacheProvider)
+        .replaceSmartCacheFiles(widget.roomId, files);
+    return results;
   }
 
   Future<void> setEnabled(Map<String, dynamic> policy, bool enabled) async {
@@ -282,19 +295,32 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
           }
         },
       );
+      Object? localMetadataError;
+      try {
+        await ref
+            .read(displayCacheProvider)
+            .markSmartCacheFileDownloaded(
+              roomId: widget.roomId,
+              file: file,
+              downloadTarget: target,
+              localDownloadPath: saved.path,
+            );
+      } catch (error) {
+        localMetadataError = error;
+      }
       Object? accessEventError;
       try {
         await recordSmartCacheDownloadCompleted(api, id);
       } catch (error) {
         accessEventError = error;
       }
-      if (mounted && accessEventError != null) {
+      if (mounted && (localMetadataError != null || accessEventError != null)) {
+        final warnings = [
+          if (localMetadataError != null) '로컬 캐시 기록 실패: $localMetadataError',
+          if (accessEventError != null) '사용 기록 동기화 실패: $accessEventError',
+        ].join(' / ');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'checksum 확인 후 저장 완료, 사용 기록 동기화 실패: $accessEventError',
-            ),
-          ),
+          SnackBar(content: Text('checksum 확인 후 저장 완료, $warnings')),
         );
         return;
       }

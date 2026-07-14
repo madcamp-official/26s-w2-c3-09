@@ -4,6 +4,7 @@
 
 - Mobile smart-cache downloads now POST `DOWNLOAD_COMPLETED` to `/v1/cached-files/:cachedFileId/access-events` only after local save and SHA-256 verification; the server records `lastAccessedAt`/usage score from that verified ACK instead of treating signed URL issuance as a completed access.
 - Mobile smart-cache file listing now uses the plan-aligned `/v1/rooms/:roomId/smart-cache/files` endpoint, while the older `/v1/rooms/:roomId/cached-files` route remains as a compatibility alias.
+- Mobile now stores smart-cache file metadata in Drift (`cached_smart_cache_files`): availability/freshness, checksum, local verified download path, and last verified/downloaded timestamps are owner-scoped and purged with the room/connection cache.
 - Mobile file browse requests now listen for `file.browse.ready` / `file.browse.failed` WebSocket events and wake only the matching active request; REST status checks are a 5-second safety fallback instead of a fixed 2-second polling loop, and browse events no longer trigger Home summary reloads.
 - Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but HomeController no longer subscribes to that gate as a summary dependency, with regression coverage proving the loop does not trigger another `/v1/home/summary` fetch.
 - Mobile connection safety reads now use one lightweight `/v1/connections/summary` request for ACTIVE device/room gate data only; `/v1/home/summary` remains the richer Home projection and is no longer reused by the 5-second safety reconcile.

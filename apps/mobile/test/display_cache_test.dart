@@ -64,6 +64,15 @@ void main() {
       },
     ]);
     await cache.saveSnapshot('room-a', {'score': 70});
+    await cache.replaceSmartCacheFiles('room-a', [
+      {
+        'id': 'cached-file-a',
+        'roomId': 'room-a',
+        'sourceRelativePath': 'docs/report.pdf',
+        'availabilityStatus': 'AVAILABLE',
+        'freshnessStatus': 'VERIFIED_CURRENT',
+      },
+    ]);
 
     await cache.removeRoomCascade('room-a');
 
@@ -72,6 +81,7 @@ void main() {
     expect(await cache.proposals('room-a'), isEmpty);
     expect(await cache.executions('room-a'), isEmpty);
     expect(await cache.snapshot('room-a'), isNull);
+    expect(await cache.smartCacheFiles('room-a'), isEmpty);
   });
 
   test('device 제거는 연결된 room과 하위 캐시만 함께 삭제한다', () async {
@@ -191,6 +201,52 @@ void main() {
 
     expect((await userA.devices()).single['presence'], 'ONLINE_EXECUTING');
     expect((await userB.devices()).single.containsKey('presence'), isFalse);
+  });
+
+  test('smart-cache verified download metadata remains owner scoped', () async {
+    final userA = DisplayCache(database, 'firebase-user-a');
+    final userB = DisplayCache(database, 'firebase-user-b');
+    final listed = {
+      'id': 'cached-file-a',
+      'roomId': 'room-a',
+      'sourceRelativePath': 'docs/report.pdf',
+      'availabilityStatus': 'AVAILABLE',
+      'freshnessStatus': 'VERIFIED_CURRENT',
+      'sizeBytes': 12,
+      'sha256': List.filled(64, 'a').join(),
+      'lastVerifiedAt': '2026-07-14T01:02:03.000Z',
+    };
+    await userA.replaceRooms([
+      {'id': 'room-a'},
+    ]);
+    await userB.replaceRooms([
+      {'id': 'room-a'},
+    ]);
+    await userA.replaceSmartCacheFiles('room-a', [listed]);
+    await userB.replaceSmartCacheFiles('room-a', [listed]);
+
+    await userA.markSmartCacheFileDownloaded(
+      roomId: 'room-a',
+      file: listed,
+      downloadTarget: {
+        'sha256': List.filled(64, 'b').join(),
+        'sizeBytes': 14,
+        'freshnessStatus': 'UNVERIFIED_OFFLINE',
+        'lastVerifiedAt': '2026-07-14T02:03:04.000Z',
+      },
+      localDownloadPath: '/local/report.pdf',
+    );
+
+    final aFile = (await userA.smartCacheFiles('room-a')).single;
+    final bFile = (await userB.smartCacheFiles('room-a')).single;
+    expect(aFile['localDownloadPath'], '/local/report.pdf');
+    expect(aFile['sha256'], List.filled(64, 'b').join());
+    expect(aFile['sizeBytes'], 14);
+    expect(aFile['freshnessStatus'], 'UNVERIFIED_OFFLINE');
+    expect(aFile['lastVerifiedAt'], '2026-07-14T02:03:04.000Z');
+    expect(aFile['downloadedAt'], isA<String>());
+    expect(bFile.containsKey('localDownloadPath'), isFalse);
+    expect(bFile['sha256'], List.filled(64, 'a').join());
   });
 
   test(
