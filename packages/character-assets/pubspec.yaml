@@ -25,3 +25,11 @@ flutter:
     - backgrounds/background_3.png
     - backgrounds/background_4.png
     - backgrounds/background_5.png
+    - new_mouse/gif/mouse_dangling_preview.gif
+    - new_mouse/gif/mouse_idle_preview.gif
+    - new_mouse/gif/mouse_mad_preview.gif
+    - new_mouse/gif/mouse_organize_preview.gif
+    - new_mouse/gif/mouse_pathetic_preview.gif
+    - new_mouse/gif/mouse_sleep_preview.gif
+    - new_mouse/gif/mouse_walk_preview.gif
+    - new_mouse/gif/mouse_work_preview.gif

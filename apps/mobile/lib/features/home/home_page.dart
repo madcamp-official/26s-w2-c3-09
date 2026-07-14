@@ -1,19 +1,22 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mousekeeper_character_assets/character_assets.dart';
 
-import '../../core/models/character_state.dart';
 import '../../core/notifications/push_notifications.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../auth/auth_controller.dart';
 import '../auth/connection_gate_controller.dart';
-import '../character/mousekeeper_motion.dart';
 import '../chat/chat_page.dart';
 import '../files/files_page.dart';
-import '../rooms/room_page.dart';
 import 'home_controller.dart';
+
+const maxManagedFolderCount = 5;
+const _mouseMoveDuration = Duration(milliseconds: 720);
+
+enum _SpeechBubbleStage { hidden, ellipsis, menu }
 
 List<Map<String, dynamic>> mergeAuthoritativeConnectionItems({
   required List<Map<String, dynamic>> authoritative,
@@ -81,31 +84,30 @@ class HomePage extends ConsumerStatefulWidget {
   ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends ConsumerState<HomePage>
-    with SingleTickerProviderStateMixin {
+class _HomePageState extends ConsumerState<HomePage> {
   late final HomeAuthoritativeReconcileLoop _reconcileLoop;
-  late final AnimationController _backgroundController;
-  Offset _mouseAlignment = const Offset(-0.12, 0.24);
-  bool _mouseMenuOpen = false;
+  final _random = math.Random();
+  Offset _mouseAlignment = const Offset(-0.08, 0.22);
+  _SpeechBubbleStage _bubbleStage = _SpeechBubbleStage.hidden;
   String? _selectedRoomId;
+  late String _restingMouseGif;
+  bool _mouseWalking = false;
+  Timer? _walkTimer;
 
   @override
   void initState() {
     super.initState();
+    _restingMouseGif = _randomRestingMouseGif();
     unawaited(ref.read(realtimeRevisionProvider.notifier).connect());
     _reconcileLoop = HomeAuthoritativeReconcileLoop(
       reconcile: () =>
           ref.read(connectionGateControllerProvider.notifier).reconcile(),
     )..start();
-    _backgroundController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 42),
-    )..repeat();
   }
 
   @override
   void dispose() {
-    _backgroundController.dispose();
+    _walkTimer?.cancel();
     _reconcileLoop.dispose();
     ref.read(realtimeRevisionProvider.notifier).disconnect();
     super.dispose();
@@ -115,7 +117,6 @@ class _HomePageState extends ConsumerState<HomePage>
   Widget build(BuildContext context) {
     final state = ref.watch(homeControllerProvider);
     final pushNotifications = ref.watch(pushNotificationsProvider);
-    final realtimeCharacterKind = ref.watch(realtimeCharacterKindProvider);
     final gateData = ref.watch(connectionGateControllerProvider).asData?.value;
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -135,9 +136,14 @@ class _HomePageState extends ConsumerState<HomePage>
         ],
       ),
       body: state.when(
-        loading: () =>
-            const _HomeStage(child: Center(child: CircularProgressIndicator())),
+        loading: () => const _HomeStage(
+          backgroundAsset: null,
+          mouseAlignment: Offset.zero,
+          child: Center(child: CircularProgressIndicator()),
+        ),
         error: (error, _) => _HomeStage(
+          backgroundAsset: null,
+          mouseAlignment: Offset.zero,
           child: HomeConnectionError(
             error: error,
             onRetry: () => ref.invalidate(homeControllerProvider),
@@ -151,139 +157,92 @@ class _HomePageState extends ConsumerState<HomePage>
           final rooms = mergeAuthoritativeConnectionItems(
             authoritative: gateData?.rooms ?? const [],
             enriched: data.rooms,
-          );
+          ).take(maxManagedFolderCount).toList(growable: false);
           final selectedRoom = _selectedRoom(rooms);
-          final disconnecting =
-              gateData?.operations.values.any(
-                (operation) => operation.phase == DisconnectPhase.disconnecting,
-              ) ??
-              false;
-          final motion = mousekeeperMotionForHome(
-            isOffline: data.isOffline,
-            presences: devices.map(
-              (item) => item['presence'] as String? ?? 'OFFLINE',
-            ),
-            executionStatuses: rooms.map(
-              (item) => item['latestExecutionStatus'] as String?,
-            ),
-            hasPendingProposal: rooms.any(
-              (item) => (item['pendingProposalCount'] as int? ?? 0) > 0,
-            ),
-            realtimeCharacterKind: disconnecting
-                ? CharacterState.connecting
-                : realtimeCharacterKind,
+          final selectedRoomIndex = selectedRoom == null
+              ? 0
+              : rooms.indexWhere((room) => room['id'] == selectedRoom['id']);
+          final backgroundAsset = mousekeeperHomeBackgroundAssetForIndex(
+            selectedRoomIndex < 0 ? 0 : selectedRoomIndex,
           );
           return _HomeStage(
-            controller: _backgroundController,
+            backgroundAsset: backgroundAsset,
+            mouseAlignment: _mouseAlignment,
+            dimBackground: _bubbleStage != _SpeechBubbleStage.hidden,
             onTapStage: _handleStageTap,
-            dimBackground: _mouseMenuOpen,
-            child: RefreshIndicator(
-              onRefresh: () =>
-                  ref.read(homeControllerProvider.notifier).reload(),
-              child: LayoutBuilder(
-                builder: (context, constraints) => SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
+            child: LayoutBuilder(
+              builder: (context, constraints) => Stack(
+                children: [
+                  Positioned(
+                    top: MediaQuery.paddingOf(context).top + 72,
+                    left: constraints.maxWidth * 0.05,
+                    child: _ManagedFolderSelector(
+                      rooms: rooms,
+                      selectedRoomId: selectedRoom?['id'] as String?,
+                      hiddenRoomCount:
+                          ((gateData?.rooms.length ?? rooms.length) -
+                                  rooms.length)
+                              .clamp(0, 999),
+                      onChanged: (roomId) {
+                        setState(() {
+                          _selectedRoomId = roomId;
+                          _bubbleStage = _SpeechBubbleStage.hidden;
+                        });
+                      },
                     ),
-                    child: Stack(
+                  ),
+                  Positioned(
+                    top: MediaQuery.paddingOf(context).top + 140,
+                    left: 16,
+                    right: 16,
+                    child: Column(
                       children: [
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: AnimatedOpacity(
-                              opacity: _mouseMenuOpen ? 1 : 0,
-                              duration: const Duration(milliseconds: 160),
-                              child: Container(color: Colors.black54),
-                            ),
+                        PushNotificationStatusCard(state: pushNotifications),
+                        if (data.isOffline) const OfflineCacheBanner(),
+                        if (data.outboxPending > 0 || data.outboxFailed > 0)
+                          _OutboxNotice(
+                            pending: data.outboxPending,
+                            failed: data.outboxFailed,
+                            onDiscardFailed: () => ref
+                                .read(homeControllerProvider.notifier)
+                                .discardFailedMutations(),
                           ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 92, 18, 28),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _ManagedFolderSelector(
-                                rooms: rooms,
-                                selectedRoomId: selectedRoom?['id'] as String?,
-                                onChanged: (roomId) {
-                                  setState(() => _selectedRoomId = roomId);
-                                },
-                                onOpenRoom: selectedRoom == null
-                                    ? null
-                                    : () => _openRoom(selectedRoom),
-                              ),
-                              const SizedBox(height: 16),
-                              PushNotificationStatusCard(
-                                state: pushNotifications,
-                              ),
-                              if (data.isOffline) ...[
-                                const SizedBox(height: 12),
-                                const OfflineCacheBanner(),
-                              ],
-                              if (data.outboxPending > 0 ||
-                                  data.outboxFailed > 0) ...[
-                                const SizedBox(height: 12),
-                                _OutboxNotice(
-                                  pending: data.outboxPending,
-                                  failed: data.outboxFailed,
-                                  onDiscardFailed: () => ref
-                                      .read(homeControllerProvider.notifier)
-                                      .discardFailedMutations(),
-                                ),
-                              ],
-                              const SizedBox(height: 24),
-                              SizedBox(
-                                height: 360,
-                                child: Stack(
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    _MouseHomeActor(
-                                      alignment: _mouseAlignment,
-                                      motion: motion,
-                                      menuOpen: _mouseMenuOpen,
-                                      onTap: () => setState(
-                                        () => _mouseMenuOpen = !_mouseMenuOpen,
-                                      ),
-                                    ),
-                                    if (_mouseMenuOpen)
-                                      _MouseSpeechBubble(
-                                        selectedRoom: selectedRoom,
-                                        onFiles: selectedRoom == null
-                                            ? null
-                                            : () => _openFiles(selectedRoom),
-                                        onChat: selectedRoom == null
-                                            ? null
-                                            : () => _openChat(selectedRoom),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              _HomeActionGrid(
-                                selectedRoom: selectedRoom,
-                                onFiles: selectedRoom == null
-                                    ? null
-                                    : () => _openFiles(selectedRoom),
-                                onChat: selectedRoom == null
-                                    ? null
-                                    : () => _openChat(selectedRoom),
-                                onHistory: selectedRoom == null
-                                    ? null
-                                    : () => _openRoom(selectedRoom),
-                              ),
-                              const SizedBox(height: 16),
-                              _ConnectionSummary(
-                                devices: devices,
-                                rooms: rooms,
-                              ),
-                            ],
-                          ),
-                        ),
                       ],
                     ),
                   ),
-                ),
+                  Positioned.fill(
+                    child: _MousePlayground(
+                      mouseAlignment: _mouseAlignment,
+                      mouseAsset: _mouseWalking
+                          ? mousekeeperMouseWalkGif
+                          : _restingMouseGif,
+                      bubbleStage: _bubbleStage,
+                      selectedRoom: selectedRoom,
+                      onMouseTap: _handleMouseTap,
+                      onBubbleTap: _handleBubbleTap,
+                      onFiles: selectedRoom == null
+                          ? null
+                          : () => _openFiles(selectedRoom),
+                      onChat: selectedRoom == null
+                          ? null
+                          : () => _openChat(selectedRoom),
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.bottomCenter,
+                    child: SafeArea(
+                      minimum: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+                      child: _DummyBottomMenu(),
+                    ),
+                  ),
+                  if (devices.isEmpty && rooms.isEmpty)
+                    const Positioned(
+                      left: 18,
+                      right: 18,
+                      bottom: 108,
+                      child: EmptyRoomsCard(),
+                    ),
+                ],
               ),
             ),
           );
@@ -293,18 +252,46 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   void _handleStageTap(TapUpDetails details, Size size) {
-    if (_mouseMenuOpen) {
-      setState(() => _mouseMenuOpen = false);
-      return;
-    }
     final dx = (details.localPosition.dx / size.width) * 2 - 1;
     final dy = (details.localPosition.dy / size.height) * 2 - 1;
+    _walkTimer?.cancel();
     setState(() {
+      _bubbleStage = _SpeechBubbleStage.hidden;
+      _mouseWalking = true;
       _mouseAlignment = Offset(
         dx.clamp(-0.72, 0.72).toDouble(),
-        dy.clamp(-0.18, 0.58).toDouble(),
+        dy.clamp(-0.16, 0.58).toDouble(),
       );
     });
+    _walkTimer = Timer(_mouseMoveDuration, () {
+      if (!mounted) return;
+      setState(() {
+        _mouseWalking = false;
+        _restingMouseGif = _randomRestingMouseGif();
+      });
+    });
+  }
+
+  void _handleMouseTap() {
+    setState(() {
+      _bubbleStage = _bubbleStage == _SpeechBubbleStage.hidden
+          ? _SpeechBubbleStage.ellipsis
+          : _SpeechBubbleStage.hidden;
+      if (!_mouseWalking) _restingMouseGif = _randomRestingMouseGif();
+    });
+  }
+
+  void _handleBubbleTap() {
+    setState(() {
+      _bubbleStage = _bubbleStage == _SpeechBubbleStage.ellipsis
+          ? _SpeechBubbleStage.menu
+          : _SpeechBubbleStage.ellipsis;
+    });
+  }
+
+  String _randomRestingMouseGif() {
+    final assets = mousekeeperRestingMouseGifs;
+    return assets[_random.nextInt(assets.length)];
   }
 
   Map<String, dynamic>? _selectedRoom(List<Map<String, dynamic>> rooms) {
@@ -330,12 +317,6 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   }
 
-  void _openRoom(Map<String, dynamic> room) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => RoomPage(room: room)));
-  }
-
   void _openFiles(Map<String, dynamic> room) {
     final roomId = room['id'] as String;
     final roomName = room['name'] as String? ?? '관리 폴더';
@@ -356,13 +337,15 @@ class _HomePageState extends ConsumerState<HomePage>
 class _HomeStage extends StatelessWidget {
   const _HomeStage({
     required this.child,
-    this.controller,
+    required this.backgroundAsset,
+    required this.mouseAlignment,
     this.onTapStage,
     this.dimBackground = false,
   });
 
   final Widget child;
-  final AnimationController? controller;
+  final String? backgroundAsset;
+  final Offset mouseAlignment;
   final void Function(TapUpDetails details, Size size)? onTapStage;
   final bool dimBackground;
 
@@ -378,21 +361,15 @@ class _HomeStage extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _PanningHomeBackground(controller: controller),
+            _RoomPanningBackground(
+              asset: backgroundAsset,
+              mouseAlignment: mouseAlignment,
+            ),
             AnimatedContainer(
               duration: const Duration(milliseconds: 160),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: dimBackground ? 0.06 : 0.18),
-                    const Color(
-                      0xFFFFF5E9,
-                    ).withValues(alpha: dimBackground ? 0.08 : 0.34),
-                  ],
-                ),
-              ),
+              color: dimBackground
+                  ? Colors.black.withValues(alpha: 0.18)
+                  : Colors.transparent,
             ),
             child,
           ],
@@ -402,58 +379,67 @@ class _HomeStage extends StatelessWidget {
   );
 }
 
-class _PanningHomeBackground extends StatelessWidget {
-  const _PanningHomeBackground({this.controller});
+class _RoomPanningBackground extends StatelessWidget {
+  const _RoomPanningBackground({
+    required this.asset,
+    required this.mouseAlignment,
+  });
 
-  final AnimationController? controller;
+  final String? asset;
+  final Offset mouseAlignment;
 
   @override
   Widget build(BuildContext context) {
-    final animation = controller;
-    if (animation == null) {
-      return _backgroundFrame(0);
-    }
-    return AnimatedBuilder(
-      animation: animation,
-      builder: (context, _) => _backgroundFrame(animation.value),
-    );
-  }
-
-  Widget _backgroundFrame(double value) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        for (
-          var index = 0;
-          index < mousekeeperHomeBackgroundAssets.length;
-          index++
-        )
-          FractionalTranslation(
-            translation: Offset(
-              index - value * mousekeeperHomeBackgroundAssets.length,
-              0,
-            ),
-            child: Image.asset(
-              mousekeeperHomeBackgroundAssets[index],
-              package: mousekeeperMascotPackage,
-              fit: BoxFit.cover,
-              filterQuality: FilterQuality.low,
-            ),
-          ),
-        FractionalTranslation(
-          translation: Offset(
-            mousekeeperHomeBackgroundAssets.length -
-                value * mousekeeperHomeBackgroundAssets.length,
-            0,
-          ),
-          child: Image.asset(
-            mousekeeperHomeBackgroundAssets.first,
-            package: mousekeeperMascotPackage,
-            fit: BoxFit.cover,
-            filterQuality: FilterQuality.low,
+    final background = asset;
+    if (background == null || background.isEmpty) {
+      return const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFFFF6E9), Color(0xFFE8F4FF)],
           ),
         ),
-      ],
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final imageWidth = constraints.maxWidth * 1.28;
+        final extraWidth = imageWidth - constraints.maxWidth;
+        final progress = ((mouseAlignment.dx + 1) / 2).clamp(0.0, 1.0);
+        final left = -extraWidth * progress;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            AnimatedPositioned(
+              duration: _mouseMoveDuration,
+              curve: Curves.easeOutCubic,
+              left: left,
+              top: 0,
+              width: imageWidth,
+              height: constraints.maxHeight,
+              child: Image.asset(
+                background,
+                package: mousekeeperMascotPackage,
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.low,
+              ),
+            ),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.16),
+                    const Color(0xFFFFF2E5).withValues(alpha: 0.28),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -462,286 +448,255 @@ class _ManagedFolderSelector extends StatelessWidget {
   const _ManagedFolderSelector({
     required this.rooms,
     required this.selectedRoomId,
+    required this.hiddenRoomCount,
     required this.onChanged,
-    required this.onOpenRoom,
   });
 
   final List<Map<String, dynamic>> rooms;
   final String? selectedRoomId;
+  final int hiddenRoomCount;
   final ValueChanged<String> onChanged;
-  final VoidCallback? onOpenRoom;
 
   @override
-  Widget build(BuildContext context) => Align(
-    alignment: Alignment.centerRight,
-    child: DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.88),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: const Color(0xFF7E5C3F).withValues(alpha: 0.24),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 14,
-            offset: const Offset(0, 8),
-          ),
-        ],
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.90),
+      borderRadius: BorderRadius.circular(22),
+      border: Border.all(
+        color: const Color(0xFF7E5C3F).withValues(alpha: 0.24),
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.folder_special_outlined, size: 18),
-            const SizedBox(width: 8),
-            if (rooms.isEmpty)
-              const Text('관리 폴더 없음')
-            else
-              DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  key: const ValueKey('managed-folder-selector'),
-                  value: selectedRoomId,
-                  borderRadius: BorderRadius.circular(16),
-                  items: [
-                    for (final room in rooms)
-                      DropdownMenuItem<String>(
-                        value: room['id'] as String?,
-                        child: Text(
-                          room['name'] as String? ?? '관리 폴더',
-                          overflow: TextOverflow.ellipsis,
-                        ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.08),
+          blurRadius: 14,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.folder_special_outlined, size: 18),
+          const SizedBox(width: 8),
+          if (rooms.isEmpty)
+            const Text('관리 폴더 없음')
+          else
+            DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                key: const ValueKey('managed-folder-selector'),
+                value: selectedRoomId,
+                borderRadius: BorderRadius.circular(16),
+                items: [
+                  for (var index = 0; index < rooms.length; index++)
+                    DropdownMenuItem<String>(
+                      value: rooms[index]['id'] as String?,
+                      child: Text(
+                        '${index + 1}. ${rooms[index]['name'] as String? ?? '관리 폴더'}',
+                        overflow: TextOverflow.ellipsis,
                       ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) onChanged(value);
-                  },
-                ),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value != null) onChanged(value);
+                },
               ),
-            IconButton(
-              tooltip: '관리 폴더 상세',
-              visualDensity: VisualDensity.compact,
-              onPressed: onOpenRoom,
-              icon: const Icon(Icons.tune_outlined, size: 18),
+            ),
+          if (hiddenRoomCount > 0) ...[
+            const SizedBox(width: 6),
+            Tooltip(
+              message: '앱 홈에서는 최대 5개 폴더만 표시합니다.',
+              child: Chip(
+                visualDensity: VisualDensity.compact,
+                label: Text('+$hiddenRoomCount'),
+              ),
             ),
           ],
-        ),
+        ],
       ),
     ),
   );
 }
 
-class _MouseHomeActor extends StatelessWidget {
-  const _MouseHomeActor({
-    required this.alignment,
-    required this.motion,
-    required this.menuOpen,
-    required this.onTap,
+class _MousePlayground extends StatelessWidget {
+  const _MousePlayground({
+    required this.mouseAlignment,
+    required this.mouseAsset,
+    required this.bubbleStage,
+    required this.selectedRoom,
+    required this.onMouseTap,
+    required this.onBubbleTap,
+    required this.onFiles,
+    required this.onChat,
   });
 
-  final Offset alignment;
-  final MouseKeeperMotion motion;
-  final bool menuOpen;
-  final VoidCallback onTap;
+  final Offset mouseAlignment;
+  final String mouseAsset;
+  final _SpeechBubbleStage bubbleStage;
+  final Map<String, dynamic>? selectedRoom;
+  final VoidCallback onMouseTap;
+  final VoidCallback onBubbleTap;
+  final VoidCallback? onFiles;
+  final VoidCallback? onChat;
 
   @override
-  Widget build(BuildContext context) => AnimatedAlign(
-    duration: const Duration(milliseconds: 620),
-    curve: Curves.easeOutBack,
-    alignment: Alignment(alignment.dx, alignment.dy),
-    child: GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTap: onTap,
-      child: AnimatedScale(
-        scale: menuOpen ? 1.08 : 1,
-        duration: const Duration(milliseconds: 180),
-        child: MouseKeeperMotionImage(motion: motion, width: 176, height: 176),
+  Widget build(BuildContext context) => Stack(
+    clipBehavior: Clip.none,
+    children: [
+      if (bubbleStage != _SpeechBubbleStage.hidden)
+        _MouseSpeechBubble(
+          alignment: Offset(mouseAlignment.dx, mouseAlignment.dy - 0.58),
+          stage: bubbleStage,
+          selectedRoom: selectedRoom,
+          onTap: onBubbleTap,
+          onFiles: onFiles,
+          onChat: onChat,
+        ),
+      AnimatedAlign(
+        duration: _mouseMoveDuration,
+        curve: Curves.easeOutBack,
+        alignment: Alignment(mouseAlignment.dx, mouseAlignment.dy),
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: onMouseTap,
+          child: Image.asset(
+            mouseAsset,
+            key: ValueKey(mouseAsset),
+            package: mousekeeperMascotPackage,
+            width: 188,
+            height: 188,
+            fit: BoxFit.contain,
+            filterQuality: FilterQuality.none,
+          ),
+        ),
       ),
-    ),
+    ],
   );
 }
 
 class _MouseSpeechBubble extends StatelessWidget {
   const _MouseSpeechBubble({
+    required this.alignment,
+    required this.stage,
     required this.selectedRoom,
+    required this.onTap,
     required this.onFiles,
     required this.onChat,
   });
 
+  final Offset alignment;
+  final _SpeechBubbleStage stage;
   final Map<String, dynamic>? selectedRoom;
+  final VoidCallback onTap;
   final VoidCallback? onFiles;
   final VoidCallback? onChat;
 
   @override
-  Widget build(BuildContext context) => Positioned(
-    left: 28,
-    right: 28,
-    top: 24,
-    child: Card(
-      elevation: 10,
-      color: Colors.white.withValues(alpha: 0.94),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              selectedRoom == null
-                  ? '관리 폴더를 먼저 연결해 주세요.'
-                  : '${selectedRoom!['name'] as String? ?? '관리 폴더'}에서 무엇을 볼까요?',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: onFiles,
-                    icon: const Icon(Icons.folder_open),
-                    label: const Text('파일 목록'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton.tonalIcon(
-                    onPressed: onChat,
-                    icon: const Icon(Icons.chat_bubble_outline),
-                    label: const Text('대화'),
-                  ),
-                ),
-              ],
+  Widget build(BuildContext context) => AnimatedAlign(
+    duration: _mouseMoveDuration,
+    curve: Curves.easeOutBack,
+    alignment: Alignment(alignment.dx.clamp(-0.72, 0.72), alignment.dy),
+    child: GestureDetector(
+      onTap: onTap,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFDFF4FF).withValues(alpha: 0.96),
+          borderRadius: BorderRadius.circular(28),
+          border: Border.all(color: const Color(0xFF8AC7E8)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 16,
+              offset: const Offset(0, 8),
             ),
           ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          child: stage == _SpeechBubbleStage.ellipsis
+              ? Text(
+                  '…',
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    color: const Color(0xFF436577),
+                    fontWeight: FontWeight.w900,
+                  ),
+                )
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: onFiles,
+                      icon: const Icon(Icons.folder_open),
+                      label: const Text('파일 목록'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton.tonalIcon(
+                      onPressed: onChat,
+                      icon: const Icon(Icons.chat_bubble_outline),
+                      label: const Text('대화'),
+                    ),
+                  ],
+                ),
         ),
       ),
     ),
   );
 }
 
-class _HomeActionGrid extends StatelessWidget {
-  const _HomeActionGrid({
-    required this.selectedRoom,
-    required this.onFiles,
-    required this.onChat,
-    required this.onHistory,
-  });
-
-  final Map<String, dynamic>? selectedRoom;
-  final VoidCallback? onFiles;
-  final VoidCallback? onChat;
-  final VoidCallback? onHistory;
-
+class _DummyBottomMenu extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => Wrap(
-    spacing: 10,
-    runSpacing: 10,
-    children: [
-      _HomeActionButton(
-        icon: Icons.folder_open,
-        label: '파일 목록',
-        onPressed: onFiles,
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.90),
+      borderRadius: BorderRadius.circular(28),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: 0.08),
+          blurRadius: 16,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: const [
+          Expanded(
+            child: _DummyBottomMenuButton(icon: Icons.extension, label: '퍼즐'),
+          ),
+          Expanded(
+            child: _DummyBottomMenuButton(icon: Icons.restaurant, label: '식사'),
+          ),
+          Expanded(
+            child: _DummyBottomMenuButton(
+              icon: Icons.sports_esports,
+              label: '게임',
+            ),
+          ),
+        ],
       ),
-      _HomeActionButton(
-        icon: Icons.chat_bubble_outline,
-        label: 'AI 대화',
-        onPressed: onChat,
-      ),
-      _HomeActionButton(
-        icon: Icons.history,
-        label: '히스토리',
-        onPressed: onHistory,
-      ),
-    ],
+    ),
   );
 }
 
-class _HomeActionButton extends StatelessWidget {
-  const _HomeActionButton({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
+class _DummyBottomMenuButton extends StatelessWidget {
+  const _DummyBottomMenuButton({required this.icon, required this.label});
 
   final IconData icon;
   final String label;
-  final VoidCallback? onPressed;
 
   @override
-  Widget build(BuildContext context) => SizedBox(
-    width: 112,
-    child: FilledButton.tonalIcon(
-      onPressed: onPressed,
-      icon: Icon(icon, size: 18),
-      label: Text(label),
+  Widget build(BuildContext context) => Opacity(
+    opacity: 0.62,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon),
+        const SizedBox(height: 4),
+        Text(label, style: Theme.of(context).textTheme.labelMedium),
+      ],
     ),
-  );
-}
-
-class _ConnectionSummary extends StatelessWidget {
-  const _ConnectionSummary({required this.devices, required this.rooms});
-
-  final List<Map<String, dynamic>> devices;
-  final List<Map<String, dynamic>> rooms;
-
-  @override
-  Widget build(BuildContext context) {
-    final onlineDevices = devices
-        .where(
-          (device) =>
-              (device['presence'] as String? ?? '').startsWith('ONLINE'),
-        )
-        .length;
-    final pending = rooms.fold<int>(
-      0,
-      (sum, room) => sum + (room['pendingProposalCount'] as int? ?? 0),
-    );
-    return Card(
-      color: Colors.white.withValues(alpha: 0.88),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Expanded(
-              child: _SummaryMetric(
-                label: '연결된 PC',
-                value: '$onlineDevices/${devices.length}',
-              ),
-            ),
-            Expanded(
-              child: _SummaryMetric(label: '관리 폴더', value: '${rooms.length}'),
-            ),
-            Expanded(
-              child: _SummaryMetric(label: '승인 대기', value: '$pending'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SummaryMetric extends StatelessWidget {
-  const _SummaryMetric({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) => Column(
-    children: [
-      Text(
-        value,
-        style: Theme.of(
-          context,
-        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
-      ),
-      const SizedBox(height: 2),
-      Text(label, style: Theme.of(context).textTheme.labelMedium),
-    ],
   );
 }
 

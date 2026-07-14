@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../home/home_page.dart';
@@ -299,11 +300,42 @@ class _MainNavigationHostState extends State<MainNavigationHost> {
   final _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
-  Widget build(BuildContext context) => Navigator(
-    key: _navigatorKey,
-    onGenerateRoute: (settings) => MaterialPageRoute<void>(
-      settings: settings,
-      builder: (_) => const HomePage(),
+  Widget build(BuildContext context) => PopScope<void>(
+    canPop: false,
+    onPopInvokedWithResult: (didPop, _) async {
+      if (didPop) return;
+      final navigator = _navigatorKey.currentState;
+      if (navigator != null && navigator.canPop()) {
+        navigator.pop();
+        return;
+      }
+      final shouldExit = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('앱을 종료하시겠습니까?'),
+          content: const Text('종료하면 현재 화면에서 MouseKeeper를 나갑니다.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('종료'),
+            ),
+          ],
+        ),
+      );
+      if (shouldExit == true) {
+        await SystemNavigator.pop();
+      }
+    },
+    child: Navigator(
+      key: _navigatorKey,
+      onGenerateRoute: (settings) => MaterialPageRoute<void>(
+        settings: settings,
+        builder: (_) => const HomePage(),
+      ),
     ),
   );
 }
