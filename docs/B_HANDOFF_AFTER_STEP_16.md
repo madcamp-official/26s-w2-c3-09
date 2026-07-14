@@ -46,9 +46,9 @@ Step 16-2/16-3 작업 중 A가 **B가 소유한 서버 파일 2개에 직접 커
 
 ---
 
-## 1. Step 16 남은 것 — 사소한 갭 2개 (급하지 않음)
+## 1. Step 16 남은 것 — 사소한 갭 1개와 완료된 최적화 1개 (급하지 않음)
 
-- **`policy.excludedPatterns`를 A가 로컬에서 안 씀**: 서버 정책의 제외 패턴을 로컬 후보 필터링에 반영하지 않고 일단 제출함. 서버가 `matchesExcludedPattern`으로 다시 걸러내므로(`smart-cache.service.ts`) **안전 문제는 아니고**, 걸러질 파일을 준비/제출하는 낭비만 있음. B가 할 일 없음(A 쪽 최적화 과제).
+- **`policy.excludedPatterns` 로컬 후보 필터링 완료(2026-07-14)**: Desktop `smart_cache_processor.rs`가 서버 정책의 제외 패턴을 파일 검증·batch 제출 전에 적용한다. 서버의 `matchesExcludedPattern`은 여전히 최종 방어선이며, Desktop은 같은 `**`, `*`, `?` glob 의미로 사전 낭비만 줄인다.
 - **pin/exclude는 A→서버 방향만 연결됨**: 로컬에서 pin/exclude한 파일은 candidate 제출 시 `manualPin`으로 서버에 반영되지만(완료), **서버/모바일에서 pin/exclude를 설정해도 A가 되읽어오는 경로가 아직 없음**. 아래 3.3에서 계속 다룸.
 
 ---
