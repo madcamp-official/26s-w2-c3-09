@@ -60,15 +60,24 @@ type PrecheckSnapshot = {
 
 const demoRootHint = "test-fixtures/file-trees/ui-demo의 임시 복사본을 만들어요";
 
-type FileSection = "rooms" | "organize" | "explore" | "history" | "settings";
+type FileSection = "rooms" | "organize" | "history" | "settings";
 
 export function FileEnginePanel({
   embedded = false,
-  activeSection = "rooms"
-}: { embedded?: boolean; activeSection?: FileSection } = {}) {
+  activeSection = "rooms",
+  selectedRootId: controlledSelectedRootId,
+  onSelectedRootIdChange,
+  hideRootPicker = false
+}: {
+  embedded?: boolean;
+  activeSection?: FileSection;
+  selectedRootId?: string;
+  onSelectedRootIdChange?: (rootId: string) => void;
+  hideRootPicker?: boolean;
+} = {}) {
   const [pathInput, setPathInput] = useState("");
   const [roots, setRoots] = useState<ManagedRoot[]>([]);
-  const [selectedRootId, setSelectedRootId] = useState("");
+  const [uncontrolledSelectedRootId, setUncontrolledSelectedRootId] = useState("");
   const [proposal, setProposal] = useState<ProposalReport | null>(null);
   const [decisions, setDecisions] = useState<DecisionState>({});
   const [rejectionReasons, setRejectionReasons] = useState<RejectionReasons>({});
@@ -92,6 +101,7 @@ export function FileEnginePanel({
   const [precheckSnapshot, setPrecheckSnapshot] = useState<PrecheckSnapshot | null>(null);
   const [cleanlinessSnapshot, setCleanlinessSnapshot] = useState<CleanlinessSnapshot | null>(null);
 
+  const selectedRootId = controlledSelectedRootId ?? uncontrolledSelectedRootId;
   const selectedRootIdRef = useRef(selectedRootId);
   const proposalRef = useRef(proposal);
   const browsePathRef = useRef(browsePath);
@@ -275,7 +285,9 @@ export function FileEnginePanel({
       const storedRoots = await listManagedRoots();
       setRoots(storedRoots);
       setRoomSyncStates(bindingStates(storedRoots));
-      setSelectedRootId((current) => current || storedRoots[0]?.root_id || "");
+      if (!selectedRootIdRef.current && storedRoots[0]?.root_id) {
+        setPanelSelectedRootId(storedRoots[0].root_id);
+      }
       const results = await Promise.allSettled(
         storedRoots
           .filter((root) => root.room_binding_status === "unbound")
@@ -604,6 +616,12 @@ export function FileEnginePanel({
     }
   }
 
+  async function analyzeAndProposeForSelectedRoot() {
+    if (!selectedRootId) return;
+    await analyzeSelectedRoot();
+    await proposeForSelectedRoot();
+  }
+
   async function calculateSelectedCleanliness() {
     if (!selectedRootId) return;
 
@@ -756,6 +774,54 @@ export function FileEnginePanel({
       setStatus(
         `실행 ${report.executed_count} · 건너뜀 ${report.skipped_count} · 거절 ${report.rejected_count}` +
           (autoApprovedCount > 0 ? ` (자동 승인 ${autoApprovedCount})` : "")
+      );
+      await refreshHistory(selectedRootId);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStatus("실행 실패");
+    }
+  }
+
+  async function precheckAndExecuteSelectedRoot() {
+    if (!selectedRootId || !proposal) return;
+    const decisionsToApply = validatedDecisionEntries();
+    if (!decisionsToApply) return;
+
+    setError(null);
+    try {
+      setStatus("사전 점검 중");
+      const precheck = await precheckFileChanges(selectedRootId, proposal, decisionsToApply);
+      if (proposalDecisionKey) {
+        setPrecheckSnapshot({ key: proposalDecisionKey, report: precheck });
+      }
+      const ready = precheck.checks.length > 0 && precheck.checks.every((check) => check.status === "ready");
+      if (!ready) {
+        setResultLines(formatPrecheckLines(precheck));
+        setStatus("사전 점검에서 막힌 작업이 있습니다");
+        return;
+      }
+      const confirmed = window.confirm(`${selectedRoot?.display_name || "선택한 방"}의 승인된 작업 ${precheck.checks.length}개를 실행할까요?`);
+      if (!confirmed) {
+        setStatus("실행 취소됨");
+        return;
+      }
+
+      setStatus("실행 중");
+      const autoApprovedCount = decisionsToApply.filter(
+        (decision) =>
+          decision.decision === "approved" && autoApprovedProposalIds.has(decision.proposal_id)
+      ).length;
+      const report = await executeFileChanges(selectedRootId, proposal, decisionsToApply);
+      setResultLines(formatExecuteLines(report));
+      proposalRef.current = null;
+      setProposal(null);
+      setPrecheckSnapshot(null);
+      setAutoApprovedProposalIds(new Set());
+      setDecisions({});
+      setRejectionReasons({});
+      setStatus(
+        `실행 ${report.executed_count} · 건너뜀 ${report.skipped_count} · 거절 ${report.rejected_count}` +
+          (autoApprovedCount > 0 ? ` · 자동 승인 ${autoApprovedCount}` : "")
       );
       await refreshHistory(selectedRootId);
     } catch (caught) {
@@ -921,7 +987,7 @@ export function FileEnginePanel({
     // Event callbacks read the ref synchronously; update it before React commits state so an event
     // for the previously selected root cannot install a cross-root proposal during this transition.
     selectedRootIdRef.current = rootId;
-    setSelectedRootId(rootId);
+    setPanelSelectedRootId(rootId);
     proposalRef.current = null;
     setProposal(null);
     setPrecheckSnapshot(null);
@@ -933,6 +999,12 @@ export function FileEnginePanel({
     setSearchQuery("");
     setSearchResults(null);
     setCleanlinessSnapshot(null);
+  }
+
+  function setPanelSelectedRootId(rootId: string) {
+    selectedRootIdRef.current = rootId;
+    setUncontrolledSelectedRootId(rootId);
+    onSelectedRootIdChange?.(rootId);
   }
 
   function setDecision(item: Proposal, decision: DecisionState[string]) {
@@ -980,7 +1052,7 @@ export function FileEnginePanel({
   // crammed. Standalone mode keeps every panel visible.
   const showRooms = !embedded || activeSection === "rooms";
   const showOrganize = !embedded || activeSection === "organize";
-  const showExplore = !embedded || activeSection === "explore";
+  const showExplore = false;
   const showHistory = !embedded || activeSection === "history";
   const showSettings = !embedded || activeSection === "settings";
   const sectionTitle = {
@@ -997,7 +1069,7 @@ export function FileEnginePanel({
         {embedded ? (
           <div className="fe-topbar-lead">
             <h1>{sectionTitle}</h1>
-            <div className="fe-folder-picker">
+            <div className="fe-folder-picker" hidden={hideRootPicker || activeSection !== "rooms"}>
               <label htmlFor="fe-root-select">관리 폴더</label>
               <select
                 id="fe-root-select"
@@ -1090,6 +1162,16 @@ export function FileEnginePanel({
                 선택한 방의 로컬 사용 권한, 감시, 모바일 방 연결 상태를 설정합니다.
               </p>
             </div>
+            <label className="permission-room-picker">
+              <span>현재 방</span>
+              <select value={selectedRootId} onChange={(event) => selectRoot(event.target.value)}>
+                {roots.map((root) => (
+                  <option key={root.root_id} value={root.root_id}>
+                    {root.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <span className="permission-state">{rootStatusLabel(selectedRoot.last_seen_status)}</span>
           </div>
           <div className="permission-grid">
@@ -1224,7 +1306,35 @@ export function FileEnginePanel({
               {selectedRoot ? <p className="path-text">{selectedRoot.root}</p> : null}
             </>
           ) : null}
-          <div className="button-grid task-button-grid">
+          <div className="button-grid task-button-grid organize-primary-actions">
+            <button type="button" onClick={() => void analyzeAndProposeForSelectedRoot()} disabled={!selectedRootId}>
+              정리 제안 만들기
+            </button>
+            <button
+              type="button"
+              onClick={() => void autoApproveSelectedProposal()}
+              disabled={!selectedRootId || !proposal || !autoApprovalPolicy?.enabled}
+            >
+              자동 승인 적용
+            </button>
+            <button
+              type="button"
+              onClick={() => void precheckAndExecuteSelectedRoot()}
+              disabled={!selectedRootId || !proposal || approvedCount === 0 || !!journalCorruption}
+            >
+              실행
+            </button>
+          </div>
+          <div className="organize-flow-card">
+            <strong>{selectedRoot?.display_name || "방을 선택하세요"}</strong>
+            <p>{selectedRoot?.root || "방 관리에서 먼저 관리 폴더를 선택하면 이 화면이 그 방으로 고정됩니다."}</p>
+            <ol>
+              <li className={proposal ? "is-done" : ""}>정리 제안 생성</li>
+              <li className={approvedCount > 0 ? "is-done" : ""}>자동 승인 또는 직접 선택</li>
+              <li className={activePrecheckReady ? "is-done" : ""}>사전 점검 후 실행</li>
+            </ol>
+          </div>
+          <div className="button-grid task-button-grid legacy-task-actions">
             <button type="button" onClick={analyzeSelectedRoot} disabled={!selectedRootId}>
               파일 분석
             </button>
@@ -1522,7 +1632,10 @@ export function FileEnginePanel({
         <div className="history-list">
           {history.map((operation) => (
             <article key={operation.operation_id} className="history-row">
-              <strong>{operation.latest_status}</strong>
+              <strong>{operationActionText(operation)}</strong>
+              <span className={`history-status is-${operation.latest_status}`}>
+                {operationStatusLabel(operation.latest_status)}
+              </span>
               <span>{`${operation.from} -> ${operation.to}`}</span>
               <small>{new Date(operation.created_unix_ms).toLocaleString()}</small>
               {!operation.can_undo && operation.undo_blocked_reason ? (
@@ -1676,6 +1789,21 @@ function roomSyncLabel(state: RoomSyncState | undefined) {
     default:
       return "대기 중";
   }
+}
+
+function operationActionText(operation: OperationHistoryEntry) {
+  if (operation.action === "trash") return "파일을 휴지통으로 이동";
+  if (operation.action === "move") return "파일 위치 변경";
+  return "파일 작업";
+}
+
+function operationStatusLabel(status: OperationHistoryEntry["latest_status"]) {
+  return {
+    planned: "실행 예정",
+    executed: "실행됨",
+    undo_planned: "되돌리기 예정",
+    undone: "되돌림"
+  }[status] ?? status;
 }
 
 function proposalStatusLabel(status: Proposal["status"]) {

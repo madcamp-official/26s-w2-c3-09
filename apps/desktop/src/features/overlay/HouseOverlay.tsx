@@ -14,7 +14,7 @@ type DragStart = {
 };
 
 type HousePanelSection = "rooms" | "organize" | "explore" | "history" | "connection" | "settings";
-type FileSection = Exclude<HousePanelSection, "connection">;
+type FileSection = Exclude<HousePanelSection, "connection" | "explore">;
 
 const HOUSE_PANEL_ITEMS: ReadonlyArray<{
   id: HousePanelSection;
@@ -33,6 +33,7 @@ export function HouseOverlay() {
   const [locked, setLocked] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<HousePanelSection | null>(null);
+  const [selectedRootId, setSelectedRootId] = useState("");
   const dragStart = useRef<DragStart | null>(null);
   const draggingStarted = useRef(false);
   const clickTimer = useRef<number | null>(null);
@@ -135,7 +136,7 @@ export function HouseOverlay() {
 
       {menuOpen ? (
         <nav className="house-quick-menu" aria-label="MouseKeeper house menu" onClick={stopPanelPointer}>
-          {HOUSE_PANEL_ITEMS.map((item) => (
+          {HOUSE_PANEL_ITEMS.filter((item) => item.id !== "explore").map((item) => (
             <button
               key={item.id}
               type="button"
@@ -171,14 +172,20 @@ export function HouseOverlay() {
               =
             </button>
           </header>
-          <div className="house-manager-content">{renderManagerSection(activeSection)}</div>
+          <div className="house-manager-content">
+            {renderManagerSection(activeSection, selectedRootId, setSelectedRootId)}
+          </div>
         </section>
       ) : null}
     </div>
   );
 }
 
-function renderManagerSection(section: HousePanelSection) {
+function renderManagerSection(
+  section: HousePanelSection,
+  selectedRootId: string,
+  setSelectedRootId: (rootId: string) => void
+) {
   if (section === "connection") {
     return <AgentPanel showAutostart={false} />;
   }
@@ -195,10 +202,24 @@ function renderManagerSection(section: HousePanelSection) {
           </div>
           <AutostartSetting />
         </section>
-        <FileEnginePanel embedded activeSection="settings" />
+        <FileEnginePanel
+          embedded
+          activeSection="settings"
+          selectedRootId={selectedRootId}
+          onSelectedRootIdChange={setSelectedRootId}
+          hideRootPicker
+        />
       </>
     );
   }
 
-  return <FileEnginePanel embedded activeSection={section as FileSection} />;
+  return (
+    <FileEnginePanel
+      embedded
+      activeSection={section as FileSection}
+      selectedRootId={selectedRootId}
+      onSelectedRootIdChange={setSelectedRootId}
+      hideRootPicker={section !== "rooms"}
+    />
+  );
 }

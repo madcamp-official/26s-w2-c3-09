@@ -3310,3 +3310,144 @@ html.overlay-root body.overlay-body .character-chat button {
   color: #2f2500;
   box-shadow: none !important;
 }
+
+.legacy-task-actions {
+  display: none !important;
+}
+
+.organize-primary-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.organize-flow-card {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  border: 2px dotted var(--mk-pixel-line);
+  background:
+    linear-gradient(90deg, rgba(43, 54, 64, 0.035) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(43, 54, 64, 0.035) 1px, transparent 1px),
+    #f7fbf8;
+  background-size: 6px 6px;
+  padding: 14px;
+  box-shadow: 3px 3px 0 rgba(32, 40, 48, 0.18);
+}
+
+.organize-flow-card strong {
+  font-size: 16px;
+}
+
+.organize-flow-card p {
+  margin: 0;
+  color: #63717d;
+  overflow-wrap: anywhere;
+}
+
+.organize-flow-card ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.organize-flow-card li {
+  border: 2px dotted rgba(43, 54, 64, 0.45);
+  background: #fffdf8;
+  padding: 8px 10px;
+  font-weight: 800;
+}
+
+.organize-flow-card li.is-done {
+  color: #246f42;
+  background: #e4f6dc;
+}
+
+.permission-room-picker {
+  display: grid;
+  gap: 4px;
+  min-width: 260px;
+}
+
+.permission-room-picker span {
+  color: #63717d;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.permission-room-picker select {
+  width: 100%;
+}
+
+.permission-panel .section-header {
+  align-items: end;
+}
+
+.room-card-list {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+.room-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 72px;
+  text-align: left;
+}
+
+.room-card strong,
+.room-card small {
+  grid-column: 1;
+}
+
+.room-card span {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.history-status {
+  justify-self: start;
+  width: fit-content;
+  border: 2px dotted currentColor;
+  background: #f4fbf7;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.history-status.is-executed {
+  color: #246f42;
+  background: #e4f6dc;
+}
+
+.history-status.is-undone {
+  color: #2c72bc;
+  background: #e8f4ff;
+}
+
+.history-status.is-planned,
+.history-status.is-undo_planned {
+  color: #9e1f1a;
+  background: #fff1ee;
+}
+
+.file-engine-panel .panel,
+.file-engine-topbar,
+.room-card,
+.proposal-row,
+.history-row {
+  image-rendering: pixelated;
+  border-style: dotted !important;
+  background-size: 6px 6px !important;
+}
+
+.proposal-row {
+  grid-template-columns: minmax(0, 1fr) 104px;
+}
+
+.task-panel .mode-note {
+  display: none;
+}
+
+html.overlay-root .house-manager-content .organize-primary-actions {
+  grid-template-columns: minmax(0, 1fr);
+}

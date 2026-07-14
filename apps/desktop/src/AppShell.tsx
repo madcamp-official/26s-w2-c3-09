@@ -13,7 +13,7 @@ const setupMascotUrl = new URL(
 ).href;
 
 type DashboardSection = "rooms" | "organize" | "explore" | "history" | "connection" | "settings";
-type FileSection = Exclude<DashboardSection, "connection">;
+type FileSection = Exclude<DashboardSection, "connection" | "explore">;
 
 const DASHBOARD_SECTIONS: ReadonlyArray<{
   id: DashboardSection;
@@ -33,6 +33,7 @@ export function AppShell() {
   const [rootCount, setRootCount] = useState<number | null>(null);
   const [connectionState, setConnectionState] = useState<string | null>(null);
   const [section, setSection] = useState<DashboardSection>("rooms");
+  const [selectedRootId, setSelectedRootId] = useState("");
 
   const reloadRootCount = useCallback(async () => {
     try {
@@ -158,7 +159,7 @@ export function AppShell() {
               </div>
             </div>
             <nav className="dashboard-nav">
-              {DASHBOARD_SECTIONS.map((item) => (
+              {DASHBOARD_SECTIONS.filter((item) => item.id !== "explore").map((item) => (
                 <button
                   key={item.id}
                   type="button"
@@ -195,14 +196,26 @@ export function AppShell() {
                 </div>
                 <AutostartSetting />
               </section>
-              <FileEnginePanel embedded activeSection="settings" />
+              <FileEnginePanel
+                embedded
+                activeSection="settings"
+                selectedRootId={selectedRootId}
+                onSelectedRootIdChange={setSelectedRootId}
+                hideRootPicker
+              />
             </div>
             <div
               className="dashboard-view"
               hidden={section === "connection" || section === "settings"}
               aria-label="파일 관리 작업"
             >
-              <FileEnginePanel embedded activeSection={section as FileSection} />
+              <FileEnginePanel
+                embedded
+                activeSection={section as FileSection}
+                selectedRootId={selectedRootId}
+                onSelectedRootIdChange={setSelectedRootId}
+                hideRootPicker={section !== "rooms"}
+              />
             </div>
           </div>
         </div>
