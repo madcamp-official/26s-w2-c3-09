@@ -146,7 +146,7 @@
 ### 3.3 테스트·문서 공백
 
 - [~] 일반 server test에서는 외부 DB/object storage가 필요한 7개 suite가 환경 변수 없이 skip된다. 운영 의존 E2E는 별도 opt-in CI job으로 분리해야 한다.
-- [ ] `docs/e2e-scenarios.md`, `docs/threat-model.md`, `docs/adr/0001-local-first.md`가 계획 목록과 달리 없다.
+- [x] `docs/e2e-scenarios.md`, `docs/threat-model.md`, `docs/adr/0001-local-first.md`를 추가해 반복 E2E, 전체 threat model, local-first/worker/realtime 운영 결정을 기록했다.
 - [x] 독립 `presence`, `smart-cache`, `rule-dsl` JSON schema를 `packages/contracts/events/`에 추가했고 OpenAPI component ref와 계약 테스트로 산출물 목록을 맞췄다.
 - [ ] 100,000 entry, 3 managed root 성능 회귀와 watcher overflow 장시간 soak 결과가 없다.
 

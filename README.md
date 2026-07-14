@@ -403,6 +403,9 @@ A-side local file engine documentation:
 
 - CLI usage and JSON contracts: [`docs/FILE_ENGINE_CLI.md`](docs/FILE_ENGINE_CLI.md)
 - Shared server/Desktop contracts: [`docs/CONTRACTS.md`](docs/CONTRACTS.md)
+- Release E2E checklist: [`docs/e2e-scenarios.md`](docs/e2e-scenarios.md)
+- Service threat model: [`docs/threat-model.md`](docs/threat-model.md)
+- Local-first ADR: [`docs/adr/0001-local-first.md`](docs/adr/0001-local-first.md)
 - Desktop/Tauri integration plan: [`apps/desktop/src-tauri/INTEGRATION.md`](apps/desktop/src-tauri/INTEGRATION.md)
 
 Current safe flow:
