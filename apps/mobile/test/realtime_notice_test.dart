@@ -89,17 +89,35 @@ void main() {
         'status': 'SUCCEEDED',
       },
     });
-    final snapshot = realtimeHomeUpdateFor('device.paired', {
-      'eventId': 'snapshot-event',
+    final paired = realtimeHomeUpdateFor('device.paired', {
+      'eventId': 'paired-event',
       'eventType': 'device.paired',
-      'payload': {'deviceId': 'device-a'},
+      'payload': {
+        'deviceId': 'device-a',
+        'status': 'ACTIVE',
+        'device': {
+          'id': 'device-a',
+          'platform': 'WINDOWS',
+          'deviceName': 'Desktop',
+          'status': 'ACTIVE',
+          'lastSeenAt': null,
+          'createdAt': '2026-07-13T01:02:03.000Z',
+        },
+      },
+    });
+    final legacyPaired = realtimeHomeUpdateFor('device.paired', {
+      'eventId': 'legacy-paired-event',
+      'eventType': 'device.paired',
+      'payload': {'deviceId': 'device-b', 'status': 'ACTIVE'},
     });
 
     expect(execution?.kind, RealtimeHomeUpdateKind.executionStatus);
     expect(execution?.roomId, 'room-a');
     expect(execution?.executionId, 'execution-a');
     expect(execution?.executionStatus, 'SUCCEEDED');
-    expect(snapshot?.kind, RealtimeHomeUpdateKind.refreshSummary);
+    expect(paired?.kind, RealtimeHomeUpdateKind.devicePaired);
+    expect(paired?.device?['deviceName'], 'Desktop');
+    expect(legacyPaired?.kind, RealtimeHomeUpdateKind.refreshSummary);
   });
 
   test('file transfer updates become transfer-scoped realtime patches', () {
@@ -242,6 +260,19 @@ void main() {
     final deviceRemoved = realtimeHomeUpdateFor('device.revoked', {
       'payload': {'deviceId': 'device-a'},
     });
+    final devicePaired = realtimeHomeUpdateFor('device.paired', {
+      'payload': {
+        'deviceId': 'device-b',
+        'device': {
+          'id': 'device-b',
+          'platform': 'WINDOWS',
+          'deviceName': 'Second desktop',
+          'status': 'ACTIVE',
+          'lastSeenAt': null,
+          'createdAt': '2026-07-13T01:02:03.000Z',
+        },
+      },
+    });
     final roomRemoved = realtimeHomeUpdateFor('room.removed', {
       'payload': {'roomId': 'room-a'},
     });
@@ -262,6 +293,7 @@ void main() {
       ('room.snapshot.updated', snapshot),
       ('command.updated', command),
       ('execution.updated', execution),
+      ('device.paired', devicePaired),
       ('device.revoked', deviceRemoved),
       ('room.removed', roomRemoved),
     ]) {

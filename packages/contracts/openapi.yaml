@@ -2120,6 +2120,7 @@ components:
       properties:
         deviceId: { type: string, format: uuid }
         status: { type: string, const: ACTIVE }
+        device: { $ref: "#/components/schemas/ConnectionSummaryDevice" }
     DeviceRevokedEventPayload:
       type: object
       additionalProperties: false

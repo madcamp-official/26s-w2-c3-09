@@ -29,6 +29,31 @@ void main() {
     expect(event?.eventType, 'room.removed');
   });
 
+  test('paired device envelope can carry the active device projection', () {
+    final event = connectionLifecycleEventFor('device.paired', {
+      'eventId': _eventId,
+      'eventType': 'device.paired',
+      'aggregateId': _deviceA,
+      'sequence': 14,
+      'payload': {
+        'deviceId': _deviceA,
+        'status': 'ACTIVE',
+        'device': {
+          'id': _deviceA,
+          'platform': 'WINDOWS',
+          'deviceName': 'Desktop',
+          'status': 'ACTIVE',
+          'lastSeenAt': null,
+          'createdAt': '2026-07-13T01:02:03.000Z',
+        },
+      },
+    });
+
+    expect(event?.deviceId, _deviceA);
+    expect(event?.device?['deviceName'], 'Desktop');
+    expect(event?.sequence, 14);
+  });
+
   test('unrelated realtime events do not enter the connection reducer', () {
     expect(
       connectionLifecycleEventFor('execution.updated', {
@@ -45,6 +70,22 @@ void main() {
         eventType: 'device.paired',
         aggregateId: _deviceA,
         payload: {'deviceId': _deviceA, 'status': 'REVOKED'},
+      ),
+      _envelope(
+        eventType: 'device.paired',
+        aggregateId: _deviceA,
+        payload: {
+          'deviceId': _deviceA,
+          'status': 'ACTIVE',
+          'device': {
+            'id': _deviceB,
+            'platform': 'WINDOWS',
+            'deviceName': 'Wrong desktop',
+            'status': 'ACTIVE',
+            'lastSeenAt': null,
+            'createdAt': '2026-07-13T01:02:03.000Z',
+          },
+        },
       ),
       _envelope(
         eventType: 'device.revoked',

@@ -645,8 +645,18 @@ export const devicePairedEventPayloadSchema = z
   .object({
     deviceId: uuidSchema,
     status: z.literal("ACTIVE"),
+    device: connectionSummaryDeviceSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.device && value.device.id !== value.deviceId) {
+      context.addIssue({
+        code: "custom",
+        path: ["device", "id"],
+        message: "device must describe the paired deviceId",
+      });
+    }
+  });
 
 export const deviceRevokedEventPayloadSchema = z
   .object({

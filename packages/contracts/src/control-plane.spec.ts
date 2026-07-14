@@ -451,10 +451,39 @@ describe("v1.4 connection and browse contracts", () => {
   it("requires aggregate ids and final lifecycle states", () => {
     const deviceId = "33333333-3333-4333-8333-333333333333";
     const roomId = "22222222-2222-4222-8222-222222222222";
+    const timestamp = "2026-07-13T01:02:03.000Z";
 
     expect(
       devicePairedEventPayloadSchema.parse({ deviceId, status: "ACTIVE" }),
     ).toEqual({ deviceId, status: "ACTIVE" });
+    expect(
+      devicePairedEventPayloadSchema.parse({
+        deviceId,
+        status: "ACTIVE",
+        device: {
+          id: deviceId,
+          platform: "WINDOWS",
+          deviceName: "Desktop",
+          status: "ACTIVE",
+          lastSeenAt: null,
+          createdAt: timestamp,
+        },
+      }).device?.deviceName,
+    ).toBe("Desktop");
+    expect(
+      devicePairedEventPayloadSchema.safeParse({
+        deviceId,
+        status: "ACTIVE",
+        device: {
+          id: roomId,
+          platform: "WINDOWS",
+          deviceName: "Wrong device",
+          status: "ACTIVE",
+          lastSeenAt: null,
+          createdAt: timestamp,
+        },
+      }).success,
+    ).toBe(false);
     expect(
       deviceRevokedEventPayloadSchema.parse({ deviceId, status: "REVOKED" }),
     ).toEqual({ deviceId, status: "REVOKED" });

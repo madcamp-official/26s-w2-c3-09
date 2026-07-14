@@ -37,6 +37,7 @@ final realtimeCharacterKindProvider =
 
 enum RealtimeHomeUpdateKind {
   presence,
+  devicePaired,
   deviceRemoved,
   roomRemoved,
   proposalCreated,
@@ -58,6 +59,7 @@ class RealtimeHomeUpdate {
     this.snapshotId,
     this.commandId,
     this.executionId,
+    this.device,
     this.decisionType,
     this.proposalStatus,
     this.proposalSummary,
@@ -78,6 +80,7 @@ class RealtimeHomeUpdate {
   final String? snapshotId;
   final String? commandId;
   final String? executionId;
+  final Map<String, dynamic>? device;
   final String? decisionType;
   final String? proposalStatus;
   final Map<String, dynamic>? proposalSummary;
@@ -224,6 +227,24 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
       eventType: event,
       deviceId: deviceId,
       presence: presence,
+    );
+  }
+  if (event == 'device.paired' && deviceId != null) {
+    final device = payload['device'];
+    if (device is Map) {
+      final devicePatch = Map<String, dynamic>.from(device);
+      if (devicePatch['id'] == deviceId && devicePatch['status'] == 'ACTIVE') {
+        return RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.devicePaired,
+          eventType: event,
+          deviceId: deviceId,
+          device: devicePatch,
+        );
+      }
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
     );
   }
   if (event == 'device.revoked' && deviceId != null) {
@@ -394,6 +415,7 @@ bool realtimeUpdateSuppressesGenericRevision(
   if (event == 'presence.updated') return true;
   return switch (update?.kind) {
     RealtimeHomeUpdateKind.presence ||
+    RealtimeHomeUpdateKind.devicePaired ||
     RealtimeHomeUpdateKind.deviceRemoved ||
     RealtimeHomeUpdateKind.roomRemoved ||
     RealtimeHomeUpdateKind.proposalCreated ||
@@ -501,7 +523,7 @@ const _fileBrowseTerminalEvents = <String>{
   'file.browse.failed',
 };
 
-const _summaryRefreshEvents = <String>{'device.paired'};
+const _summaryRefreshEvents = <String>{};
 
 const _homeIrrelevantEvents = <String>{
   'character.event',

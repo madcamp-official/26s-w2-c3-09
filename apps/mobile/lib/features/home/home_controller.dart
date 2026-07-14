@@ -130,6 +130,40 @@ HomeData? reduceHomeDataForRealtimeUpdate({
   switch (update.kind) {
     case RealtimeHomeUpdateKind.refreshSummary:
       return null;
+    case RealtimeHomeUpdateKind.devicePaired:
+      final deviceId = update.deviceId;
+      final device = update.device;
+      if (deviceId == null ||
+          device == null ||
+          !activeDeviceIds.contains(deviceId)) {
+        return current;
+      }
+      final nextDevice = {
+        ...device,
+        'presence': device['presence'] ?? 'OFFLINE',
+      };
+      var changed = false;
+      var replaced = false;
+      final devices = current.devices
+          .map((existing) {
+            if (existing['id'] != deviceId) return existing;
+            replaced = true;
+            final merged = {
+              ...existing,
+              ...nextDevice,
+              'presence': existing['presence'] ?? nextDevice['presence'],
+            };
+            changed = changed || !_mapShallowEquals(existing, merged);
+            return merged;
+          })
+          .toList(growable: true);
+      if (!replaced) {
+        devices.add(nextDevice);
+        changed = true;
+      }
+      return changed
+          ? current.copyWith(devices: devices.toList(growable: false))
+          : current;
     case RealtimeHomeUpdateKind.presence:
       final deviceId = update.deviceId;
       final presence = update.presence;
@@ -241,6 +275,14 @@ HomeData? reduceHomeDataForRealtimeUpdate({
           .toList(growable: false);
       return changed ? current.copyWith(rooms: rooms) : current;
   }
+}
+
+bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
+  if (left.length != right.length) return false;
+  for (final entry in left.entries) {
+    if (right[entry.key] != entry.value) return false;
+  }
+  return true;
 }
 
 bool _snapshotIsNewer({

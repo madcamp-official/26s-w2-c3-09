@@ -69,6 +69,53 @@ void main() {
     expect(patched.rooms, same(current.rooms));
   });
 
+  test('paired device event adds one device without summary invalidation', () {
+    final current = _homeData();
+    final patched = reduceHomeDataForRealtimeUpdate(
+      current: current,
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.devicePaired,
+        eventType: 'device.paired',
+        deviceId: 'device-c',
+        device: {
+          'id': 'device-c',
+          'platform': 'WINDOWS',
+          'deviceName': 'New desktop',
+          'status': 'ACTIVE',
+          'lastSeenAt': null,
+          'createdAt': '2026-07-13T01:02:03.000Z',
+        },
+      ),
+      activeDeviceIds: const {'device-a', 'device-b', 'device-c'},
+      activeRoomIds: const {'room-a'},
+    )!;
+
+    expect(patched.devices.map((item) => item['id']), [
+      'device-a',
+      'device-b',
+      'device-c',
+    ]);
+    expect(patched.devices.last['presence'], 'OFFLINE');
+    expect(patched.rooms, same(current.rooms));
+  });
+
+  test('paired device event outside the active gate is ignored', () {
+    final current = _homeData();
+    final patched = reduceHomeDataForRealtimeUpdate(
+      current: current,
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.devicePaired,
+        eventType: 'device.paired',
+        deviceId: 'device-c',
+        device: {'id': 'device-c', 'status': 'ACTIVE'},
+      ),
+      activeDeviceIds: const {'device-a', 'device-b'},
+      activeRoomIds: const {'room-a'},
+    );
+
+    expect(patched, same(current));
+  });
+
   test(
     'targeted lifecycle and execution updates avoid summary invalidation',
     () {

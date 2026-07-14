@@ -518,8 +518,40 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
       return;
     }
     if (event.eventType == 'device.paired') {
-      await reconcile();
+      final device = event.device;
+      if (device != null) {
+        await _upsertDevice(device);
+      } else {
+        await reconcile();
+      }
     }
+  }
+
+  Future<void> _upsertDevice(Map<String, dynamic> device) async {
+    if (!isActiveConnectionItem(device)) return;
+    final deviceId = device['id'];
+    if (deviceId is! String) return;
+    _stateRevision++;
+    await _serializeMutation(() async {
+      final current =
+          state.asData?.value ??
+          ConnectionGateData(devices: const [], rooms: const []);
+      final sanitizedDevice = Map<String, dynamic>.from(device);
+      final devices = <Map<String, dynamic>>[
+        for (final item in current.devices)
+          if (item['id'] != deviceId) item,
+        sanitizedDevice,
+      ];
+      final nextOperations = Map<String, DisconnectOperation>.from(
+        current.operations,
+      )..remove(_operationKey(DisconnectKind.device, deviceId));
+      final next = current.copyWith(
+        devices: devices,
+        operations: nextOperations,
+      );
+      await _replaceAuthoritativeCache(next);
+      state = AsyncData(next);
+    });
   }
 
   Future<void> _removeDevice(String deviceId) async {
