@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Mobile Home's 5-second connection safety loop now has no reload callback at all; it can reconcile only the lightweight device/room gate, while Home summary refreshes remain explicit or WebSocket fallback-driven.
 - Mobile file browsing now keeps the visible directory page, next cursor, and desktop generation in `FileDirectoryState`, so the next `fileDirectoryProvider(rootId, relativePath)` split has one reducer-backed state object instead of scattered page fields.
 - Mobile chat read paths now expose `chatSessionListProvider(roomId)`, `chatMessagesProvider(sessionId)`, and cursor-scoped page reads, with ChatPage loading through those providers in production while preserving test gateway injection.
 - Mobile chat conversation state is now centralized in `ChatConversationState`, keeping sessions, selected session, message page, pagination cursor, and `hasMoreMessages` together so the next Riverpod provider split can avoid scattered `setState` reload paths.

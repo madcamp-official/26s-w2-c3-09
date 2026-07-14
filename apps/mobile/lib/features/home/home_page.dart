@@ -36,12 +36,10 @@ const homeAuthoritativeReconcileInterval = Duration(seconds: 5);
 class HomeAuthoritativeReconcileLoop {
   HomeAuthoritativeReconcileLoop({
     required this.reconcile,
-    required this.onChanged,
     this.interval = homeAuthoritativeReconcileInterval,
   });
 
   final Future<bool> Function() reconcile;
-  final void Function() onChanged;
   final Duration interval;
 
   Timer? _timer;
@@ -57,8 +55,7 @@ class HomeAuthoritativeReconcileLoop {
     if (_disposed || _inFlight) return;
     _inFlight = true;
     try {
-      final changed = await reconcile();
-      if (changed && !_disposed) onChanged();
+      await reconcile();
     } catch (_) {
       // This is a background fail-closed repair path. The next five-second
       // tick retries without replacing the last verified connection state.
@@ -91,10 +88,6 @@ class _HomePageState extends ConsumerState<HomePage> {
     _reconcileLoop = HomeAuthoritativeReconcileLoop(
       reconcile: () =>
           ref.read(connectionGateControllerProvider.notifier).reconcile(),
-      // The five-second loop repairs only device/room liveness. Home summary
-      // data is refreshed by explicit user action or targeted realtime events,
-      // so a safety check cannot accidentally become a full home poll.
-      onChanged: () {},
     )..start();
   }
 
