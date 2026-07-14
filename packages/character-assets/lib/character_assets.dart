@@ -17,6 +17,7 @@ const mousekeeperSleepingAsset = 'mouse_sleeping.png';
 const mousekeeperStandAsset = 'mouse_stand.png';
 const mousekeeperWalkAsset = 'mouse_walk.png';
 const mousekeeperWorkingAsset = 'mouse_working.png';
+const mousekeeperPairingIconAsset = 'mouse_icon.png';
 
 // Stable default for screens that do not have a runtime state yet.
 const mousekeeperMascotAsset = mousekeeperStandAsset;

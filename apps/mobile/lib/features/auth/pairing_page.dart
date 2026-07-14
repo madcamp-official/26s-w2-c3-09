@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../../core/network/api_client.dart';
 import 'auth_controller.dart';
@@ -29,7 +32,8 @@ class _PairingPageState extends ConsumerState<PairingPage> {
   }
 
   Future<void> claim() async {
-    if (controller.text.length != 6) return;
+    final code = controller.text.trim();
+    if (code.length != 6 || submitting) return;
     setState(() {
       submitting = true;
       failure = null;
@@ -38,10 +42,10 @@ class _PairingPageState extends ConsumerState<PairingPage> {
       final claim = widget.onClaim;
       if (claim == null) {
         await ref.read(apiClientProvider).post('/v1/pairing-sessions/claim', {
-          'code': controller.text,
+          'code': code,
         });
       } else {
-        await claim(controller.text);
+        await claim(code);
       }
       if (mounted && !widget.gateMode) Navigator.of(context).pop(true);
     } catch (error) {
@@ -55,91 +59,207 @@ class _PairingPageState extends ConsumerState<PairingPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
+    backgroundColor: const Color(0xFFFCF7F3),
     body: SafeArea(
-      child: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Icon(Icons.phonelink_outlined, size: 72),
-              const SizedBox(height: 18),
-              Text(
-                'PC와 연결하기',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                '데스크탑 앱에 표시된 6자리 코드를 입력해 주세요.\n'
-                '페어링 전에는 다른 메뉴가 열리지 않습니다.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              TextField(
-                controller: controller,
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  letterSpacing: 8,
-                  fontWeight: FontWeight.w800,
-                ),
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                onChanged: (_) => setState(() => failure = null),
-                decoration: const InputDecoration(
-                  labelText: '페어링 코드',
-                  border: OutlineInputBorder(),
-                  counterText: '',
-                ),
-              ),
-              if (failure != null) ...[
-                const SizedBox(height: 12),
-                Card(
-                  color: Theme.of(context).colorScheme.errorContainer,
-                  child: ListTile(
-                    leading: const Icon(Icons.error_outline),
-                    title: const Text('PC 연결을 확인하지 못했습니다'),
-                    subtitle: Text(failure!),
+      child: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 34, vertical: 28),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'MOUSEKEEPER',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                      color: const Color(0xFF2D1F1F),
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -1.8,
+                    ),
                   ),
-                ),
-              ],
-              const SizedBox(height: 16),
-              FilledButton(
-                onPressed: submitting || controller.text.length != 6
-                    ? null
-                    : claim,
-                child: submitting
-                    ? const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                          SizedBox(width: 10),
-                          Text('연결 확인 중'),
+                  const SizedBox(height: 34),
+                  Image.asset(
+                    mousekeeperPairingIconAsset,
+                    package: mousekeeperMascotPackage,
+                    width: 86,
+                    height: 86,
+                    fit: BoxFit.contain,
+                    filterQuality: FilterQuality.none,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '기기를 연결해주세요',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      color: const Color(0xFF1E1717),
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: -1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Desktop의 코드를 입력해주세요',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFF2D1F1F),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 332),
+                      child: TextField(
+                        controller: controller,
+                        enabled: !submitting,
+                        autofocus: true,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        textAlign: TextAlign.left,
+                        style: Theme.of(context).textTheme.headlineMedium
+                            ?.copyWith(
+                              color: const Color(0xFF2D1F1F),
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 3,
+                            ),
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(6),
                         ],
-                      )
-                    : const Text('연결'),
+                        onChanged: (value) {
+                          if (failure != null) setState(() => failure = null);
+                          if (value.length == 6) unawaited(claim());
+                        },
+                        decoration: InputDecoration(
+                          hintText: '6자리 코드',
+                          counterText: '',
+                          filled: true,
+                          fillColor: const Color(0xFFFCF7F3),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 22,
+                            vertical: 18,
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(22),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFD6C8BC),
+                              width: 2,
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(22),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFB99E8A),
+                              width: 2.4,
+                            ),
+                          ),
+                          disabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(22),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFD6C8BC),
+                              width: 2,
+                            ),
+                          ),
+                          errorBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(22),
+                            borderSide: BorderSide(
+                              color: Theme.of(context).colorScheme.error,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 160),
+                    child: submitting
+                        ? Row(
+                            key: const ValueKey('pairing-submitting'),
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '연결 확인 중입니다',
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(
+                                      color: const Color(0xFF7A685C),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ],
+                          )
+                        : Text(
+                            key: const ValueKey('pairing-expiry-notice'),
+                            '코드는 데스크톱 화면에 표시된 시간 후 만료됩니다',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(
+                                  color: const Color(0xFF7A685C),
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                  ),
+                  if (failure != null) ...[
+                    const SizedBox(height: 14),
+                    _PairingFailureNotice(message: failure!),
+                  ],
+                  if (widget.gateMode) ...[
+                    const SizedBox(height: 22),
+                    TextButton(
+                      onPressed: submitting
+                          ? null
+                          : () => ref
+                                .read(authControllerProvider.notifier)
+                                .signOut(),
+                      child: const Text('다른 계정으로 로그인'),
+                    ),
+                  ],
+                ],
               ),
-              if (widget.gateMode) ...[
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed: submitting
-                      ? null
-                      : () =>
-                            ref.read(authControllerProvider.notifier).signOut(),
-                  child: const Text('다른 계정으로 로그인'),
-                ),
-              ],
-            ],
+            ),
           ),
         ),
+      ),
+    ),
+  );
+}
+
+class _PairingFailureNotice extends StatelessWidget {
+  const _PairingFailureNotice({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.errorContainer,
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.error_outline, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'PC 연결을 확인하지 못했습니다\n$message',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
       ),
     ),
   );

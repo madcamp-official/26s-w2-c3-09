@@ -15,6 +15,8 @@ import 'home_controller.dart';
 
 const maxManagedFolderCount = 5;
 const _mouseMoveDuration = Duration(milliseconds: 720);
+const _mouseMoveCurve = Curves.easeInOutCubic;
+const _mouseDisplaySize = 376.0;
 
 enum _SpeechBubbleStage { hidden, ellipsis, menu }
 
@@ -90,24 +92,26 @@ class _HomePageState extends ConsumerState<HomePage> {
   Offset _mouseAlignment = const Offset(-0.08, 0.22);
   _SpeechBubbleStage _bubbleStage = _SpeechBubbleStage.hidden;
   String? _selectedRoomId;
-  late String _restingMouseGif;
   bool _mouseWalking = false;
+  bool _mouseMovingRight = false;
   Timer? _walkTimer;
+  Timer? _randomWalkTimer;
 
   @override
   void initState() {
     super.initState();
-    _restingMouseGif = _randomRestingMouseGif();
     unawaited(ref.read(realtimeRevisionProvider.notifier).connect());
     _reconcileLoop = HomeAuthoritativeReconcileLoop(
       reconcile: () =>
           ref.read(connectionGateControllerProvider.notifier).reconcile(),
     )..start();
+    _scheduleRandomWalk();
   }
 
   @override
   void dispose() {
     _walkTimer?.cancel();
+    _randomWalkTimer?.cancel();
     _reconcileLoop.dispose();
     ref.read(realtimeRevisionProvider.notifier).disconnect();
     super.dispose();
@@ -122,6 +126,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
+        centerTitle: true,
         elevation: 0,
         title: const Text(
           'MOUSEKEEPER',
@@ -174,25 +179,30 @@ class _HomePageState extends ConsumerState<HomePage> {
               builder: (context, constraints) => Stack(
                 children: [
                   Positioned(
-                    top: MediaQuery.paddingOf(context).top + 72,
+                    top: MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
                     left: constraints.maxWidth * 0.05,
-                    child: _ManagedFolderSelector(
-                      rooms: rooms,
-                      selectedRoomId: selectedRoom?['id'] as String?,
-                      hiddenRoomCount:
-                          ((gateData?.rooms.length ?? rooms.length) -
-                                  rooms.length)
-                              .clamp(0, 999),
-                      onChanged: (roomId) {
-                        setState(() {
-                          _selectedRoomId = roomId;
-                          _bubbleStage = _SpeechBubbleStage.hidden;
-                        });
-                      },
+                    right: constraints.maxWidth * 0.05,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: _ManagedFolderSelector(
+                        rooms: rooms,
+                        selectedRoomId: selectedRoom?['id'] as String?,
+                        hiddenRoomCount:
+                            ((gateData?.rooms.length ?? rooms.length) -
+                                    rooms.length)
+                                .clamp(0, 999),
+                        onChanged: (roomId) {
+                          setState(() {
+                            _selectedRoomId = roomId;
+                            _bubbleStage = _SpeechBubbleStage.hidden;
+                          });
+                        },
+                      ),
                     ),
                   ),
                   Positioned(
-                    top: MediaQuery.paddingOf(context).top + 140,
+                    top:
+                        MediaQuery.paddingOf(context).top + kToolbarHeight + 86,
                     left: 16,
                     right: 16,
                     child: Column(
@@ -213,9 +223,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                   Positioned.fill(
                     child: _MousePlayground(
                       mouseAlignment: _mouseAlignment,
-                      mouseAsset: _mouseWalking
-                          ? mousekeeperMouseWalkGif
-                          : _restingMouseGif,
+                      mouseAsset: _mouseAsset,
+                      mouseWalking: _mouseWalking,
+                      mouseMovingRight: _mouseMovingRight,
                       bubbleStage: _bubbleStage,
                       selectedRoom: selectedRoom,
                       onMouseTap: _handleMouseTap,
@@ -254,30 +264,39 @@ class _HomePageState extends ConsumerState<HomePage> {
   void _handleStageTap(TapUpDetails details, Size size) {
     final dx = (details.localPosition.dx / size.width) * 2 - 1;
     final dy = (details.localPosition.dy / size.height) * 2 - 1;
-    _walkTimer?.cancel();
-    setState(() {
-      _bubbleStage = _SpeechBubbleStage.hidden;
-      _mouseWalking = true;
-      _mouseAlignment = Offset(
+    _startMouseWalk(
+      Offset(
         dx.clamp(-0.72, 0.72).toDouble(),
         dy.clamp(-0.16, 0.58).toDouble(),
-      );
+      ),
+      hideBubble: true,
+    );
+  }
+
+  void _startMouseWalk(Offset target, {bool hideBubble = false}) {
+    _walkTimer?.cancel();
+    final movingRight = target.dx > _mouseAlignment.dx;
+    setState(() {
+      if (hideBubble) _bubbleStage = _SpeechBubbleStage.hidden;
+      _mouseMovingRight = movingRight;
+      _mouseWalking = true;
+      _mouseAlignment = target;
     });
     _walkTimer = Timer(_mouseMoveDuration, () {
       if (!mounted) return;
       setState(() {
         _mouseWalking = false;
-        _restingMouseGif = _randomRestingMouseGif();
       });
     });
   }
 
   void _handleMouseTap() {
+    _walkTimer?.cancel();
     setState(() {
+      _mouseWalking = false;
       _bubbleStage = _bubbleStage == _SpeechBubbleStage.hidden
           ? _SpeechBubbleStage.ellipsis
           : _SpeechBubbleStage.hidden;
-      if (!_mouseWalking) _restingMouseGif = _randomRestingMouseGif();
     });
   }
 
@@ -289,9 +308,38 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
   }
 
-  String _randomRestingMouseGif() {
-    final assets = mousekeeperRestingMouseGifs;
-    return assets[_random.nextInt(assets.length)];
+  String get _mouseAsset {
+    if (_mouseWalking) return mousekeeperMouseWalkGif;
+    if (_bubbleStage != _SpeechBubbleStage.hidden) {
+      return mousekeeperMouseWorkGif;
+    }
+    return mousekeeperMouseIdleGif;
+  }
+
+  void _scheduleRandomWalk() {
+    _randomWalkTimer?.cancel();
+    final delay = Duration(seconds: 4 + _random.nextInt(5));
+    _randomWalkTimer = Timer(delay, () {
+      if (!mounted) return;
+      if (!_mouseWalking && _bubbleStage == _SpeechBubbleStage.hidden) {
+        _startMouseWalk(_nextRandomMouseTarget());
+      }
+      _scheduleRandomWalk();
+    });
+  }
+
+  Offset _nextRandomMouseTarget() {
+    final distance = 0.22 + _random.nextDouble() * 0.36;
+    final shouldMoveRight =
+        _mouseAlignment.dx < -0.58 || _random.nextDouble() < 0.28;
+    final nextDx =
+        (_mouseAlignment.dx + (shouldMoveRight ? distance : -distance))
+            .clamp(-0.72, 0.72)
+            .toDouble();
+    final nextDy = (_mouseAlignment.dy + (_random.nextDouble() - 0.5) * 0.28)
+        .clamp(-0.16, 0.58)
+        .toDouble();
+    return Offset(nextDx, nextDy);
   }
 
   Map<String, dynamic>? _selectedRoom(List<Map<String, dynamic>> rooms) {
@@ -407,13 +455,13 @@ class _RoomPanningBackground extends StatelessWidget {
         final imageWidth = constraints.maxWidth * 1.28;
         final extraWidth = imageWidth - constraints.maxWidth;
         final progress = ((mouseAlignment.dx + 1) / 2).clamp(0.0, 1.0);
-        final left = -extraWidth * progress;
+        final left = -extraWidth * (1 - progress);
         return Stack(
           fit: StackFit.expand,
           children: [
             AnimatedPositioned(
               duration: _mouseMoveDuration,
-              curve: Curves.easeOutCubic,
+              curve: _mouseMoveCurve,
               left: left,
               top: 0,
               width: imageWidth,
@@ -523,6 +571,8 @@ class _MousePlayground extends StatelessWidget {
   const _MousePlayground({
     required this.mouseAlignment,
     required this.mouseAsset,
+    required this.mouseWalking,
+    required this.mouseMovingRight,
     required this.bubbleStage,
     required this.selectedRoom,
     required this.onMouseTap,
@@ -533,6 +583,8 @@ class _MousePlayground extends StatelessWidget {
 
   final Offset mouseAlignment;
   final String mouseAsset;
+  final bool mouseWalking;
+  final bool mouseMovingRight;
   final _SpeechBubbleStage bubbleStage;
   final Map<String, dynamic>? selectedRoom;
   final VoidCallback onMouseTap;
@@ -546,7 +598,7 @@ class _MousePlayground extends StatelessWidget {
     children: [
       if (bubbleStage != _SpeechBubbleStage.hidden)
         _MouseSpeechBubble(
-          alignment: Offset(mouseAlignment.dx, mouseAlignment.dy - 0.58),
+          alignment: Offset(mouseAlignment.dx, mouseAlignment.dy + 0.58),
           stage: bubbleStage,
           selectedRoom: selectedRoom,
           onTap: onBubbleTap,
@@ -555,19 +607,27 @@ class _MousePlayground extends StatelessWidget {
         ),
       AnimatedAlign(
         duration: _mouseMoveDuration,
-        curve: Curves.easeOutBack,
+        curve: _mouseMoveCurve,
         alignment: Alignment(mouseAlignment.dx, mouseAlignment.dy),
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: onMouseTap,
-          child: Image.asset(
-            mouseAsset,
-            key: ValueKey(mouseAsset),
-            package: mousekeeperMascotPackage,
-            width: 188,
-            height: 188,
-            fit: BoxFit.contain,
-            filterQuality: FilterQuality.none,
+          child: Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.diagonal3Values(
+              mouseWalking && mouseMovingRight ? -1.0 : 1.0,
+              1.0,
+              1.0,
+            ),
+            child: Image.asset(
+              mouseAsset,
+              key: ValueKey('$mouseAsset-$mouseMovingRight'),
+              package: mousekeeperMascotPackage,
+              width: _mouseDisplaySize,
+              height: _mouseDisplaySize,
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.none,
+            ),
           ),
         ),
       ),
@@ -595,8 +655,11 @@ class _MouseSpeechBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedAlign(
     duration: _mouseMoveDuration,
-    curve: Curves.easeOutBack,
-    alignment: Alignment(alignment.dx.clamp(-0.72, 0.72), alignment.dy),
+    curve: _mouseMoveCurve,
+    alignment: Alignment(
+      alignment.dx.clamp(-0.72, 0.72),
+      alignment.dy.clamp(-0.58, 0.82),
+    ),
     child: GestureDetector(
       onTap: onTap,
       child: DecoratedBox(
