@@ -302,6 +302,26 @@ class FileDirectoryUpdate {
   final Map<String, dynamic>? entry;
 }
 
+FileDirectoryUpdate? fileDirectoryUpdateFromRealtime(
+  RealtimeFileDirectoryUpdate update,
+) {
+  final kind = switch (update.kind) {
+    'FILE_ADDED' => FileDirectoryUpdateKind.added,
+    'FILE_REMOVED' => FileDirectoryUpdateKind.removed,
+    'FILE_UPDATED' => FileDirectoryUpdateKind.updated,
+    'FILE_MOVED' => FileDirectoryUpdateKind.moved,
+    _ => null,
+  };
+  if (kind == null) return null;
+  return FileDirectoryUpdate(
+    kind: kind,
+    parentRelativePath: update.parentRelativePath,
+    relativePath: update.relativePath,
+    previousRelativePath: update.previousRelativePath,
+    entry: update.entry,
+  );
+}
+
 String normalizeFileRelativePath(String value) => value
     .replaceAll('\\', '/')
     .split('/')
@@ -868,6 +888,24 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         waiter.complete(next);
       }
       setState(() => _activeTransferStatus = next.status);
+    });
+    ref.listen(realtimeFileDirectoryUpdateProvider, (previous, next) {
+      if (next == null ||
+          identical(previous, next) ||
+          next.roomId != widget.roomId ||
+          _searchActive ||
+          !mounted) {
+        return;
+      }
+      final update = fileDirectoryUpdateFromRealtime(next);
+      if (update == null) return;
+      final patched = _directoryState.applyUpdate(
+        currentRelativeDirectory: _relativeDirectory,
+        update: update,
+      );
+      if (!identical(patched, _directoryState)) {
+        setState(() => _directoryState = patched);
+      }
     });
     if (widget.enforceConnectionGuard) {
       ref.listen(connectionGateControllerProvider, (previous, next) {

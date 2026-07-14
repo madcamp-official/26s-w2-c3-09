@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Mobile realtime now accepts `file.directory.updated` payloads as directory-scoped patches and routes them to the visible Files page without bumping the generic page revision or reloading Home.
 - Mobile file directory state now has a reducer for `FILE_ADDED`, `FILE_REMOVED`, `FILE_UPDATED`, and `FILE_MOVED` style patches, updating only the visible folder entries and marking paginated/uncertain ranges stale instead of forcing an immediate full browse reload.
 - Mobile Home's 5-second connection safety loop now has no reload callback at all; it can reconcile only the lightweight device/room gate, while Home summary refreshes remain explicit or WebSocket fallback-driven.
 - Mobile file browsing now keeps the visible directory page, next cursor, and desktop generation in `FileDirectoryState`, so the next `fileDirectoryProvider(rootId, relativePath)` split has one reducer-backed state object instead of scattered page fields.

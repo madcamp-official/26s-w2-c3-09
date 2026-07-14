@@ -125,6 +125,24 @@ class RealtimeFileBrowseUpdate {
   final String? failureCode;
 }
 
+class RealtimeFileDirectoryUpdate {
+  const RealtimeFileDirectoryUpdate({
+    required this.kind,
+    required this.roomId,
+    this.parentRelativePath,
+    this.relativePath,
+    this.previousRelativePath,
+    this.entry,
+  });
+
+  final String kind;
+  final String roomId;
+  final String? parentRelativePath;
+  final String? relativePath;
+  final String? previousRelativePath;
+  final Map<String, dynamic>? entry;
+}
+
 final realtimeFileTransferUpdateProvider =
     NotifierProvider<
       RealtimeFileTransferUpdateController,
@@ -136,6 +154,12 @@ final realtimeFileBrowseUpdateProvider =
       RealtimeFileBrowseUpdateController,
       RealtimeFileBrowseUpdate?
     >(RealtimeFileBrowseUpdateController.new);
+
+final realtimeFileDirectoryUpdateProvider =
+    NotifierProvider<
+      RealtimeFileDirectoryUpdateController,
+      RealtimeFileDirectoryUpdate?
+    >(RealtimeFileDirectoryUpdateController.new);
 
 class RealtimeHomeUpdateController extends Notifier<RealtimeHomeUpdate?> {
   @override
@@ -167,6 +191,17 @@ class RealtimeFileBrowseUpdateController
   }
 
   void emit(RealtimeFileBrowseUpdate update) => state = update;
+}
+
+class RealtimeFileDirectoryUpdateController
+    extends Notifier<RealtimeFileDirectoryUpdate?> {
+  @override
+  RealtimeFileDirectoryUpdate? build() {
+    ref.watch(realtimeOwnerUidProvider);
+    return null;
+  }
+
+  void emit(RealtimeFileDirectoryUpdate update) => state = update;
 }
 
 RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
@@ -407,9 +442,13 @@ bool realtimeUpdateSuppressesGenericRevision(
   RealtimeHomeUpdate? update, [
   RealtimeFileTransferUpdate? fileTransferUpdate,
   RealtimeFileBrowseUpdate? fileBrowseUpdate,
+  RealtimeFileDirectoryUpdate? fileDirectoryUpdate,
 ]) {
   if (fileTransferUpdate != null) return true;
   if (fileBrowseUpdate != null || event.startsWith('file.browse.')) {
+    return true;
+  }
+  if (fileDirectoryUpdate != null || event == 'file.directory.updated') {
     return true;
   }
   if (event == 'presence.updated') return true;
@@ -499,6 +538,44 @@ RealtimeFileBrowseUpdate? realtimeFileBrowseUpdateFor(
   );
 }
 
+RealtimeFileDirectoryUpdate? realtimeFileDirectoryUpdateFor(
+  String event,
+  Object? data,
+) {
+  if (event != 'file.directory.updated' || data is! Map) return null;
+  final value = Map<String, dynamic>.from(data);
+  final nestedPayload = value['payload'];
+  final payload = nestedPayload is Map
+      ? Map<String, dynamic>.from(nestedPayload)
+      : value;
+  final kind = payload['kind'];
+  final roomId = switch (payload['roomId'] ?? value['roomId']) {
+    final String id when id.isNotEmpty => id,
+    _ => null,
+  };
+  if (kind is! String ||
+      !_validFileDirectoryUpdateKinds.contains(kind) ||
+      roomId == null) {
+    return null;
+  }
+  final parentRelativePath = payload['parentRelativePath'];
+  final relativePath = payload['relativePath'];
+  final previousRelativePath = payload['previousRelativePath'];
+  final entry = payload['entry'];
+  return RealtimeFileDirectoryUpdate(
+    kind: kind,
+    roomId: roomId,
+    parentRelativePath: parentRelativePath is String
+        ? parentRelativePath
+        : null,
+    relativePath: relativePath is String ? relativePath : null,
+    previousRelativePath: previousRelativePath is String
+        ? previousRelativePath
+        : null,
+    entry: entry is Map ? Map<String, dynamic>.from(entry) : null,
+  );
+}
+
 const _validPresences = <String>{
   'OFFLINE',
   'ONLINE_IDLE',
@@ -522,6 +599,12 @@ const _fileBrowseTerminalEvents = <String>{
   'file.browse.ready',
   'file.browse.failed',
 };
+const _validFileDirectoryUpdateKinds = <String>{
+  'FILE_ADDED',
+  'FILE_REMOVED',
+  'FILE_UPDATED',
+  'FILE_MOVED',
+};
 
 const _summaryRefreshEvents = <String>{};
 
@@ -533,6 +616,7 @@ const _homeIrrelevantEvents = <String>{
   'file.browse.requested',
   'file.browse.ready',
   'file.browse.failed',
+  'file.directory.updated',
   'file.transfer.requested',
   'file.transfer.updated',
   'rule.created',
@@ -760,6 +844,14 @@ class RealtimeController extends Notifier<int> {
           .read(realtimeFileBrowseUpdateProvider.notifier)
           .emit(fileBrowseUpdate);
     }
+    final fileDirectoryUpdate = realtimeFileDirectoryUpdateFor(event, data);
+    if (shouldRefresh &&
+        fileDirectoryUpdate != null &&
+        _isActiveSocket(session, socket)) {
+      ref
+          .read(realtimeFileDirectoryUpdateProvider.notifier)
+          .emit(fileDirectoryUpdate);
+    }
     final homeUpdate = realtimeHomeUpdateFor(event, data);
     if (shouldRefresh &&
         homeUpdate != null &&
@@ -774,6 +866,7 @@ class RealtimeController extends Notifier<int> {
           homeUpdate,
           fileTransferUpdate,
           fileBrowseUpdate,
+          fileDirectoryUpdate,
         ) &&
         _isActiveSocket(session, socket)) {
       state++;
@@ -827,6 +920,15 @@ class RealtimeController extends Notifier<int> {
                   .read(realtimeFileBrowseUpdateProvider.notifier)
                   .emit(fileBrowseUpdate);
             }
+            final fileDirectoryUpdate = realtimeFileDirectoryUpdateFor(
+              eventType,
+              event,
+            );
+            if (fileDirectoryUpdate != null) {
+              ref
+                  .read(realtimeFileDirectoryUpdateProvider.notifier)
+                  .emit(fileDirectoryUpdate);
+            }
             final homeUpdate = realtimeHomeUpdateFor(eventType, event);
             if (homeUpdate != null) {
               ref.read(realtimeHomeUpdateProvider.notifier).emit(homeUpdate);
@@ -836,6 +938,7 @@ class RealtimeController extends Notifier<int> {
               homeUpdate,
               fileTransferUpdate,
               fileBrowseUpdate,
+              fileDirectoryUpdate,
             )) {
               requiresGenericRevision = true;
             }

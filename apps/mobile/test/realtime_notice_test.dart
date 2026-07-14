@@ -192,6 +192,36 @@ void main() {
     },
   );
 
+  test('file directory events become directory-scoped realtime patches', () {
+    final update = realtimeFileDirectoryUpdateFor('file.directory.updated', {
+      'eventId': 'directory-event',
+      'eventType': 'file.directory.updated',
+      'roomId': 'room-a',
+      'payload': {
+        'roomId': 'room-a',
+        'kind': 'FILE_MOVED',
+        'parentRelativePath': 'reports',
+        'previousRelativePath': 'reports/old.pdf',
+        'entry': {
+          'type': 'FILE',
+          'name': 'final.pdf',
+          'relativePath': 'reports/final.pdf',
+        },
+      },
+    });
+
+    expect(update?.roomId, 'room-a');
+    expect(update?.kind, 'FILE_MOVED');
+    expect(update?.previousRelativePath, 'reports/old.pdf');
+    expect(update?.entry?['relativePath'], 'reports/final.pdf');
+    expect(
+      realtimeFileDirectoryUpdateFor('file.directory.updated', {
+        'payload': {'roomId': 'room-a', 'kind': 'UNKNOWN'},
+      }),
+      isNull,
+    );
+  });
+
   test('complete realtime patches suppress generic page revision fan-out', () {
     final presence = realtimeHomeUpdateFor('presence.updated', {
       'deviceId': 'device-a',
@@ -285,6 +315,17 @@ void main() {
     final fileBrowse = realtimeFileBrowseUpdateFor('file.browse.ready', {
       'payload': {'requestId': 'browse-a', 'status': 'READY'},
     });
+    final fileDirectory = realtimeFileDirectoryUpdateFor(
+      'file.directory.updated',
+      {
+        'payload': {
+          'roomId': 'room-a',
+          'kind': 'FILE_UPDATED',
+          'parentRelativePath': 'reports',
+          'entry': {'relativePath': 'reports/a.pdf', 'name': 'a.pdf'},
+        },
+      },
+    );
 
     for (final entry in <(String, RealtimeHomeUpdate?)>[
       ('presence.updated', presence),
@@ -322,6 +363,16 @@ void main() {
     );
     expect(
       realtimeUpdateSuppressesGenericRevision('file.browse.failed', null),
+      true,
+    );
+    expect(
+      realtimeUpdateSuppressesGenericRevision(
+        'file.directory.updated',
+        null,
+        null,
+        null,
+        fileDirectory,
+      ),
       true,
     );
   });

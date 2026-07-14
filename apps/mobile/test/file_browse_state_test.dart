@@ -174,6 +174,30 @@ void main() {
     },
   );
 
+  test('file directory realtime update maps into the local reducer shape', () {
+    final update = fileDirectoryUpdateFromRealtime(
+      const RealtimeFileDirectoryUpdate(
+        roomId: 'room-a',
+        kind: 'FILE_REMOVED',
+        parentRelativePath: 'reports',
+        relativePath: 'reports/old.pdf',
+      ),
+    );
+
+    expect(update?.kind, FileDirectoryUpdateKind.removed);
+    expect(update?.parentRelativePath, 'reports');
+    expect(update?.relativePath, 'reports/old.pdf');
+    expect(
+      fileDirectoryUpdateFromRealtime(
+        const RealtimeFileDirectoryUpdate(
+          roomId: 'room-a',
+          kind: 'UNSUPPORTED',
+        ),
+      ),
+      isNull,
+    );
+  });
+
   test('file browse status waits on websocket before slow REST fallback', () {
     expect(fileBrowseStatusFallbackInterval, const Duration(seconds: 5));
   });
