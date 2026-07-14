@@ -1,20 +1,16 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
-import 'package:dio/dio.dart';
+
 import '../../core/network/api_client.dart';
-import '../../core/sync/mutation_queue.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../../storage/display_cache.dart';
 import '../auth/connection_gate_controller.dart';
-import '../proposals/proposal_page.dart';
-import '../files/files_page.dart';
-import '../files/smart_cache_page.dart';
 import '../chat/chat_page.dart';
-import '../rules/rules_page.dart';
-import 'file_command_page.dart';
+import '../files/files_page.dart';
+import '../proposals/proposal_page.dart';
 
 class RoomContent {
   const RoomContent({
@@ -25,6 +21,7 @@ class RoomContent {
     required this.snapshot,
     required this.isOffline,
   });
+
   final List<Map<String, dynamic>> commands;
   final List<Map<String, dynamic>> proposals;
   final List<Map<String, dynamic>> executions;
@@ -36,12 +33,13 @@ class RoomContent {
     List<Map<String, dynamic>>? commands,
     List<Map<String, dynamic>>? proposals,
     List<Map<String, dynamic>>? executions,
+    List<Map<String, dynamic>>? activity,
     Map<String, dynamic>? snapshot,
   }) => RoomContent(
     commands: commands ?? this.commands,
     proposals: proposals ?? this.proposals,
     executions: executions ?? this.executions,
-    activity: activity,
+    activity: activity ?? this.activity,
     snapshot: snapshot ?? this.snapshot,
     isOffline: isOffline,
   );
@@ -153,6 +151,7 @@ List<Map<String, dynamic>> patchProposalItemsForRealtimeUpdate({
         .toList(growable: false);
     return next.length == proposals.length ? proposals : next;
   }
+
   Map<String, dynamic> patch(Map<String, dynamic> proposal) {
     final next = {...proposal, 'status': status};
     if (update.commandId != null) next['commandId'] = update.commandId!;
@@ -310,7 +309,9 @@ List<Map<String, dynamic>> patchExecutionItemsForRealtimeUpdate({
 
 class RoomPage extends ConsumerStatefulWidget {
   const RoomPage({super.key, required this.room});
+
   final Map<String, dynamic> room;
+
   @override
   ConsumerState<RoomPage> createState() => _RoomPageState();
 }
@@ -319,7 +320,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
   late Future<RoomContent> _content;
   RoomContent? _latestContent;
   bool _suppressNextRealtimeRevisionReload = false;
-  bool _submitting = false;
+
   @override
   void initState() {
     super.initState();
@@ -409,79 +410,33 @@ class _RoomPageState extends ConsumerState<RoomPage> {
       update: update,
       roomId: roomId,
     );
-    if (identical(patched, current)) {
-      return false;
-    }
+    if (identical(patched, current)) return false;
     _latestContent = patched;
     _content = Future.value(patched);
     final cache = ref.read(displayCacheProvider);
-    final commands = patched.commands;
-    final proposals = patched.proposals;
-    final executions = patched.executions;
-    final snapshot = patched.snapshot;
-    if (!identical(commands, current.commands)) {
-      unawaited(cache.replaceCommands(roomId, commands));
+    if (!identical(patched.commands, current.commands)) {
+      unawaited(cache.replaceCommands(roomId, patched.commands));
     }
-    if (!identical(proposals, current.proposals)) {
-      unawaited(cache.replaceProposals(roomId, proposals));
+    if (!identical(patched.proposals, current.proposals)) {
+      unawaited(cache.replaceProposals(roomId, patched.proposals));
     }
-    if (!identical(executions, current.executions)) {
-      unawaited(cache.replaceExecutions(roomId, executions));
+    if (!identical(patched.executions, current.executions)) {
+      unawaited(cache.replaceExecutions(roomId, patched.executions));
     }
-    if (!identical(snapshot, current.snapshot)) {
-      unawaited(cache.saveSnapshot(roomId, snapshot));
+    if (!identical(patched.snapshot, current.snapshot)) {
+      unawaited(cache.saveSnapshot(roomId, patched.snapshot));
     }
     setState(() {});
     return true;
   }
 
-  Future<void> _createCommand() async {
-    final roomId = widget.room['id'] as String;
-    final gate = ref.read(connectionGateControllerProvider).asData?.value;
-    if (gate == null ||
-        gate.operation(DisconnectKind.room, roomId) != null ||
-        !gate.rooms.any((room) => room['id'] == roomId)) {
-      return;
-    }
-    setState(() => _submitting = true);
-    try {
-      final id = roomId;
-      final result = await ref
-          .read(mutationQueueProvider)
-          .postOrQueue(
-            mutationType: 'CREATE_COMMAND',
-            path: '/v1/rooms/$id/commands',
-            body: {'intent': 'ANALYZE', 'payload': <String, dynamic>{}},
-            idempotencyKey: const Uuid().v4(),
-            roomId: id,
-          );
-      if (result.queued) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('오프라인 요청함에 저장했습니다. 연결되면 자동 전송됩니다.')),
-          );
-        }
-      } else {
-        setState(_reload);
-      }
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('명령 생성 실패: $error')));
-      }
-    } finally {
-      if (mounted) setState(() => _submitting = false);
-    }
-  }
-
   Future<void> _confirmDisconnect() async {
-    final roomName = widget.room['name'] as String? ?? '방';
+    final roomName = widget.room['name'] as String? ?? '관리 폴더';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('폴더 연결 해제'),
-        content: Text('$roomName 연결을 해제합니다. PC의 원본 폴더와 파일은 그대로 유지됩니다.'),
+        title: const Text('관리 폴더 연결 해제'),
+        content: Text('$roomName 연결을 해제합니다. PC의 원본 폴더와 파일은 삭제되지 않습니다.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -531,80 +486,34 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         .asData
         ?.value
         .operation(DisconnectKind.room, roomId);
+    final roomName = widget.room['name'] as String? ?? '관리 폴더';
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.room['name'] as String? ?? '방'),
+        title: Text(roomName),
         actions: [
           IconButton(
-            tooltip: '정리 규칙',
-            icon: const Icon(Icons.rule_folder_outlined),
-            onPressed: disconnect == null
-                ? () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          RulesPage(roomId: widget.room['id'] as String),
-                    ),
-                  )
-                : null,
-          ),
-          IconButton(
-            tooltip: '채팅',
-            icon: const Icon(Icons.chat_bubble_outline),
-            onPressed: disconnect == null
-                ? () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          ChatPage(roomId: widget.room['id'] as String),
-                    ),
-                  )
-                : null,
-          ),
-          IconButton(
-            tooltip: '스마트 캐시',
-            icon: const Icon(Icons.offline_bolt_outlined),
-            onPressed: disconnect == null
-                ? () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          SmartCachePage(roomId: widget.room['id'] as String),
-                    ),
-                  )
-                : null,
-          ),
-          IconButton(
-            tooltip: '파일 명령',
-            icon: const Icon(Icons.pending_actions_outlined),
-            onPressed: disconnect == null
-                ? () => Navigator.of(context)
-                      .push<bool>(
-                        MaterialPageRoute(
-                          builder: (_) => FileCommandPage(
-                            roomId: roomId,
-                            rootId: widget.room['rootAlias'] as String? ?? '',
-                          ),
-                        ),
-                      )
-                      .then((changed) {
-                        if (changed == true && mounted) setState(_reload);
-                      })
-                : null,
-          ),
-          IconButton(
-            tooltip: '온라인 파일',
+            tooltip: '파일 목록',
             icon: const Icon(Icons.folder_open),
             onPressed: disconnect == null
                 ? () => Navigator.of(context).push(
                     MaterialPageRoute(
-                      builder: (_) => FilesPage(
-                        roomId: roomId,
-                        roomName: widget.room['name'] as String? ?? '방',
-                      ),
+                      builder: (_) =>
+                          FilesPage(roomId: roomId, roomName: roomName),
                     ),
                   )
                 : null,
           ),
           IconButton(
-            tooltip: '폴더 연결 해제',
+            tooltip: 'AI 대화',
+            icon: const Icon(Icons.chat_bubble_outline),
+            onPressed: disconnect == null
+                ? () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => ChatPage(roomId: roomId)),
+                  )
+                : null,
+          ),
+          IconButton(
+            tooltip: '관리 폴더 연결 해제',
             onPressed: disconnect == null ? _confirmDisconnect : null,
             icon: disconnect?.phase == DisconnectPhase.disconnecting
                 ? const SizedBox.square(
@@ -615,11 +524,6 @@ class _RoomPageState extends ConsumerState<RoomPage> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _submitting || disconnect != null ? null : _createCommand,
-        icon: const Icon(Icons.auto_fix_high),
-        label: const Text('정리 제안 요청'),
-      ),
       body: FutureBuilder<RoomContent>(
         future: _content,
         builder: (context, snapshot) {
@@ -629,17 +533,14 @@ class _RoomPageState extends ConsumerState<RoomPage> {
           if (snapshot.hasError) {
             return Center(
               child: Text(
-                '방 정보를 불러오지 못했습니다.\n${snapshot.error}',
+                '관리 폴더 정보를 불러오지 못했습니다.\n${snapshot.error}',
                 textAlign: TextAlign.center,
               ),
             );
           }
           final content = snapshot.data!;
-          final commands = content.commands;
-          final proposals = content.proposals;
-          final executions = content.executions;
-          final activity = content.activity;
-          final analyzing = commands.any(
+          final history = _buildHistoryEntries(content, roomId);
+          final analyzing = content.commands.any(
             (command) => ['DELIVERED', 'ANALYZING'].contains(command['status']),
           );
           return RefreshIndicator(
@@ -648,7 +549,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
               await _content;
             },
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               children: [
                 if (disconnect != null) ...[
                   _RoomDisconnectCard(
@@ -665,7 +566,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                     child: ListTile(
                       leading: Icon(Icons.cloud_off_outlined),
                       title: Text('오프라인 상태'),
-                      subtitle: Text('마지막 동기화 결과를 표시합니다.'),
+                      subtitle: Text('마지막으로 동기화된 결과를 표시합니다.'),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -678,115 +579,53 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                         height: 24,
                         child: CircularProgressIndicator(strokeWidth: 3),
                       ),
-                      title: Text('PC가 폴더를 분석 중입니다'),
-                      subtitle: Text('새 제안이 준비되면 자동으로 갱신됩니다.'),
+                      title: Text('PC가 관리 폴더를 분석 중입니다'),
+                      subtitle: Text('새 결과는 히스토리에 자동으로 반영됩니다.'),
                     ),
                   ),
                   const SizedBox(height: 12),
                 ],
                 CleanlinessCard(snapshot: content.snapshot),
-                const SizedBox(height: 20),
-                Text('승인 대기 제안', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                if (proposals.isEmpty)
-                  const Card(child: ListTile(title: Text('승인 대기 중인 제안이 없습니다')))
-                else
-                  ...proposals.map(
-                    (proposal) => Card(
-                      child: ListTile(
-                        title: const Text('파일 정리 제안'),
-                        subtitle: Text(proposal['status'] as String? ?? ''),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: disconnect == null
-                            ? () async {
-                                await Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => ProposalPage(
-                                      proposalId: proposal['id'] as String,
-                                      roomId: roomId,
-                                    ),
-                                  ),
-                                );
-                                if (mounted) setState(_reload);
-                              }
-                            : null,
-                      ),
+                const SizedBox(height: 16),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.chat_bubble_outline),
+                    title: const Text('파일 정리는 대화로 요청하세요'),
+                    subtitle: const Text(
+                      '수동 규칙/커맨드 선택은 숨겼습니다. AI 대화에서 실제 가능한 작업만 초안으로 제안합니다.',
                     ),
-                  ),
-                const SizedBox(height: 20),
-                Text('최근 명령', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                if (commands.isEmpty)
-                  const Card(child: ListTile(title: Text('아직 요청한 명령이 없습니다')))
-                else
-                  ...commands.reversed
-                      .take(20)
-                      .map(
-                        (command) => Card(
-                          child: ListTile(
-                            leading: const Icon(Icons.task_alt),
-                            title: Text(command['intent'] as String? ?? '명령'),
-                            subtitle: Text(
-                              command['status'] as String? ?? '상태 없음',
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: disconnect == null
+                        ? () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ChatPage(roomId: roomId),
                             ),
-                          ),
-                        ),
-                      ),
+                          )
+                        : null,
+                  ),
+                ),
                 const SizedBox(height: 20),
-                Text('최근 실행 결과', style: Theme.of(context).textTheme.titleLarge),
+                Text('히스토리', style: Theme.of(context).textTheme.titleLarge),
                 const SizedBox(height: 8),
-                if (executions.isEmpty)
-                  const Card(child: ListTile(title: Text('아직 실행 결과가 없습니다')))
-                else
-                  ...executions.take(10).map((item) {
-                    final execution = Map<String, dynamic>.from(
-                      item['execution'] as Map,
-                    );
-                    final status = execution['status'] as String? ?? '상태 없음';
-                    return Card(
-                      child: ListTile(
-                        leading: Icon(
-                          status == 'SUCCEEDED'
-                              ? Icons.check_circle_outline
-                              : status == 'EXECUTING'
-                              ? Icons.pending_outlined
-                              : Icons.error_outline,
-                        ),
-                        title: Text(_executionLabel(status)),
-                        subtitle: Text(
-                          execution['finishedAt'] as String? ??
-                              execution['startedAt'] as String? ??
-                              '',
-                        ),
-                      ),
-                    );
-                  }),
-                const SizedBox(height: 20),
-                Text('활동 기록', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                if (activity.isEmpty)
-                  Card(
-                    child: ListTile(
-                      title: Text(
-                        content.isOffline
-                            ? '활동 기록은 온라인에서 갱신됩니다'
-                            : '아직 기록된 활동이 없습니다',
-                      ),
-                    ),
-                  )
-                else
-                  ...activity
-                      .take(20)
-                      .map(
-                        (event) => ListTile(
-                          dense: true,
-                          leading: const Icon(Icons.history),
-                          title: Text(
-                            _activityLabel(event['eventType'] as String?),
-                          ),
-                          subtitle: Text(event['occurredAt'] as String? ?? ''),
-                        ),
-                      ),
+                _HistoryTimeline(
+                  entries: history,
+                  emptyMessage: content.isOffline
+                      ? '활동 기록은 온라인 상태에서 갱신됩니다.'
+                      : '아직 기록된 활동이 없습니다.',
+                  onOpenProposal: disconnect == null
+                      ? (proposalId) async {
+                          await Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ProposalPage(
+                                proposalId: proposalId,
+                                roomId: roomId,
+                              ),
+                            ),
+                          );
+                          if (mounted) setState(_reload);
+                        }
+                      : null,
+                ),
               ],
             ),
           );
@@ -795,14 +634,105 @@ class _RoomPageState extends ConsumerState<RoomPage> {
     );
   }
 
+  List<_HistoryEntry> _buildHistoryEntries(RoomContent content, String roomId) {
+    final entries = <_HistoryEntry>[
+      for (final proposal in content.proposals)
+        _HistoryEntry(
+          title: '승인 대기 제안 (${_dateLabel(_firstDate(proposal))})',
+          subtitle: _proposalSubtitle(proposal),
+          at: _firstDate(proposal),
+          icon: Icons.pending_actions_outlined,
+          proposalId: proposal['id'] as String?,
+        ),
+      for (final command in content.commands)
+        _HistoryEntry(
+          title: '명령 요청 (${_dateLabel(_firstDate(command))})',
+          subtitle:
+              '${command['intent'] as String? ?? 'COMMAND'} · ${command['status'] as String? ?? '상태 없음'}',
+          at: _firstDate(command),
+          icon: Icons.task_alt_outlined,
+        ),
+      for (final item in content.executions) _executionHistoryEntry(item),
+      for (final event in content.activity)
+        _HistoryEntry(
+          title:
+              '${_activityLabel(event['eventType'] as String?)} (${_dateLabel(_firstDate(event))})',
+          subtitle: event['eventType'] as String? ?? 'activity',
+          at: _firstDate(event),
+          icon: Icons.history,
+        ),
+    ];
+    entries.sort((a, b) {
+      final left = a.at;
+      final right = b.at;
+      if (left == null && right == null) return 0;
+      if (left == null) return 1;
+      if (right == null) return -1;
+      return right.compareTo(left);
+    });
+    return entries.take(30).toList(growable: false);
+  }
+
+  _HistoryEntry _executionHistoryEntry(Map<String, dynamic> item) {
+    final execution = item['execution'] is Map
+        ? Map<String, dynamic>.from(item['execution'] as Map)
+        : <String, dynamic>{};
+    final status = execution['status'] as String? ?? 'UNKNOWN';
+    final at = _firstDate(execution);
+    return _HistoryEntry(
+      title: '최근 명령 실행 결과 (${_dateLabel(at)})',
+      subtitle: _executionLabel(status),
+      at: at,
+      icon: status == 'SUCCEEDED'
+          ? Icons.check_circle_outline
+          : status == 'EXECUTING'
+          ? Icons.pending_outlined
+          : Icons.error_outline,
+    );
+  }
+
+  DateTime? _firstDate(Map<String, dynamic> value) {
+    for (final key in const [
+      'finishedAt',
+      'startedAt',
+      'updatedAt',
+      'createdAt',
+      'occurredAt',
+    ]) {
+      final raw = value[key];
+      if (raw is String) {
+        final parsed = DateTime.tryParse(raw);
+        if (parsed != null) return parsed.toLocal();
+      }
+    }
+    return null;
+  }
+
+  String _dateLabel(DateTime? value) {
+    if (value == null) return '일자 없음';
+    String two(int number) => number.toString().padLeft(2, '0');
+    return '${value.year}.${two(value.month)}.${two(value.day)} '
+        '${two(value.hour)}:${two(value.minute)}';
+  }
+
+  String _proposalSubtitle(Map<String, dynamic> proposal) {
+    final summary = proposal['summary'];
+    if (summary is Map && summary['title'] is String) {
+      return summary['title'] as String;
+    }
+    final itemCount = proposal['itemCount'];
+    return itemCount is int ? '$itemCount개 항목 검토 필요' : '검토가 필요한 제안입니다';
+  }
+
   String _executionLabel(String status) {
     return switch (status) {
       'SUCCEEDED' => '정리가 완료되었습니다',
       'PARTIALLY_SUCCEEDED' => '일부 작업만 완료되었습니다',
-      'ROLLED_BACK' => '데스크톱에서 작업을 되돌렸습니다',
-      'STALE' => '승인 후 파일이 변경되어 실행하지 않았습니다',
+      'ROLLED_BACK' => '데스크탑에서 작업을 되돌렸습니다',
+      'STALE' => '승인 뒤 파일이 변경되어 실행하지 않았습니다',
       'FAILED' => '작업을 완료하지 못했습니다',
-      _ => '승인된 작업을 실행 중입니다',
+      'EXECUTING' => '승인된 작업을 실행 중입니다',
+      _ => '실행 상태: $status',
     };
   }
 
@@ -813,6 +743,59 @@ class _RoomPageState extends ConsumerState<RoomPage> {
       'execution.completed' => '승인된 작업 실행이 끝났습니다',
       _ => 'MOUSEKEEPER 상태가 변경되었습니다',
     };
+  }
+}
+
+class _HistoryEntry {
+  const _HistoryEntry({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    this.at,
+    this.proposalId,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final DateTime? at;
+  final String? proposalId;
+}
+
+class _HistoryTimeline extends StatelessWidget {
+  const _HistoryTimeline({
+    required this.entries,
+    required this.emptyMessage,
+    required this.onOpenProposal,
+  });
+
+  final List<_HistoryEntry> entries;
+  final String emptyMessage;
+  final ValueChanged<String>? onOpenProposal;
+
+  @override
+  Widget build(BuildContext context) {
+    if (entries.isEmpty) {
+      return Card(child: ListTile(title: Text(emptyMessage)));
+    }
+    return Column(
+      children: [
+        for (final entry in entries)
+          Card(
+            child: ListTile(
+              leading: Icon(entry.icon),
+              title: Text(entry.title),
+              subtitle: Text(entry.subtitle),
+              trailing: entry.proposalId != null
+                  ? const Icon(Icons.chevron_right)
+                  : null,
+              onTap: entry.proposalId != null && onOpenProposal != null
+                  ? () => onOpenProposal!(entry.proposalId!)
+                  : null,
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -833,8 +816,8 @@ class _RoomDisconnectCard extends StatelessWidget {
           : const Icon(Icons.error_outline),
       title: Text(
         operation.phase == DisconnectPhase.disconnecting
-            ? '폴더 연결을 해제하는 중'
-            : '폴더 연결 해제 실패',
+            ? '관리 폴더 연결을 해제하는 중'
+            : '관리 폴더 연결 해제 실패',
       ),
       subtitle: operation.message == null ? null : Text(operation.message!),
       trailing: operation.phase == DisconnectPhase.failed
@@ -870,6 +853,7 @@ String cleanlinessReasonLabel(String code) => switch (code) {
 
 class CleanlinessCard extends StatelessWidget {
   const CleanlinessCard({super.key, required this.snapshot});
+
   final Map<String, dynamic>? snapshot;
 
   @override
@@ -896,8 +880,8 @@ class CleanlinessCard extends StatelessWidget {
           leading: const Icon(Icons.system_update_alt),
           title: const Text('청결도 공식 업데이트 필요'),
           subtitle: Text(
-            '앱 지원 버전: $supportedCleanlinessFormulaVersion\n'
-            '스냅샷 버전: $formulaVersion\n$calculatedAt',
+            '지원 버전: $supportedCleanlinessFormulaVersion\n'
+            '받은 버전: $formulaVersion\n$calculatedAt',
           ),
         ),
       );
@@ -915,7 +899,7 @@ class CleanlinessCard extends StatelessWidget {
         ? Colors.orange
         : Colors.red;
     final grade = score >= 80
-        ? '깨끗함'
+        ? '깔끔해요'
         : score >= 50
         ? '정리 필요'
         : '많은 정리 필요';
@@ -958,7 +942,7 @@ class CleanlinessCard extends StatelessWidget {
                       Text(calculatedAt),
                       Text(
                         formulaVersion == null
-                            ? '기존 스냅샷 · 공식 버전 정보 없음'
+                            ? '기준 오류 · 공식 버전 정보 없음'
                             : '공식 $formulaVersion',
                       ),
                     ],

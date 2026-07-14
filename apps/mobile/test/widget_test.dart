@@ -29,8 +29,8 @@ void main() {
       ),
     );
     expect(find.text('오프라인 표시 데이터'), findsOneWidget);
-    expect(find.text('마지막으로 동기화된 정보를 표시합니다.'), findsOneWidget);
-    expect(find.text('연결된 폴더 없음'), findsOneWidget);
+    expect(find.text('마지막으로 동기화된 상태만 보여줍니다.'), findsOneWidget);
+    expect(find.text('연결된 관리 폴더가 없습니다'), findsOneWidget);
   });
 
   testWidgets('연결 오류 상태에서 다시 시도할 수 있다', (tester) async {
@@ -45,7 +45,7 @@ void main() {
         ),
       ),
     );
-    expect(find.textContaining('서버와 연결되지 않았습니다.'), findsOneWidget);
+    expect(find.textContaining('서버와 연결하지 못했습니다.'), findsOneWidget);
     await tester.tap(find.text('다시 시도'));
     expect(retried, isTrue);
   });
@@ -182,7 +182,7 @@ void main() {
     expect(find.text('연결된 PC를 확인하는 중입니다'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 10));
-    expect(find.text('연결이 평소보다 오래 걸리고 있어요.'), findsOneWidget);
+    expect(find.text('연결 확인이 예상보다 오래 걸리고 있어요.'), findsOneWidget);
     expect(find.text('다시 확인'), findsNothing);
 
     await tester.pump(const Duration(seconds: 10));
@@ -202,7 +202,10 @@ void main() {
         ),
       ),
     );
-    expect(find.textContaining('이전 캐시로 메인 화면을 열지 않습니다'), findsOneWidget);
+    expect(
+      find.textContaining('페어링이 끝나기 전에는 메인 화면으로 이동하지 않습니다'),
+      findsOneWidget,
+    );
     await tester.tap(find.text('다시 확인'));
     expect(retried, isTrue);
   });
