@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Mobile rules now expose `ruleGatewayProvider` and `ruleListProvider(roomId)` for provider-backed reads; RulesPage still applies successful create/update/draft confirmations by local upsert instead of reloading the entire list.
 - Mobile file browse transport is now provider-backed through `fileBrowseGatewayProvider`, `fileDirectoryBrowseRequesterProvider`, and `fileBrowseStatusFetcherProvider`; FilesPage still keeps the WebSocket-first wait path and only uses REST status as the 5-second safety fallback.
 - Mobile Room REST reads are now split into Riverpod providers for commands, proposals, executions, activity, and latest cleanliness snapshot. RoomPage still preserves the existing offline cache fallback, but explicit/manual reloads are the only path that invalidates those providers; WebSocket updates continue to patch the affected item instead of reloading the whole room.
 - Mobile Room state now has a `RoomContent` reducer that applies realtime command/proposal/execution/cleanliness patches as one object, preserving unchanged slices by identity and returning the same object for unrelated events.

@@ -189,6 +189,22 @@ void main() {
   });
 
   test(
+    'rule list provider routes reads through the injected gateway',
+    () async {
+      final gateway = _FakeRuleGateway([_rule('r1', 'PDF rule')]);
+      final container = ProviderContainer(
+        overrides: [ruleGatewayProvider.overrideWithValue(gateway)],
+      );
+      addTearDown(container.dispose);
+
+      final rules = await container.read(ruleListProvider('room-1').future);
+
+      expect(gateway.listLoads, 1);
+      expect(rules.single['id'], 'r1');
+    },
+  );
+
+  test(
     'ruleConditionBody and ruleActionBody build expanded contract payloads',
     () {
       expect(

@@ -69,6 +69,15 @@ class ApiRuleGateway implements RuleGateway {
       _api.post('/v1/rule-drafts/$draftId/reject', const {});
 }
 
+final ruleGatewayProvider = Provider<RuleGateway>((ref) {
+  return ApiRuleGateway(ref.watch(apiClientProvider));
+});
+
+final ruleListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) => ref.watch(ruleGatewayProvider).listRules(roomId),
+    );
+
 List<Map<String, dynamic>> upsertRule(
   List<Map<String, dynamic>> rules,
   Map<String, dynamic> updated,
@@ -334,8 +343,20 @@ class _RulesPageState extends ConsumerState<RulesPage> {
   bool _disposed = false;
   int _loadVersion = 0;
 
-  RuleGateway get _gateway =>
-      widget.gateway ?? ApiRuleGateway(ref.read(apiClientProvider));
+  RuleGateway get _gateway => widget.gateway ?? ref.read(ruleGatewayProvider);
+
+  Future<List<Map<String, dynamic>>> _listRules() {
+    final gateway = widget.gateway;
+    if (gateway != null) return gateway.listRules(widget.roomId);
+    ref.invalidate(ruleListProvider(widget.roomId));
+    return ref.read(ruleListProvider(widget.roomId).future);
+  }
+
+  void _invalidateRuleList() {
+    if (widget.gateway == null) {
+      ref.invalidate(ruleListProvider(widget.roomId));
+    }
+  }
 
   @override
   void initState() {
@@ -362,7 +383,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
       _error = null;
     });
     try {
-      final rules = await _gateway.listRules(widget.roomId);
+      final rules = await _listRules();
       if (_stale(version)) return;
       setState(() {
         _rules = sortRules(rules);
@@ -389,6 +410,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
         'enabled': enabled,
       });
       if (_disposed) return;
+      _invalidateRuleList();
       setState(() => _rules = upsertRule(_rules, updated));
     } catch (error) {
       _showSnack('규칙 변경 실패: ${ruleMutationErrorMessage(error)}');
@@ -605,6 +627,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
       destination.dispose();
     });
     if (saved != null && mounted) {
+      _invalidateRuleList();
       setState(() => _rules = upsertRule(_rules, saved));
     }
   }
@@ -653,6 +676,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
       );
       final rule = result['rule'];
       if (!_disposed && rule is Map) {
+        _invalidateRuleList();
         setState(() {
           _rules = upsertRule(_rules, Map<String, dynamic>.from(rule));
           _pendingDraft = null;
