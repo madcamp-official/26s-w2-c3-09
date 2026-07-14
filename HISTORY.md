@@ -305,3 +305,7 @@
 | Android debug build | `UNCONFIGURED` build와 `com.mousekeeper.app` Firebase 활성 build 모두 통과 |
 
 Firebase JSON은 API key가 포함된 provider 설정이므로 `.gitignore`에 유지하고 로컬에만 설치했다. CI와 팀원 환경에는 secret/file injection 방식이 필요하다.
+
+## 2026-07-14 Chat state follow-up
+
+- [x] Mobile ChatPage now centralizes sessions, selected session, message page, pagination cursor, and `hasMoreMessages` in `ChatConversationState`. This keeps the current UI behavior intact while preparing the next `chatSessionListProvider(roomId)` / `chatMessagesProvider(sessionId)` Riverpod split.

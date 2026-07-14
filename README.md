@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Mobile chat conversation state is now centralized in `ChatConversationState`, keeping sessions, selected session, message page, pagination cursor, and `hasMoreMessages` together so the next Riverpod provider split can avoid scattered `setState` reload paths.
 - Mobile chat state now has provider-backed gateway injection and pure reducers for session selection, pagination merge, preview touching, and command-draft patching; no-op updates preserve object identity so later realtime/chat pagination work can avoid full page reloads.
 - RuleDefinition hardening: the Rust file engine now accepts the server/mobile `RuleDefinition` draft shape as well as root-local `rules.json`, maps additive conditions such as modified/created age, size, relative path, file kind, name operators, `TRASH`, and `CREATE_DIR`, records directory entries for safe destination checks, and deduplicates identical `CREATE_DIR` proposals before execution approval.
 - Latency validation: no merge-conflict markers are present; the existing mobile/server/desktop latency hardening was rechecked with focused tests. Mobile Home uses one `/v1/home/summary` load plus WebSocket item patches, the 5-second connection safety reconcile does not refetch Home summary, Desktop keeps 5-second heartbeat with 15/30-second REST reconcile, and pairing status remains isolated at 60/min with 2-second desktop polling.

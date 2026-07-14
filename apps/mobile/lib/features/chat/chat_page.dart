@@ -239,6 +239,59 @@ bool _jsonEquivalent(Object? left, Object? right) {
   return left == right;
 }
 
+class ChatConversationState {
+  ChatConversationState({
+    required List<Map<String, dynamic>> sessions,
+    required List<Map<String, dynamic>> messages,
+    required this.selectedSessionId,
+    required this.messageCursor,
+    required this.hasMoreMessages,
+  }) : sessions = List.unmodifiable(sessions),
+       messages = List.unmodifiable(messages);
+
+  const ChatConversationState.empty()
+    : sessions = const [],
+      messages = const [],
+      selectedSessionId = null,
+      messageCursor = null,
+      hasMoreMessages = false;
+
+  final List<Map<String, dynamic>> sessions;
+  final List<Map<String, dynamic>> messages;
+  final String? selectedSessionId;
+  final String? messageCursor;
+  final bool hasMoreMessages;
+
+  ChatConversationState copyWith({
+    List<Map<String, dynamic>>? sessions,
+    List<Map<String, dynamic>>? messages,
+    String? selectedSessionId,
+    bool clearSelectedSessionId = false,
+    String? messageCursor,
+    bool clearMessageCursor = false,
+    bool? hasMoreMessages,
+  }) => ChatConversationState(
+    sessions: sessions ?? this.sessions,
+    messages: messages ?? this.messages,
+    selectedSessionId: clearSelectedSessionId
+        ? null
+        : selectedSessionId ?? this.selectedSessionId,
+    messageCursor: clearMessageCursor
+        ? null
+        : messageCursor ?? this.messageCursor,
+    hasMoreMessages: hasMoreMessages ?? this.hasMoreMessages,
+  );
+
+  ChatConversationState withLoadedMessages(
+    List<Map<String, dynamic>> messages,
+  ) => copyWith(
+    messages: messages,
+    messageCursor: lastChatMessageId(messages),
+    clearMessageCursor: messages.isEmpty,
+    hasMoreMessages: messages.length == chatMessagePageSize,
+  );
+}
+
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key, required this.roomId, this.gateway});
 
@@ -252,9 +305,7 @@ class ChatPage extends ConsumerStatefulWidget {
 class _ChatPageState extends ConsumerState<ChatPage> {
   final input = TextEditingController();
   final _scrollController = ScrollController();
-  List<Map<String, dynamic>> _sessions = const [];
-  List<Map<String, dynamic>> _messages = const [];
-  String? _selectedSessionId;
+  ChatConversationState _conversation = const ChatConversationState.empty();
   Object? _error;
   bool _loading = true;
   bool _sending = false;
@@ -264,8 +315,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _disposed = false;
   final Set<String> _draftingIds = {};
   int _loadVersion = 0;
-  String? _messageCursor;
-  bool _hasMoreMessages = false;
 
   ChatGateway get _gateway => widget.gateway ?? ref.read(chatGatewayProvider);
 
@@ -298,17 +347,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         if (_stale(version)) return;
         sessions = [created];
       }
-      final selectedId = selectChatSessionId(sessions, _selectedSessionId);
+      final selectedId = selectChatSessionId(
+        sessions,
+        _conversation.selectedSessionId,
+      );
       final messages = selectedId == null
           ? <Map<String, dynamic>>[]
           : await _gateway.listMessages(selectedId);
       if (_stale(version)) return;
       setState(() {
-        _sessions = sessions;
-        _selectedSessionId = selectedId;
-        _messages = messages;
-        _messageCursor = lastChatMessageId(messages);
-        _hasMoreMessages = messages.length == chatMessagePageSize;
+        _conversation = ChatConversationState(
+          sessions: sessions,
+          messages: messages,
+          selectedSessionId: selectedId,
+          messageCursor: lastChatMessageId(messages),
+          hasMoreMessages: messages.length == chatMessagePageSize,
+        );
         _loading = false;
       });
       _scrollToBottom();
@@ -324,8 +378,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> _selectSession(String sessionId) async {
     final version = ++_loadVersion;
     setState(() {
-      _selectedSessionId = sessionId;
-      _messages = const [];
+      _conversation = _conversation.copyWith(
+        selectedSessionId: sessionId,
+        messages: const [],
+        clearMessageCursor: true,
+        hasMoreMessages: false,
+      );
       _loading = true;
       _error = null;
     });
@@ -333,9 +391,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final messages = await _gateway.listMessages(sessionId);
       if (_stale(version)) return;
       setState(() {
-        _messages = messages;
-        _messageCursor = lastChatMessageId(messages);
-        _hasMoreMessages = messages.length == chatMessagePageSize;
+        _conversation = _conversation.withLoadedMessages(messages);
         _loading = false;
       });
       _scrollToBottom();
@@ -355,11 +411,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final created = await _gateway.createSession(widget.roomId);
       if (_disposed) return;
       setState(() {
-        _sessions = [created, ..._sessions];
-        _selectedSessionId = created['id'] as String;
-        _messages = const [];
-        _messageCursor = null;
-        _hasMoreMessages = false;
+        _conversation = _conversation.copyWith(
+          sessions: [created, ..._conversation.sessions],
+          selectedSessionId: created['id'] as String,
+          messages: const [],
+          clearMessageCursor: true,
+          hasMoreMessages: false,
+        );
         _error = null;
       });
     } catch (error) {
@@ -370,22 +428,25 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Future<void> _deleteSelectedSession() async {
-    final sessionId = _selectedSessionId;
+    final sessionId = _conversation.selectedSessionId;
     if (sessionId == null || _deleting) return;
     setState(() => _deleting = true);
     try {
       await _gateway.deleteSession(sessionId);
       if (_disposed) return;
-      final remaining = _sessions
+      final remaining = _conversation.sessions
           .where((session) => session['id'] != sessionId)
           .toList(growable: false);
       final nextId = selectChatSessionId(remaining, null);
       setState(() {
-        _sessions = remaining;
-        _selectedSessionId = nextId;
-        _messages = const [];
-        _messageCursor = null;
-        _hasMoreMessages = false;
+        _conversation = _conversation.copyWith(
+          sessions: remaining,
+          selectedSessionId: nextId,
+          clearSelectedSessionId: nextId == null,
+          messages: const [],
+          clearMessageCursor: true,
+          hasMoreMessages: false,
+        );
       });
       if (nextId != null) {
         await _selectSession(nextId);
@@ -398,7 +459,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Future<void> send() async {
-    final sessionId = _selectedSessionId;
+    final sessionId = _conversation.selectedSessionId;
     final content = input.text.trim();
     if (sessionId == null || content.isEmpty || _sending) return;
     setState(() => _sending = true);
@@ -407,16 +468,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (_disposed) return;
       input.clear();
       final newMessages = <Map<String, dynamic>>[
-        ..._messages,
+        ..._conversation.messages,
         if (result['message'] is Map<String, dynamic>)
           result['message'] as Map<String, dynamic>,
         if (result['assistant'] is Map<String, dynamic>)
           result['assistant'] as Map<String, dynamic>,
       ];
       setState(() {
-        _messages = newMessages;
-        _messageCursor = lastChatMessageId(newMessages);
-        _sessions = touchChatSessionPreview(_sessions, sessionId, content);
+        _conversation = _conversation.copyWith(
+          messages: newMessages,
+          messageCursor: lastChatMessageId(newMessages),
+          clearMessageCursor: newMessages.isEmpty,
+          sessions: touchChatSessionPreview(
+            _conversation.sessions,
+            sessionId,
+            content,
+          ),
+        );
       });
       _scrollToBottom();
       final notice = chatSendNotice(result);
@@ -429,18 +497,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   Future<void> _loadMoreMessages() async {
-    final sessionId = _selectedSessionId;
-    final cursor = _messageCursor;
+    final sessionId = _conversation.selectedSessionId;
+    final cursor = _conversation.messageCursor;
     if (sessionId == null || cursor == null || _loadingMore) return;
     setState(() => _loadingMore = true);
     try {
       final next = await _gateway.listMessages(sessionId, cursor: cursor);
-      if (_disposed || sessionId != _selectedSessionId) return;
-      final merged = mergeChatMessages(_messages, next);
+      if (_disposed || sessionId != _conversation.selectedSessionId) return;
+      final merged = mergeChatMessages(_conversation.messages, next);
       setState(() {
-        _messages = merged;
-        _messageCursor = lastChatMessageId(merged);
-        _hasMoreMessages = next.length == chatMessagePageSize;
+        _conversation = _conversation.copyWith(
+          messages: merged,
+          messageCursor: lastChatMessageId(merged),
+          clearMessageCursor: merged.isEmpty,
+          hasMoreMessages: next.length == chatMessagePageSize,
+        );
       });
       _scrollToBottom();
     } catch (error) {
@@ -486,10 +557,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   void _patchDraftMessage(String draftId, Object? draft) {
-    final next = patchCommandDraftMessages(_messages, draftId, draft);
-    if (identical(next, _messages)) return;
+    final next = patchCommandDraftMessages(
+      _conversation.messages,
+      draftId,
+      draft,
+    );
+    if (identical(next, _conversation.messages)) return;
     setState(() {
-      _messages = next;
+      _conversation = _conversation.copyWith(messages: next);
     });
   }
 
@@ -529,14 +604,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     body: Column(
       children: [
         _SessionBar(
-          sessions: _sessions,
-          selectedSessionId: _selectedSessionId,
+          sessions: _conversation.sessions,
+          selectedSessionId: _conversation.selectedSessionId,
           creating: _creating,
           deleting: _deleting,
           onCreate: _createSession,
           onDelete: _deleteSelectedSession,
           onSelected: (id) {
-            if (id != _selectedSessionId) unawaited(_selectSession(id));
+            if (id != _conversation.selectedSessionId) {
+              unawaited(_selectSession(id));
+            }
           },
         ),
         Expanded(child: _buildBody()),
@@ -550,7 +627,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     key: const ValueKey('chat-message-field'),
                     controller: input,
                     maxLength: 2000,
-                    enabled: _selectedSessionId != null && !_sending,
+                    enabled:
+                        _conversation.selectedSessionId != null && !_sending,
                     decoration: const InputDecoration(
                       hintText: '메시지',
                       border: OutlineInputBorder(),
@@ -562,7 +640,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 IconButton(
                   key: const ValueKey('chat-send-button'),
                   tooltip: '보내기',
-                  onPressed: _sending || _selectedSessionId == null
+                  onPressed: _sending || _conversation.selectedSessionId == null
                       ? null
                       : send,
                   icon: const Icon(Icons.send),
@@ -595,12 +673,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         ),
       );
     }
-    if (_selectedSessionId == null) {
+    if (_conversation.selectedSessionId == null) {
       return const Center(
         child: Text('대화가 없습니다.\n새 대화를 만들어 주세요.', textAlign: TextAlign.center),
       );
     }
-    if (_messages.isEmpty) {
+    if (_conversation.messages.isEmpty) {
       return const Center(
         child: Text(
           '아직 메시지가 없습니다.\n정리 요청은 이 대화에서 확인 카드로 진행됩니다.',
@@ -611,9 +689,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.all(16),
-      itemCount: _messages.length + (_hasMoreMessages ? 1 : 0),
+      itemCount:
+          _conversation.messages.length +
+          (_conversation.hasMoreMessages ? 1 : 0),
       itemBuilder: (context, index) {
-        if (index == _messages.length) {
+        if (index == _conversation.messages.length) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: OutlinedButton.icon(
@@ -632,7 +712,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           );
         }
         return _ChatBubble(
-          message: _messages[index],
+          message: _conversation.messages[index],
           busyDraftIds: _draftingIds,
           onConfirmDraft: (draftId) => unawaited(_confirmCommandDraft(draftId)),
           onRejectDraft: (draftId) => unawaited(_rejectCommandDraft(draftId)),

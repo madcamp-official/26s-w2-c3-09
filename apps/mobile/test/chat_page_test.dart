@@ -42,6 +42,37 @@ void main() {
     );
   });
 
+  test('chat conversation state keeps selection and pagination together', () {
+    final state = ChatConversationState(
+      sessions: [_session('s1', 'first session')],
+      messages: const [],
+      selectedSessionId: 's1',
+      messageCursor: null,
+      hasMoreMessages: false,
+    );
+    final page = [
+      for (var index = 0; index < chatMessagePageSize; index += 1)
+        _message('m$index', 's1', 'USER', 'message $index'),
+    ];
+    final loaded = state.withLoadedMessages(page);
+
+    expect(loaded.selectedSessionId, 's1');
+    expect(loaded.messageCursor, 'm${chatMessagePageSize - 1}');
+    expect(loaded.hasMoreMessages, true);
+
+    final switching = loaded.copyWith(
+      selectedSessionId: 's2',
+      messages: const [],
+      clearMessageCursor: true,
+      hasMoreMessages: false,
+    );
+
+    expect(switching.selectedSessionId, 's2');
+    expect(switching.messages, isEmpty);
+    expect(switching.messageCursor, isNull);
+    expect(switching.hasMoreMessages, false);
+  });
+
   testWidgets('loads chat sessions and switches selected session', (
     tester,
   ) async {
