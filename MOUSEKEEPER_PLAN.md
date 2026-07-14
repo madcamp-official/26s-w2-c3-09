@@ -96,7 +96,7 @@ B는 다음을 직접 구현하고 최종 결정한다.
 애플리케이션에는 관리 폴더 개수 하드 제한을 넣지 않는다.
 
 ```text
-User 1 ── N Device
+User 1 ── 1 ACTIVE Device
 Device 1 ── N Room
 Room 1 ── 1 Managed Root
 ```
@@ -178,6 +178,7 @@ P1 cache candidate metadata
 - `DevicePairing` 해제와 `Room/ManagedRoot` 연결 해제를 별도 동작으로 취급한다. 둘 다 모바일과 데스크톱에서 요청할 수 있고 성공 event를 받은 양쪽 UI에서 즉시 제거한다.
 - 연결 해제의 정상 반영은 heartbeat 만료를 기다리지 않고 DB transaction과 WebSocket event로 처리한다. heartbeat는 5초, presence TTL은 15초로 줄여 비정상 종료 감지의 보조선으로 사용한다.
 - 활성 desktop device가 하나도 없는 모바일은 메인 IA를 숨기고 pairing code 입력 화면만 표시한다. device는 연결되어 있지만 room이 0개이면 메인 화면의 “연결된 폴더 없음” 상태를 표시한다. 과거 room cache는 연결 해제 event 또는 다음 replay에서 제거한다.
+- 모바일 계정은 동시에 하나의 활성 desktop device만 가진다. 이미 페어링된 상태에서는 새 페어링 진입을 숨기고, 현재 device를 해제한 뒤에만 다른 PC의 코드를 claim할 수 있다. 서버도 동시 claim 경쟁을 포함해 두 번째 활성 device 생성을 `DEVICE_ALREADY_PAIRED`로 거절한다.
 - 호감도 ledger와 완료 대사는 유지할 수 있지만, 호감도 상승으로 외형·accessory·방 테마가 바뀌거나 해금되는 기능은 MVP에서 제거한다.
 - 모바일 파일 화면은 연결된 room 목록 → 폴더 탐색 → 이름 검색 → 다운로드 흐름을 제공한다. 검색은 파일 내용이 아니라 managed root 안의 파일·폴더 이름만 대상으로 하며 A의 경로 경계 검증을 반드시 통과한다.
 
@@ -1111,6 +1112,8 @@ Desktop App
 ```
 
 모바일의 최상위 화면은 서버의 활성 device 목록을 기준으로 gate한다. 활성 desktop device가 없으면 이전 room, 청결도, 파일 목록, 메인 navigation을 렌더링하지 않고 pairing code 입력과 진행 상태만 표시한다. claim 성공 event 또는 REST 확인이 끝나면 메인 화면으로 전환한다.
+
+활성 device가 이미 있으면 설정에는 새 PC 페어링 진입을 노출하지 않고 현재 PC의 `페어링 끊기`만 표시한다. claim API도 동일 사용자에게 두 번째 활성 device를 만들지 않는다.
 
 ### 9.1.1 기기 페어링 해제
 

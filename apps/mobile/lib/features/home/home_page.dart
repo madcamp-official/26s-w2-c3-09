@@ -7,7 +7,6 @@ import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../../core/notifications/push_notifications.dart';
 import '../../core/sync/realtime_controller.dart';
-import '../auth/auth_controller.dart';
 import '../auth/connection_gate_controller.dart';
 import '../chat/chat_page.dart';
 import '../files/files_page.dart';
@@ -128,17 +127,15 @@ class _HomePageState extends ConsumerState<HomePage> {
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        centerTitle: true,
         elevation: 0,
-        title: const Text(
-          'MOUSEKEEPER',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
         actions: [
-          IconButton(
-            tooltip: '로그아웃',
-            onPressed: _signOut,
-            icon: const Icon(Icons.logout),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: _NotificationBell(
+              state: pushNotifications,
+              dimmed: _bubbleStage != _SpeechBubbleStage.hidden,
+              onPressed: () => _showNotificationStatus(pushNotifications),
+            ),
           ),
         ],
       ),
@@ -175,15 +172,15 @@ class _HomePageState extends ConsumerState<HomePage> {
           return _HomeStage(
             backgroundAsset: backgroundAsset,
             mouseAlignment: _mouseAlignment,
-            dimBackground: _bubbleStage != _SpeechBubbleStage.hidden,
             onTapStage: _handleStageTap,
             child: LayoutBuilder(
               builder: (context, constraints) => Stack(
                 children: [
                   Positioned(
-                    top: MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+                    top:
+                        MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
                     left: constraints.maxWidth * 0.05,
-                    right: constraints.maxWidth * 0.05,
+                    right: constraints.maxWidth * 0.35,
                     child: Align(
                       alignment: Alignment.topLeft,
                       child: _ManagedFolderSelector(
@@ -202,24 +199,58 @@ class _HomePageState extends ConsumerState<HomePage> {
                       ),
                     ),
                   ),
-                  Positioned(
-                    top:
-                        MediaQuery.paddingOf(context).top + kToolbarHeight + 86,
-                    left: 16,
-                    right: 16,
-                    child: Column(
-                      children: [
-                        PushNotificationStatusCard(state: pushNotifications),
-                        if (data.isOffline) const OfflineCacheBanner(),
-                        if (data.outboxPending > 0 || data.outboxFailed > 0)
-                          _OutboxNotice(
-                            pending: data.outboxPending,
-                            failed: data.outboxFailed,
-                            onDiscardFailed: () => ref
-                                .read(homeControllerProvider.notifier)
-                                .discardFailedMutations(),
+                  if (data.isOffline ||
+                      data.outboxPending > 0 ||
+                      data.outboxFailed > 0)
+                    Positioned(
+                      top:
+                          MediaQuery.paddingOf(context).top +
+                          kToolbarHeight +
+                          84,
+                      left: constraints.maxWidth * 0.05,
+                      right: constraints.maxWidth * 0.05,
+                      child: Column(
+                        children: [
+                          if (data.isOffline) const OfflineCacheBanner(),
+                          if (data.outboxPending > 0 || data.outboxFailed > 0)
+                            _OutboxNotice(
+                              pending: data.outboxPending,
+                              failed: data.outboxFailed,
+                              onDiscardFailed: () => ref
+                                  .read(homeControllerProvider.notifier)
+                                  .discardFailedMutations(),
+                            ),
+                        ],
+                      ),
+                    ),
+                  Align(
+                    alignment: const Alignment(0, 0.90),
+                    child: _DummyBottomMenu(),
+                  ),
+                  if (devices.isEmpty && rooms.isEmpty)
+                    const Positioned(
+                      left: 18,
+                      right: 18,
+                      bottom: 108,
+                      child: EmptyRoomsCard(),
+                    ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      ignoring: _bubbleStage == _SpeechBubbleStage.hidden,
+                      child: AnimatedOpacity(
+                        duration: const Duration(milliseconds: 160),
+                        opacity: _bubbleStage == _SpeechBubbleStage.hidden
+                            ? 0
+                            : 1,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTapUp: (details) =>
+                              _handleStageTap(details, constraints.biggest),
+                          child: ColoredBox(
+                            color: Colors.black.withValues(alpha: 0.52),
                           ),
-                      ],
+                        ),
+                      ),
                     ),
                   ),
                   Positioned.fill(
@@ -238,21 +269,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                       onChat: selectedRoom == null
                           ? null
                           : () => _openChat(selectedRoom),
-                      onSettings: () =>
-                          _openSettings(devices: devices, rooms: rooms),
+                      onSettings: _openSettings,
                     ),
                   ),
-                  Align(
-                    alignment: const Alignment(0, 0.90),
-                    child: _DummyBottomMenu(),
-                  ),
-                  if (devices.isEmpty && rooms.isEmpty)
-                    const Positioned(
-                      left: 18,
-                      right: 18,
-                      bottom: 108,
-                      child: EmptyRoomsCard(),
-                    ),
                 ],
               ),
             ),
@@ -347,16 +366,19 @@ class _HomePageState extends ConsumerState<HomePage> {
     return rooms.first;
   }
 
-  Future<void> _signOut() async {
-    try {
-      await ref.read(pushNotificationsProvider.notifier).unregister();
-      await ref.read(authControllerProvider.notifier).signOut();
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('로그아웃 준비 실패: $error')));
-    }
+  void _showNotificationStatus(
+    AsyncValue<PushNotificationRegistration> notifications,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          child: PushNotificationStatusCard(state: notifications),
+        ),
+      ),
+    );
   }
 
   void _openFiles(Map<String, dynamic> room) {
@@ -375,15 +397,10 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
   }
 
-  void _openSettings({
-    required List<Map<String, dynamic>> devices,
-    required List<Map<String, dynamic>> rooms,
-  }) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => MouseKeeperSettingsPage(devices: devices, rooms: rooms),
-      ),
-    );
+  void _openSettings() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const MouseKeeperSettingsPage()));
   }
 }
 
@@ -393,14 +410,12 @@ class _HomeStage extends StatelessWidget {
     required this.backgroundAsset,
     required this.mouseAlignment,
     this.onTapStage,
-    this.dimBackground = false,
   });
 
   final Widget child;
   final String? backgroundAsset;
   final Offset mouseAlignment;
   final void Function(TapUpDetails details, Size size)? onTapStage;
-  final bool dimBackground;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -417,12 +432,6 @@ class _HomeStage extends StatelessWidget {
             _RoomPanningBackground(
               asset: backgroundAsset,
               mouseAlignment: mouseAlignment,
-            ),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              color: dimBackground
-                  ? Colors.black.withValues(alpha: 0.18)
-                  : Colors.transparent,
             ),
             child,
           ],
@@ -513,16 +522,13 @@ class _ManagedFolderSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.90),
-      borderRadius: BorderRadius.circular(22),
-      border: Border.all(
-        color: const Color(0xFF7E5C3F).withValues(alpha: 0.24),
-      ),
+      color: const Color(0xFFFFFAF4).withValues(alpha: 0.96),
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: const Color(0xFFB9A696), width: 1.5),
       boxShadow: [
         BoxShadow(
-          color: Colors.black.withValues(alpha: 0.08),
-          blurRadius: 14,
-          offset: const Offset(0, 8),
+          color: const Color(0xFF3B2A24).withValues(alpha: 0.24),
+          offset: const Offset(3, 3),
         ),
       ],
     ),
@@ -531,7 +537,7 @@ class _ManagedFolderSelector extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.folder_special_outlined, size: 18),
+          const Icon(Icons.folder_outlined, size: 21, color: Color(0xFF4B6482)),
           const SizedBox(width: 8),
           if (rooms.isEmpty)
             const Text('관리 폴더 없음')
@@ -546,8 +552,9 @@ class _ManagedFolderSelector extends StatelessWidget {
                     DropdownMenuItem<String>(
                       value: rooms[index]['id'] as String?,
                       child: Text(
-                        '${index + 1}. ${rooms[index]['name'] as String? ?? '관리 폴더'}',
+                        rooms[index]['name'] as String? ?? '관리 폴더',
                         overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w800),
                       ),
                     ),
                 ],
@@ -605,7 +612,11 @@ class _MousePlayground extends StatelessWidget {
     children: [
       if (bubbleStage != _SpeechBubbleStage.hidden)
         _MouseSpeechBubble(
-          alignment: Offset(mouseAlignment.dx, mouseAlignment.dy + 0.58),
+          alignment: Offset(
+            mouseAlignment.dx - 0.28,
+            mouseAlignment.dy +
+                (bubbleStage == _SpeechBubbleStage.ellipsis ? 0.22 : 0.40),
+          ),
           stage: bubbleStage,
           selectedRoom: selectedRoom,
           onTap: onBubbleTap,
@@ -675,18 +686,17 @@ class _MouseSpeechBubble extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: const Color(0xFFDFF4FF).withValues(alpha: 0.96),
-          borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: const Color(0xFF8AC7E8)),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: const Color(0xFF59748B), width: 2),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.12),
-              blurRadius: 16,
-              offset: const Offset(0, 8),
+              color: Colors.black.withValues(alpha: 0.24),
+              offset: const Offset(3, 3),
             ),
           ],
         ),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: stage == _SpeechBubbleStage.ellipsis
               ? Text(
                   '…',
@@ -695,27 +705,30 @@ class _MouseSpeechBubble extends StatelessWidget {
                     fontWeight: FontWeight.w900,
                   ),
                 )
-              : Wrap(
-                  alignment: WrapAlignment.center,
-                  runSpacing: 8,
-                  spacing: 10,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: onFiles,
-                      icon: const Icon(Icons.folder_open),
-                      label: const Text('파일 목록'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: onChat,
-                      icon: const Icon(Icons.chat_bubble_outline),
-                      label: const Text('대화'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: onSettings,
-                      icon: const Icon(Icons.settings_outlined),
-                      label: const Text('설정'),
-                    ),
-                  ],
+              : SizedBox(
+                  width: 150,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _BubbleMenuButton(
+                        onPressed: onFiles,
+                        icon: Icons.folder_outlined,
+                        label: '파일 목록',
+                      ),
+                      const SizedBox(height: 7),
+                      _BubbleMenuButton(
+                        onPressed: onChat,
+                        icon: Icons.chat_bubble_outline,
+                        label: '대화',
+                      ),
+                      const SizedBox(height: 7),
+                      _BubbleMenuButton(
+                        onPressed: onSettings,
+                        icon: Icons.settings_outlined,
+                        label: '설정',
+                      ),
+                    ],
+                  ),
                 ),
         ),
       ),
@@ -723,60 +736,124 @@ class _MouseSpeechBubble extends StatelessWidget {
   );
 }
 
-class _DummyBottomMenu extends StatelessWidget {
+class _BubbleMenuButton extends StatelessWidget {
+  const _BubbleMenuButton({
+    required this.onPressed,
+    required this.icon,
+    required this.label,
+  });
+
+  final VoidCallback? onPressed;
+  final IconData icon;
+  final String label;
+
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.90),
-      borderRadius: BorderRadius.circular(28),
-      boxShadow: [
-        BoxShadow(
-          color: Colors.black.withValues(alpha: 0.08),
-          blurRadius: 16,
-          offset: const Offset(0, 8),
-        ),
-      ],
-    ),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(
-        children: const [
-          Expanded(
-            child: _DummyBottomMenuButton(icon: Icons.extension, label: '퍼즐'),
-          ),
-          Expanded(
-            child: _DummyBottomMenuButton(icon: Icons.restaurant, label: '식사'),
-          ),
-          Expanded(
-            child: _DummyBottomMenuButton(
-              icon: Icons.sports_esports,
-              label: '게임',
-            ),
-          ),
-        ],
+  Widget build(BuildContext context) => SizedBox(
+    width: double.infinity,
+    height: 38,
+    child: OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 18),
+      label: Text(label),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: const Color(0xFF3B2A24),
+        backgroundColor: const Color(0xFFFFFAF4),
+        side: const BorderSide(color: Color(0xFF3B2A24), width: 1.4),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
       ),
     ),
   );
 }
 
-class _DummyBottomMenuButton extends StatelessWidget {
-  const _DummyBottomMenuButton({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
+class _DummyBottomMenu extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => Opacity(
-    opacity: 0.62,
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) => const Padding(
+    padding: EdgeInsets.symmetric(horizontal: 28),
+    child: Row(
       children: [
-        Icon(icon),
-        const SizedBox(height: 4),
-        Text(label, style: Theme.of(context).textTheme.labelMedium),
+        Expanded(child: _DummyBottomMenuButton(label: '퍼즐')),
+        SizedBox(width: 14),
+        Expanded(child: _DummyBottomMenuButton(label: '식사')),
+        SizedBox(width: 14),
+        Expanded(child: _DummyBottomMenuButton(label: '독서')),
       ],
     ),
   );
+}
+
+class _DummyBottomMenuButton extends StatelessWidget {
+  const _DummyBottomMenuButton({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 48,
+    child: OutlinedButton(
+      onPressed: null,
+      style: OutlinedButton.styleFrom(
+        disabledForegroundColor: const Color(0xFF3B2A24),
+        disabledBackgroundColor: const Color(
+          0xFFFFFAF4,
+        ).withValues(alpha: 0.94),
+        side: const BorderSide(color: Color(0xFFB9A696), width: 1.5),
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+      ),
+      child: Text(label),
+    ),
+  );
+}
+
+class _NotificationBell extends StatelessWidget {
+  const _NotificationBell({
+    required this.state,
+    required this.dimmed,
+    required this.onPressed,
+  });
+
+  final AsyncValue<PushNotificationRegistration> state;
+  final bool dimmed;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final needsAttention =
+        state.hasError ||
+        state.asData?.value.status != PushNotificationStatus.active;
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 160),
+      opacity: dimmed ? 0.38 : 1,
+      child: IgnorePointer(
+        ignoring: dimmed,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            IconButton(
+              tooltip: '알림 상태',
+              onPressed: onPressed,
+              icon: const Icon(
+                Icons.notifications_none_rounded,
+                color: Color(0xFF4B6482),
+                size: 31,
+              ),
+            ),
+            if (needsAttention)
+              const Positioned(
+                top: 8,
+                right: 7,
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Color(0xFFD66355),
+                    shape: BoxShape.circle,
+                  ),
+                  child: SizedBox.square(dimension: 9),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _OutboxNotice extends StatelessWidget {
@@ -833,7 +910,13 @@ class PushNotificationStatusCard extends StatelessWidget {
       ),
     ),
     data: (registration) => switch (registration.status) {
-      PushNotificationStatus.active => const SizedBox.shrink(),
+      PushNotificationStatus.active => const Card(
+        child: ListTile(
+          leading: Icon(Icons.notifications_active_outlined),
+          title: Text('알림이 연결되어 있어요'),
+          subtitle: Text('작업 제안과 실행 결과를 이 휴대폰에서 알려드립니다.'),
+        ),
+      ),
       PushNotificationStatus.permissionDenied => const Card(
         color: Color(0xFFFFF3E0),
         child: ListTile(

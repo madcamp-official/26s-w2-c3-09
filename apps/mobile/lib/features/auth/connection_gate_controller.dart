@@ -320,6 +320,9 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
   }
 
   Future<void> claimAndConfirm(String code) async {
+    if (state.asData?.value.hasActiveDevice ?? false) {
+      throw StateError('DEVICE_ALREADY_PAIRED');
+    }
     await ref.read(connectionControlApiProvider).claimPairing(code);
     Object? latestError;
     for (var attempt = 0; attempt < 10; attempt++) {

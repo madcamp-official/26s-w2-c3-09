@@ -10,7 +10,7 @@ import {
 } from '@mousekeeper/contracts';
 import { devices, pairingSessions, type Database } from '@mousekeeper/database';
 import { createHmac, randomBytes, randomInt } from 'node:crypto';
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { sign } from 'jsonwebtoken';
 import { DATABASE } from '../database/database.module';
@@ -74,6 +74,22 @@ export class PairingService {
           code: 'NOT_FOUND',
           message: 'Pairing code is invalid or expired',
         });
+      // Pairing is a one-active-desktop invariant. The transaction-scoped
+      // advisory lock also closes the race between two codes claimed at once.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
+      const activeDevice = (
+        await tx
+          .select({ id: devices.id })
+          .from(devices)
+          .where(and(eq(devices.userId, userId), eq(devices.status, 'ACTIVE')))
+          .limit(1)
+      )[0];
+      if (activeDevice) {
+        throw new ConflictException({
+          code: 'DEVICE_ALREADY_PAIRED',
+          message: 'Disconnect the current desktop before pairing another one',
+        });
+      }
       const device = (
         await tx
           .insert(devices)

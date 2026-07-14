@@ -1,76 +1,222 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../auth/pairing_page.dart';
+import '../../core/notifications/push_notifications.dart';
+import '../auth/auth_controller.dart';
+import '../auth/connection_gate_controller.dart';
 
-class MouseKeeperSettingsPage extends StatelessWidget {
-  const MouseKeeperSettingsPage({
-    super.key,
-    required this.devices,
-    required this.rooms,
-  });
+const _ink = Color(0xFF3B2A24);
+const _paper = Color(0xFFFFFAF4);
+const _paperMuted = Color(0xFFF3E8DC);
+const _line = Color(0xFFB9A696);
+const _danger = Color(0xFFA83B35);
 
-  final List<Map<String, dynamic>> devices;
-  final List<Map<String, dynamic>> rooms;
+class MouseKeeperSettingsPage extends ConsumerWidget {
+  const MouseKeeperSettingsPage({super.key});
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('설정')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _SettingsSection(
-          icon: Icons.computer_outlined,
-          title: '연결된 PC',
-          subtitle: devices.isEmpty
-              ? '아직 연결된 PC가 없습니다.'
-              : '${devices.length}대의 PC가 연결되어 있습니다.',
-          children: devices.isEmpty
-              ? const [_EmptySettingsText('데스크톱 앱에서 6자리 코드를 만든 뒤 페어링해 주세요.')]
-              : [
-                  for (final device in devices)
-                    _SettingsInfoTile(
-                      icon: Icons.desktop_windows_outlined,
-                      title: _deviceName(device),
-                      subtitle: _presenceLabel(device['presence'] as String?),
-                    ),
-                ],
+  Widget build(BuildContext context, WidgetRef ref) {
+    final gate = ref.watch(connectionGateControllerProvider);
+    final data = gate.asData?.value;
+    final device = data?.devices.firstOrNull;
+    final rooms = data?.rooms ?? const <Map<String, dynamic>>[];
+    final deviceId = device?['id'] as String?;
+    final operation = deviceId == null
+        ? null
+        : data?.operation(DisconnectKind.device, deviceId);
+    final isDisconnecting = operation?.phase == DisconnectPhase.disconnecting;
+    final disconnectFailed = operation?.phase == DisconnectPhase.failed;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4E9DC),
+      appBar: AppBar(
+        title: const Text(
+          'MOUSEKEEPER 설정',
+          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -0.4),
         ),
-        const SizedBox(height: 14),
-        _SettingsSection(
-          icon: Icons.link_outlined,
-          title: '페어링 설정',
-          subtitle: '새 PC 연결은 데스크톱 앱의 6자리 코드로 진행합니다.',
-          children: [
-            FilledButton.icon(
-              onPressed: () => Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (_) => const PairingPage())),
-              icon: const Icon(Icons.add_link_outlined),
-              label: const Text('새 PC 페어링'),
+      ),
+      body: gate.isLoading && data == null
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(18, 12, 18, 32),
+              children: [
+                const _SettingsHeading(
+                  eyebrow: 'CONNECTION',
+                  title: '지금 연결된 공간',
+                  description: '모바일은 한 번에 한 대의 데스크탑과 연결됩니다.',
+                ),
+                const SizedBox(height: 14),
+                _PixelPanel(
+                  child: device == null
+                      ? const _EmptySettingsText('현재 연결된 데스크탑이 없습니다.')
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _SettingsInfoTile(
+                              icon: Icons.desktop_windows_outlined,
+                              title: _deviceName(device),
+                              subtitle: _presenceLabel(
+                                device['presence'] as String?,
+                              ),
+                              trailing: _PresenceDot(
+                                online: device['presence'] != 'OFFLINE',
+                              ),
+                            ),
+                            const Divider(height: 26),
+                            Text(
+                              '다른 PC를 연결하려면 먼저 현재 페어링을 끊어야 합니다.',
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: const Color(0xFF77675D)),
+                            ),
+                            const SizedBox(height: 12),
+                            OutlinedButton.icon(
+                              key: const ValueKey('disconnect-paired-desktop'),
+                              onPressed: isDisconnecting
+                                  ? null
+                                  : () => disconnectFailed
+                                        ? ref
+                                              .read(
+                                                connectionGateControllerProvider
+                                                    .notifier,
+                                              )
+                                              .retryDisconnect(
+                                                DisconnectKind.device,
+                                                deviceId!,
+                                              )
+                                        : _confirmDisconnect(
+                                            context,
+                                            ref,
+                                            deviceId!,
+                                            _deviceName(device),
+                                          ),
+                              icon: isDisconnecting
+                                  ? const SizedBox.square(
+                                      dimension: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      disconnectFailed
+                                          ? Icons.refresh
+                                          : Icons.link_off,
+                                    ),
+                              label: Text(
+                                isDisconnecting
+                                    ? '페어링 끊는 중…'
+                                    : disconnectFailed
+                                    ? '페어링 끊기 다시 시도'
+                                    : '페어링 끊기',
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: _danger,
+                                side: const BorderSide(
+                                  color: _danger,
+                                  width: 1.5,
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
+                              ),
+                            ),
+                            if (disconnectFailed) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                operation?.message ?? '연결 해제에 실패했습니다.',
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.bodySmall?.copyWith(color: _danger),
+                              ),
+                            ],
+                          ],
+                        ),
+                ),
+                const SizedBox(height: 24),
+                const _SettingsHeading(
+                  eyebrow: 'MANAGED FOLDERS',
+                  title: '연결된 관리 폴더',
+                  description: 'PC에서 등록한 폴더만 MouseKeeper가 안전하게 관리합니다.',
+                ),
+                const SizedBox(height: 14),
+                _PixelPanel(
+                  child: rooms.isEmpty
+                      ? const _EmptySettingsText('PC에서 관리 폴더를 등록하면 여기에 표시됩니다.')
+                      : Column(
+                          children: [
+                            for (
+                              var index = 0;
+                              index < rooms.length;
+                              index++
+                            ) ...[
+                              _SettingsInfoTile(
+                                icon: Icons.folder_outlined,
+                                title:
+                                    rooms[index]['name'] as String? ?? '관리 폴더',
+                                subtitle: _roomSubtitle(rooms[index]),
+                              ),
+                              if (index != rooms.length - 1)
+                                const Divider(height: 20),
+                            ],
+                          ],
+                        ),
+                ),
+                const SizedBox(height: 24),
+                _PixelPanel(
+                  child: TextButton.icon(
+                    onPressed: () => _signOut(context, ref),
+                    icon: const Icon(Icons.logout),
+                    label: const Text('로그아웃'),
+                  ),
+                ),
+              ],
             ),
-          ],
+    );
+  }
+
+  static Future<void> _confirmDisconnect(
+    BuildContext context,
+    WidgetRef ref,
+    String deviceId,
+    String deviceName,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('PC 페어링을 끊을까요?'),
+        content: Text(
+          '$deviceName 연결과 관리 폴더 표시가 해제됩니다. '
+          'PC의 원본 폴더와 파일은 삭제되지 않습니다.',
         ),
-        const SizedBox(height: 14),
-        _SettingsSection(
-          icon: Icons.folder_special_outlined,
-          title: '연결된 폴더',
-          subtitle: rooms.isEmpty
-              ? '아직 연결된 관리 폴더가 없습니다.'
-              : '${rooms.length}개의 관리 폴더가 연결되어 있습니다.',
-          children: rooms.isEmpty
-              ? const [_EmptySettingsText('PC에서 관리 폴더를 등록하면 여기에 표시됩니다.')]
-              : [
-                  for (final room in rooms)
-                    _SettingsInfoTile(
-                      icon: Icons.folder_outlined,
-                      title: room['name'] as String? ?? '관리 폴더',
-                      subtitle: _roomSubtitle(room),
-                    ),
-                ],
-        ),
-      ],
-    ),
-  );
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: _danger),
+            child: const Text('페어링 끊기'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    await ref
+        .read(connectionGateControllerProvider.notifier)
+        .disconnectDevice(deviceId);
+  }
+
+  static Future<void> _signOut(BuildContext context, WidgetRef ref) async {
+    try {
+      await ref.read(pushNotificationsProvider.notifier).unregister();
+      await ref.read(authControllerProvider.notifier).signOut();
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('로그아웃 준비에 실패했습니다: $error')));
+    }
+  }
 
   static String _deviceName(Map<String, dynamic> device) =>
       device['deviceName'] as String? ??
@@ -80,69 +226,76 @@ class MouseKeeperSettingsPage extends StatelessWidget {
   static String _presenceLabel(String? presence) => switch (presence) {
     'ONLINE_IDLE' => '온라인 · 대기 중',
     'ONLINE_EXECUTING' => '온라인 · 작업 중',
-    'OFFLINE' => '오프라인',
+    'DEGRADED' => '연결 불안정',
+    'OFFLINE' => '연결 끊김',
     null => '상태 확인 중',
     _ => presence,
   };
 
   static String _roomSubtitle(Map<String, dynamic> room) {
-    final deviceName = room['deviceName'];
     final cleanliness = room['cleanlinessScore'];
-    final parts = <String>[
-      if (deviceName is String && deviceName.isNotEmpty) deviceName,
-      if (cleanliness is num) '청결도 ${cleanliness.round()}점',
-    ];
-    return parts.isEmpty ? '연결됨' : parts.join(' · ');
+    return cleanliness is num ? '청결도 ${cleanliness.round()}점' : '연결됨';
   }
 }
 
-class _SettingsSection extends StatelessWidget {
-  const _SettingsSection({
-    required this.icon,
+class _SettingsHeading extends StatelessWidget {
+  const _SettingsHeading({
+    required this.eyebrow,
     required this.title,
-    required this.subtitle,
-    required this.children,
+    required this.description,
   });
 
-  final IconData icon;
+  final String eyebrow;
   final String title;
-  final String subtitle;
-  final List<Widget> children;
+  final String description;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          ...children,
-        ],
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        eyebrow,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: const Color(0xFF9A6249),
+          fontWeight: FontWeight.w900,
+          letterSpacing: 1.2,
+        ),
       ),
+      const SizedBox(height: 3),
+      Text(
+        title,
+        style: Theme.of(
+          context,
+        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+      ),
+      const SizedBox(height: 4),
+      Text(
+        description,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: const Color(0xFF77675D),
+          height: 1.4,
+        ),
+      ),
+    ],
+  );
+}
+
+class _PixelPanel extends StatelessWidget {
+  const _PixelPanel({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: _paper,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: _line, width: 1.5),
+      boxShadow: const [
+        BoxShadow(color: Color(0x443B2A24), offset: Offset(4, 4)),
+      ],
     ),
+    child: Padding(padding: const EdgeInsets.all(16), child: child),
   );
 }
 
@@ -151,18 +304,64 @@ class _SettingsInfoTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
+    this.trailing,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
+  final Widget? trailing;
 
   @override
-  Widget build(BuildContext context) => ListTile(
-    contentPadding: EdgeInsets.zero,
-    leading: Icon(icon),
-    title: Text(title),
-    subtitle: Text(subtitle),
+  Widget build(BuildContext context) => Row(
+    children: [
+      DecoratedBox(
+        decoration: BoxDecoration(
+          color: _paperMuted,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _line),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(9),
+          child: Icon(icon, color: _ink, size: 22),
+        ),
+      ),
+      const SizedBox(width: 12),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: const Color(0xFF77675D)),
+            ),
+          ],
+        ),
+      ),
+      trailing ?? const SizedBox.shrink(),
+    ],
+  );
+}
+
+class _PresenceDot extends StatelessWidget {
+  const _PresenceDot({required this.online});
+
+  final bool online;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    width: 11,
+    height: 11,
+    decoration: BoxDecoration(
+      color: online ? const Color(0xFF4E9B67) : const Color(0xFF9A8B82),
+      shape: BoxShape.circle,
+      border: Border.all(color: _paper, width: 2),
+      boxShadow: const [BoxShadow(color: Color(0x553B2A24), blurRadius: 2)],
+    ),
   );
 }
 
@@ -176,9 +375,9 @@ class _EmptySettingsText extends StatelessWidget {
     padding: const EdgeInsets.symmetric(vertical: 8),
     child: Text(
       text,
-      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-        color: Theme.of(context).colorScheme.outline,
-      ),
+      style: Theme.of(
+        context,
+      ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF77675D)),
     ),
   );
 }

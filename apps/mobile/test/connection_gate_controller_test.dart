@@ -235,6 +235,30 @@ void main() {
     },
   );
 
+  test('an active desktop must be disconnected before another claim', () async {
+    api.devices = [
+      {'id': 'device-a', 'status': 'ACTIVE'},
+    ];
+    var claimCalls = 0;
+    api.onClaim = (_) async => claimCalls++;
+    startGate();
+    await container.read(connectionGateControllerProvider.future);
+
+    await expectLater(
+      container
+          .read(connectionGateControllerProvider.notifier)
+          .claimAndConfirm('654321'),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          'DEVICE_ALREADY_PAIRED',
+        ),
+      ),
+    );
+    expect(claimCalls, 0);
+  });
+
   test(
     'paired device event upserts the gate without a REST reconcile',
     () async {
