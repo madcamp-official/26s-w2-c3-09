@@ -15,6 +15,7 @@ import {
 } from '@mousekeeper/contracts';
 import {
   chatMessages,
+  chatReadStates,
   chatSessions,
   commandDrafts,
   commands,
@@ -24,7 +25,7 @@ import {
   rooms,
   type Database,
 } from '@mousekeeper/database';
-import { and, asc, desc, eq, gt, isNull, ne, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { mapAiResultToCommandDraft } from '../ai/ai-command-draft.mapper';
 import { AI_PROVIDER, type AiProvider } from '../ai/ai.provider';
@@ -129,6 +130,7 @@ export class ChatService {
     return this.publicSession(
       updated,
       await this.latestPreview(this.db, updated.id),
+      await this.sessionCounters(this.db, updated),
     );
   }
 
@@ -149,7 +151,69 @@ export class ChatService {
     return this.publicSession(
       updated,
       await this.latestPreview(this.db, updated.id),
+      await this.sessionCounters(this.db, updated),
     );
+  }
+
+  async markSessionRead(
+    userId: string,
+    sessionId: string,
+    lastReadMessageId?: string,
+  ) {
+    return this.db.transaction(async (tx) => {
+      const session = await this.requireOwnedSessionIn(tx, userId, sessionId);
+      const readMessage = lastReadMessageId
+        ? await this.requireSessionMessageIn(tx, session.id, lastReadMessageId)
+        : await this.latestSessionMessageIn(tx, session.id);
+      const now = new Date();
+      const readState = (
+        await tx
+          .insert(chatReadStates)
+          .values({
+            userId,
+            sessionId: session.id,
+            lastReadMessageId: readMessage?.id ?? null,
+            readAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: [chatReadStates.userId, chatReadStates.sessionId],
+            set: {
+              lastReadMessageId: readMessage?.id ?? null,
+              readAt: now,
+              updatedAt: now,
+            },
+          })
+          .returning()
+      )[0]!;
+      await tx
+        .update(chatSessions)
+        .set({ updatedAt: now })
+        .where(eq(chatSessions.id, session.id));
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId: session.roomId,
+        eventType: 'chat.session.read',
+        aggregateType: 'chat_session',
+        aggregateId: session.id,
+        payload: {
+          sessionId: session.id,
+          lastReadMessageId: readState.lastReadMessageId,
+          readAt: readState.readAt.toISOString(),
+        },
+      });
+      return this.publicSession(
+        { ...session, updatedAt: now },
+        await this.latestPreview(tx, session.id),
+        {
+          unreadCount: 0,
+          pendingActionCount: await this.pendingActionCount(tx, session.id),
+          lastReadMessageId: readState.lastReadMessageId,
+          readAt: readState.readAt,
+        },
+      );
+    });
   }
 
   async listMessages(
@@ -1071,7 +1135,11 @@ export class ChatService {
     const result = [];
     for (const session of sessions) {
       result.push(
-        this.publicSession(session, await this.latestPreview(db, session.id)),
+        this.publicSession(
+          session,
+          await this.latestPreview(db, session.id),
+          await this.sessionCounters(db, session),
+        ),
       );
     }
     return result;
@@ -1089,9 +1157,119 @@ export class ChatService {
     return latest?.content.slice(0, 120) ?? '';
   }
 
+  private async latestSessionMessageIn(db: DbExecutor, sessionId: string) {
+    return (
+      await db
+        .select()
+        .from(chatMessages)
+        .where(eq(chatMessages.sessionId, sessionId))
+        .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
+        .limit(1)
+    )[0];
+  }
+
+  private async requireSessionMessageIn(
+    db: DbExecutor,
+    sessionId: string,
+    messageId: string,
+  ) {
+    const message = (
+      await db
+        .select()
+        .from(chatMessages)
+        .where(
+          and(eq(chatMessages.id, messageId), eq(chatMessages.sessionId, sessionId)),
+        )
+        .limit(1)
+    )[0];
+    if (!message) throw new NotFoundException({ code: 'NOT_FOUND' });
+    return message;
+  }
+
+  private async sessionCounters(
+    db: DbExecutor,
+    session: typeof chatSessions.$inferSelect,
+  ) {
+    const readState = (
+      await db
+        .select()
+        .from(chatReadStates)
+        .where(
+          and(
+            eq(chatReadStates.userId, session.userId),
+            eq(chatReadStates.sessionId, session.id),
+          ),
+        )
+        .limit(1)
+    )[0];
+    let unreadCount = 0;
+    if (readState?.lastReadMessageId) {
+      const readMessage = await this.requireSessionMessageIn(
+        db,
+        session.id,
+        readState.lastReadMessageId,
+      );
+      unreadCount = await this.unreadCountAfter(db, session.id, readMessage.createdAt);
+    } else {
+      unreadCount = await this.unreadCountAfter(db, session.id, null);
+    }
+    return {
+      unreadCount,
+      pendingActionCount: await this.pendingActionCount(db, session.id),
+      lastReadMessageId: readState?.lastReadMessageId ?? null,
+      readAt: readState?.readAt ?? null,
+    };
+  }
+
+  private async unreadCountAfter(
+    db: DbExecutor,
+    sessionId: string,
+    afterCreatedAt: Date | null,
+  ) {
+    const row = (
+      await db
+        .select({ value: sql<number>`count(*)::int` })
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.sessionId, sessionId),
+            ne(chatMessages.senderType, 'USER'),
+            ...(afterCreatedAt ? [gt(chatMessages.createdAt, afterCreatedAt)] : []),
+          ),
+        )
+    )[0];
+    return Number(row?.value ?? 0);
+  }
+
+  private async pendingActionCount(db: DbExecutor, sessionId: string) {
+    const row = (
+      await db
+        .select({ value: sql<number>`count(*)::int` })
+        .from(commandDrafts)
+        .where(
+          and(
+            eq(commandDrafts.sessionId, sessionId),
+            eq(commandDrafts.status, 'DRAFT'),
+          ),
+        )
+    )[0];
+    return Number(row?.value ?? 0);
+  }
+
   private publicSession(
     session: typeof chatSessions.$inferSelect,
     messagePreview: string,
+    counters: {
+      unreadCount: number;
+      pendingActionCount: number;
+      lastReadMessageId: string | null;
+      readAt: Date | null;
+    } = {
+      unreadCount: 0,
+      pendingActionCount: 0,
+      lastReadMessageId: null,
+      readAt: null,
+    },
   ) {
     return {
       id: session.id,
@@ -1103,6 +1281,10 @@ export class ChatService {
       updatedAt: session.updatedAt,
       deletedAt: session.deletedAt,
       messagePreview,
+      unreadCount: counters.unreadCount,
+      pendingActionCount: counters.pendingActionCount,
+      lastReadMessageId: counters.lastReadMessageId,
+      readAt: counters.readAt,
     };
   }
 

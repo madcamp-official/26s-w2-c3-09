@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   chatMessages,
+  chatReadStates,
   chatSessions,
   commandDrafts,
   commands,
@@ -153,6 +154,8 @@ describeDatabase('ChatService PostgreSQL integration', () => {
       id: session.id,
       title: 'Please clean the Downloads folder',
       messagePreview: 'Please clean the Downloads folder',
+      unreadCount: 0,
+      pendingActionCount: 0,
     });
   });
 
@@ -217,12 +220,35 @@ describeDatabase('ChatService PostgreSQL integration', () => {
       messageType: 'COMMAND_DRAFT',
       content: 'Rename reports/old.pdf to final.pdf',
     });
+    if (!result.assistant) throw new Error('Expected assistant draft message');
 
     const drafts = await connection.db
       .select()
       .from(commandDrafts)
       .where(eq(commandDrafts.sessionId, session.id));
     expect(drafts).toHaveLength(1);
+    expect((await service.listSessions(userId, roomId))[0]).toMatchObject({
+      id: session.id,
+      unreadCount: 1,
+      pendingActionCount: 1,
+      lastReadMessageId: null,
+      readAt: null,
+    });
+
+    const read = await service.markSessionRead(userId, session.id);
+    expect(read).toMatchObject({
+      id: session.id,
+      unreadCount: 0,
+      pendingActionCount: 1,
+    });
+    expect(read.lastReadMessageId).toEqual(result.assistant.id);
+    expect(read.readAt).toEqual(expect.any(Date));
+    expect((await service.listSessions(userId, roomId))[0]).toMatchObject({
+      id: session.id,
+      unreadCount: 0,
+      pendingActionCount: 1,
+      lastReadMessageId: result.assistant.id,
+    });
     expect(drafts[0]).toMatchObject({
       status: 'DRAFT',
       intent: 'RENAME',
@@ -309,6 +335,10 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     });
     expect(command).not.toHaveProperty('idempotencyKey');
     expect(command).not.toHaveProperty('createdByUserId');
+    expect((await service.listSessions(userId, roomId))[0]).toMatchObject({
+      id: session.id,
+      pendingActionCount: 0,
+    });
 
     const replay = await service.confirmCommandDraft(
       userId,
@@ -639,6 +669,7 @@ describeDatabase('ChatService PostgreSQL integration', () => {
 
   afterEach(async () => {
     await connection.db.delete(syncEvents).where(eq(syncEvents.userId, userId));
+    await connection.db.delete(chatReadStates).where(eq(chatReadStates.userId, userId));
     await connection.db
       .delete(commandDrafts)
       .where(eq(commandDrafts.roomId, roomId));

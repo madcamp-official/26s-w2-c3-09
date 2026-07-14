@@ -475,6 +475,7 @@ class _FakeChatGateway implements ChatGateway {
   final List<String> confirmedDraftIds = [];
   final List<String> rejectedDraftIds = [];
   final List<String> updatedTitles = [];
+  final List<String> readReceipts = [];
   int createdSessions = 0;
   int sessionLoads = 0;
 
@@ -516,6 +517,24 @@ class _FakeChatGateway implements ChatGateway {
   Future<void> deleteSession(String sessionId) async {
     sessions.removeWhere((session) => session['id'] == sessionId);
     messagesBySession.remove(sessionId);
+  }
+
+  @override
+  Future<Map<String, dynamic>> markSessionRead(
+    String sessionId, {
+    String? lastReadMessageId,
+  }) async {
+    readReceipts.add('$sessionId:${lastReadMessageId ?? ''}');
+    final index = sessions.indexWhere((session) => session['id'] == sessionId);
+    if (index < 0) throw StateError('NOT_FOUND');
+    final updated = {
+      ...sessions[index],
+      'unreadCount': 0,
+      'lastReadMessageId': lastReadMessageId,
+      'readAt': '2026-07-14T00:03:00.000Z',
+    };
+    sessions[index] = updated;
+    return updated;
   }
 
   @override

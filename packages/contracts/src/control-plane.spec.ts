@@ -26,6 +26,7 @@ import {
   markCachedFilesStaleSchema,
   updateSmartCachePolicySchema,
   updateChatSessionSchema,
+  markChatSessionReadSchema,
   createRuleDraftRequestSchema,
   confirmRuleDraftResponseSchema,
   previewRuleDraftSchema,
@@ -897,6 +898,18 @@ describe("chat session contracts", () => {
     expect(updateChatSessionSchema.parse({ title: "Reports" })).toEqual({
       title: "Reports",
     });
+    expect(markChatSessionReadSchema.parse({})).toEqual({});
+    expect(
+      markChatSessionReadSchema.parse({
+        lastReadMessageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a7",
+      }),
+    ).toEqual({
+      lastReadMessageId: "018f4c7b-1ad6-7c95-bf34-5e45881f98a7",
+    });
+    expect(
+      markChatSessionReadSchema.safeParse({ lastReadMessageId: "latest" })
+        .success,
+    ).toBe(false);
     expect(chatMessagesQuerySchema.parse({ limit: "25" })).toEqual({
       limit: 25,
     });

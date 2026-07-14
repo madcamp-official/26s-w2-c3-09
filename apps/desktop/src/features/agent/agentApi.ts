@@ -68,6 +68,10 @@ export type AgentChatSession = {
   created_at: string;
   updated_at: string;
   message_preview: string;
+  unread_count: number;
+  pending_action_count: number;
+  last_read_message_id: string | null;
+  read_at: string | null;
 };
 
 export type AgentChatMessage = {
@@ -371,6 +375,13 @@ export function createAgentChatSession(roomId: string, title?: string) {
 
 export function listAgentChatMessages(sessionId: string) {
   return invokeAgentCommand<AgentChatMessage[]>("list_agent_chat_messages", { sessionId });
+}
+
+export function markAgentChatSessionRead(sessionId: string, lastReadMessageId?: string | null) {
+  return invokeAgentCommand<AgentChatSession>("mark_agent_chat_session_read", {
+    sessionId,
+    lastReadMessageId: lastReadMessageId ?? null
+  });
 }
 
 export function sendAgentChatMessage(sessionId: string, content: string) {

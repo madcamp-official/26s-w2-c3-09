@@ -911,6 +911,11 @@ export const updateChatSessionSchema = z
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, "empty update");
+export const markChatSessionReadSchema = z
+  .object({
+    lastReadMessageId: uuidSchema.optional(),
+  })
+  .strict();
 export const createChatMessageSchema = z
   .object({ content: z.string().trim().min(1).max(2000) })
   .strict();

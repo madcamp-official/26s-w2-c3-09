@@ -96,6 +96,10 @@ pub struct AgentChatSession {
     pub created_at: String,
     pub updated_at: String,
     pub message_preview: String,
+    pub unread_count: u64,
+    pub pending_action_count: u64,
+    pub last_read_message_id: Option<String>,
+    pub read_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -874,6 +878,36 @@ impl AgentRuntime {
             )
             .await
             .and_then(|messages| validate_chat_messages(Some(&session_id), messages));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn mark_chat_session_read(
+        &self,
+        session_id: String,
+        last_read_message_id: Option<String>,
+    ) -> Result<AgentChatSession, AgentError> {
+        validate_opaque_value("chat session id", &session_id, 200)?;
+        if let Some(message_id) = last_read_message_id.as_deref() {
+            validate_opaque_value("last read message id", message_id, 200)?;
+        }
+        let body = match last_read_message_id {
+            Some(message_id) => json!({ "lastReadMessageId": message_id }),
+            None => json!({}),
+        };
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ChatSessionResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/chat-sessions/{session_id}/read"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&body),
+            )
+            .await
+            .and_then(|session| validate_chat_session_any_room(session));
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1790,6 +1824,10 @@ struct ChatSessionResponse {
     created_at: String,
     updated_at: String,
     message_preview: String,
+    unread_count: Option<u64>,
+    pending_action_count: Option<u64>,
+    last_read_message_id: Option<String>,
+    read_at: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2115,8 +2153,19 @@ fn validate_chat_session(
     expected_room_id: &str,
     response: ChatSessionResponse,
 ) -> Result<AgentChatSession, AgentError> {
+    if response.room_id != expected_room_id {
+        return Err(invalid_response_error(
+            "chat session failed response validation",
+        ));
+    }
+    validate_chat_session_any_room(response)
+}
+
+fn validate_chat_session_any_room(
+    response: ChatSessionResponse,
+) -> Result<AgentChatSession, AgentError> {
     if response.id.is_empty()
-        || response.room_id != expected_room_id
+        || response.room_id.is_empty()
         || response.title.trim().is_empty()
         || response.title.chars().count() > 120
         || response.status != "ACTIVE"
@@ -2136,6 +2185,10 @@ fn validate_chat_session(
         created_at: response.created_at,
         updated_at: response.updated_at,
         message_preview: response.message_preview,
+        unread_count: response.unread_count.unwrap_or(0),
+        pending_action_count: response.pending_action_count.unwrap_or(0),
+        last_read_message_id: response.last_read_message_id,
+        read_at: response.read_at,
     })
 }
 

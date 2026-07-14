@@ -173,6 +173,7 @@ pub fn run() {
             commands::agent::list_agent_chat_sessions,
             commands::agent::create_agent_chat_session,
             commands::agent::list_agent_chat_messages,
+            commands::agent::mark_agent_chat_session_read,
             commands::agent::send_agent_chat_message,
             commands::agent::submit_cleanliness_snapshot,
             commands::agent::replay_agent_events,

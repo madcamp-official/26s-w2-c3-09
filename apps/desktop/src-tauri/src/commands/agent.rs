@@ -418,6 +418,31 @@ pub async fn list_agent_chat_messages(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub async fn mark_agent_chat_session_read(
+    session_id: String,
+    last_read_message_id: Option<String>,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentChatSession, String> {
+    runtime
+        .mark_chat_session_read(session_id, last_read_message_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn mark_agent_chat_session_read(
+    runtime: &AgentRuntime,
+    session_id: String,
+    last_read_message_id: Option<String>,
+) -> Result<AgentChatSession, String> {
+    runtime
+        .mark_chat_session_read(session_id, last_read_message_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub async fn send_agent_chat_message(
     session_id: String,
     content: String,

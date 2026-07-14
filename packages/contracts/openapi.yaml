@@ -1107,6 +1107,23 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CreateChatMessageResponse" }
+  /v1/chat-sessions/{sessionId}/read:
+    parameters:
+      - {
+          in: path,
+          name: sessionId,
+          required: true,
+          schema: { type: string, format: uuid },
+        }
+    post:
+      description: Marks a chat session as read for the authenticated user so mobile and desktop badges share one server-side read state.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            { schema: { $ref: "#/components/schemas/MarkChatSessionRead" } }
+      responses:
+        "201": { description: Chat session read state updated }
   /v1/chat-sessions/{sessionId}/command-drafts:
     parameters:
       - {
@@ -1994,6 +2011,10 @@ components:
         updatedAt: { type: string, format: date-time }
         deletedAt: { type: [string, "null"], format: date-time }
         messagePreview: { type: string, maxLength: 120 }
+        unreadCount: { type: integer, minimum: 0 }
+        pendingActionCount: { type: integer, minimum: 0 }
+        lastReadMessageId: { type: [string, "null"], format: uuid }
+        readAt: { type: [string, "null"], format: date-time }
     CreateChatSession:
       type: object
       additionalProperties: false
@@ -2005,6 +2026,11 @@ components:
       minProperties: 1
       properties:
         title: { type: string, minLength: 1, maxLength: 120 }
+    MarkChatSessionRead:
+      type: object
+      additionalProperties: false
+      properties:
+        lastReadMessageId: { type: string, format: uuid }
     CreateChatMessage:
       type: object
       additionalProperties: false

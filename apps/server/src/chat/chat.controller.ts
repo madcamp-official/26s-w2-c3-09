@@ -16,6 +16,7 @@ import {
   createChatMessageSchema,
   createChatSessionSchema,
   createCommandDraftSchema,
+  markChatSessionReadSchema,
   rejectCommandDraftSchema,
   updateChatSessionSchema,
 } from '@mousekeeper/contracts';
@@ -66,6 +67,20 @@ export class ChatController {
     @Param('sessionId') sessionId: string,
   ) {
     return this.chat.deleteSession(p.userId, sessionId);
+  }
+
+  @Post('chat-sessions/:sessionId/read')
+  markSessionRead(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('sessionId') sessionId: string,
+    @Body(new ZodValidationPipe(markChatSessionReadSchema))
+    body: z.infer<typeof markChatSessionReadSchema>,
+  ) {
+    return this.chat.markSessionRead(
+      p.userId,
+      sessionId,
+      body.lastReadMessageId,
+    );
   }
 
   @Get('chat-sessions/:sessionId/messages')

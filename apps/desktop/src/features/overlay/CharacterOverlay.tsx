@@ -14,6 +14,7 @@ import {
   createAgentChatSession,
   listAgentChatMessages,
   listAgentChatSessions,
+  markAgentChatSessionRead,
   sendAgentChatMessage
 } from "../agent/agentApi";
 import type { AgentChatMessage, AgentChatSession } from "../agent/agentApi";
@@ -158,6 +159,7 @@ export function CharacterOverlay() {
     void ensureRoomChatSession(activeRoomId, activeRoomName)
       .then(async (session) => {
         const messages = await listAgentChatMessages(session.session_id);
+        await markAgentChatSessionRead(session.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
         if (cancelled) return;
         setChatSession(session);
         setChatMessages(messages);
@@ -180,7 +182,10 @@ export function CharacterOverlay() {
     if (!chatOpen || !chatSession) return;
     const timer = window.setInterval(() => {
       void listAgentChatMessages(chatSession.session_id)
-        .then(setChatMessages)
+        .then(async (messages) => {
+          await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
+          setChatMessages(messages);
+        })
         .catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(timer);
@@ -323,9 +328,9 @@ export function CharacterOverlay() {
       const session = chatSession ?? (await ensureRoomChatSession(activeRoomId, activeRoomName));
       if (!chatSession) setChatSession(session);
       const result = await sendAgentChatMessage(session.session_id, trimmed);
-      setChatMessages((items) =>
-        appendUniqueMessages(items, [result.message, result.assistant].filter(isChatMessage))
-      );
+      const sentMessages = [result.message, result.assistant].filter(isChatMessage);
+      await markAgentChatSessionRead(session.session_id, lastAgentChatMessageId(sentMessages)).catch(() => undefined);
+      setChatMessages((items) => appendUniqueMessages(items, sentMessages));
       setDraft("");
       setNotice(aiNotice(result.ai_status));
     } catch (cause) {
@@ -538,6 +543,10 @@ function appendUniqueMessages(current: AgentChatMessage[], next: AgentChatMessag
     merged.push(message);
   }
   return merged;
+}
+
+function lastAgentChatMessageId(messages: AgentChatMessage[]) {
+  return messages.length > 0 ? messages[messages.length - 1].message_id : null;
 }
 
 function isChatMessage(message: AgentChatMessage | null): message is AgentChatMessage {

@@ -642,6 +642,32 @@ export const chatMessages = pgTable(
   ],
 );
 
+export const chatReadStates = pgTable(
+  "chat_read_states",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => chatSessions.id),
+    lastReadMessageId: uuid("last_read_message_id").references(
+      () => chatMessages.id,
+    ),
+    readAt: timestamp("read_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("chat_read_states_user_session_idx").on(t.userId, t.sessionId),
+    index("chat_read_states_user_updated_idx").on(t.userId, t.updatedAt),
+  ],
+);
+
 export const commandDrafts = pgTable(
   "command_drafts",
   {

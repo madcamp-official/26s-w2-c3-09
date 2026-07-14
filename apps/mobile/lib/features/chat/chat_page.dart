@@ -14,6 +14,10 @@ abstract interface class ChatGateway {
   Future<Map<String, dynamic>> createSession(String roomId);
   Future<Map<String, dynamic>> updateSession(String sessionId, String title);
   Future<void> deleteSession(String sessionId);
+  Future<Map<String, dynamic>> markSessionRead(
+    String sessionId, {
+    String? lastReadMessageId,
+  });
   Future<List<Map<String, dynamic>>> listMessages(
     String sessionId, {
     String? cursor,
@@ -98,6 +102,14 @@ class ApiChatGateway implements ChatGateway {
   Future<void> deleteSession(String sessionId) async {
     await _api.delete('/v1/chat-sessions/$sessionId');
   }
+
+  @override
+  Future<Map<String, dynamic>> markSessionRead(
+    String sessionId, {
+    String? lastReadMessageId,
+  }) => _api.post('/v1/chat-sessions/$sessionId/read', {
+    if (lastReadMessageId != null) 'lastReadMessageId': lastReadMessageId,
+  });
 
   @override
   Future<List<Map<String, dynamic>>> listMessages(
@@ -477,6 +489,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         );
         _loading = false;
       });
+      unawaited(_markVisibleSessionRead());
       _scrollToBottom();
     } catch (error) {
       if (_stale(version)) return;
@@ -506,6 +519,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _conversation = _conversation.withLoadedMessages(messages);
         _loading = false;
       });
+      unawaited(_markVisibleSessionRead());
       _scrollToBottom();
     } catch (error) {
       if (_stale(version)) return;
@@ -638,6 +652,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ),
         );
       });
+      unawaited(_markVisibleSessionRead());
       _scrollToBottom();
       final notice = chatSendNotice(result);
       if (notice.isNotEmpty) _showSnack(notice);
@@ -665,6 +680,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           hasMoreMessages: next.length == chatMessagePageSize,
         );
       });
+      unawaited(_markVisibleSessionRead());
       _scrollToBottom();
     } catch (error) {
       _showSnack('메시지를 더 불러오지 못했습니다: ${chatErrorMessage(error)}');
@@ -704,6 +720,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           hasMoreMessages: received.length == chatMessagePageSize,
         );
       });
+      unawaited(_markVisibleSessionRead());
       _scrollToBottom();
     } catch (_) {
       // Realtime chat events are a latency optimization. If this targeted
@@ -717,7 +734,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> _refreshSessionsForRealtime(
     RealtimeChatMessageUpdate update,
   ) async {
-    if (update.roomId != null && update.roomId != widget.roomId) return;
+    await _refreshSessionsForRealtimeRoom(update.roomId);
+  }
+
+  Future<void> _refreshSessionsForRealtimeRoom(String? roomId) async {
+    if (roomId != null && roomId != widget.roomId) return;
     if (_realtimeSessionRefreshInFlight) return;
     _realtimeSessionRefreshInFlight = true;
     try {
@@ -746,6 +767,28 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // replace the visible conversation with an error page.
     } finally {
       _realtimeSessionRefreshInFlight = false;
+    }
+  }
+
+  Future<void> _markVisibleSessionRead() async {
+    final sessionId = _conversation.selectedSessionId;
+    if (sessionId == null) return;
+    try {
+      final updated = await _gateway.markSessionRead(
+        sessionId,
+        lastReadMessageId: lastChatMessageId(_conversation.messages),
+      );
+      if (_disposed || sessionId != _conversation.selectedSessionId) return;
+      _invalidateChatReadModels(sessionId: sessionId);
+      setState(() {
+        _conversation = _conversation.copyWith(
+          sessions: replaceChatSession(_conversation.sessions, updated),
+        );
+      });
+    } catch (_) {
+      // Read state only drives shared badges/notifications. Message display is
+      // still backed by durable server rows, and the next session refresh can
+      // repair unread counts without hiding the visible conversation.
     }
   }
 
@@ -820,6 +863,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     ref.listen(realtimeChatMessageUpdateProvider, (previous, next) {
       if (next == null || identical(previous, next) || !mounted) return;
       unawaited(_applyRealtimeChatMessage(next));
+    });
+    ref.listen(realtimeChatSessionUpdateProvider, (previous, next) {
+      if (next == null || identical(previous, next) || !mounted) return;
+      unawaited(_refreshSessionsForRealtimeRoom(next.roomId));
     });
     return Scaffold(
       appBar: AppBar(
