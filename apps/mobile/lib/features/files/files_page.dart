@@ -61,16 +61,21 @@ class FileDirectoryState {
     required List<Map<String, dynamic>> entries,
     required this.nextCursor,
     required this.generation,
-  }) : entries = List.unmodifiable(entries);
+    this.isStale = false,
+  }) : entries = List.unmodifiable(
+         entries.map((entry) => Map<String, dynamic>.unmodifiable(entry)),
+       );
 
   const FileDirectoryState.empty()
     : entries = const [],
       nextCursor = null,
-      generation = null;
+      generation = null,
+      isStale = false;
 
   final List<Map<String, dynamic>> entries;
   final String? nextCursor;
   final String? generation;
+  final bool isStale;
 
   bool get isEmpty => entries.isEmpty;
 
@@ -88,6 +93,258 @@ class FileDirectoryState {
     nextCursor: nextCursor,
     generation: generation,
   );
+
+  FileDirectoryState applyUpdate({
+    required String currentRelativeDirectory,
+    required FileDirectoryUpdate update,
+  }) {
+    final normalizedCurrent = normalizeFileRelativePath(
+      currentRelativeDirectory,
+    );
+    final entry = update.entry;
+    final entryPath = entry == null ? null : _entryRelativePath(entry);
+    final sourcePath = update.previousRelativePath ?? update.relativePath;
+    final sourceParent = sourcePath == null
+        ? null
+        : parentRelativeDirectoryOf(sourcePath);
+    final destinationParent = entryPath == null
+        ? null
+        : parentRelativeDirectoryOf(entryPath);
+
+    return switch (update.kind) {
+      FileDirectoryUpdateKind.added => _addOrMarkStale(
+        normalizedCurrent,
+        update.parentRelativePath ?? destinationParent,
+        entry,
+      ),
+      FileDirectoryUpdateKind.updated => _replaceIfVisible(
+        normalizedCurrent,
+        update.parentRelativePath ?? destinationParent,
+        entry,
+      ),
+      FileDirectoryUpdateKind.removed => _removeIfVisible(
+        normalizedCurrent,
+        update.parentRelativePath ?? sourceParent,
+        sourcePath ?? entryPath,
+      ),
+      FileDirectoryUpdateKind.moved => _moveIfRelevant(
+        normalizedCurrent: normalizedCurrent,
+        sourceParent: sourceParent,
+        sourcePath: sourcePath,
+        destinationParent: update.parentRelativePath ?? destinationParent,
+        entry: entry,
+      ),
+    };
+  }
+
+  FileDirectoryState _addOrMarkStale(
+    String currentRelativeDirectory,
+    String? parentRelativePath,
+    Map<String, dynamic>? entry,
+  ) {
+    if (entry == null ||
+        normalizeFileRelativePath(parentRelativePath ?? '') !=
+            currentRelativeDirectory) {
+      return this;
+    }
+    final path = _entryRelativePath(entry);
+    if (path == null) return this;
+    final existingIndex = _entryIndex(path);
+    if (existingIndex >= 0) return _replaceAt(existingIndex, entry);
+    if (nextCursor != null) return markStale();
+    return _withSortedEntries([...entries, entry]);
+  }
+
+  FileDirectoryState _replaceIfVisible(
+    String currentRelativeDirectory,
+    String? parentRelativePath,
+    Map<String, dynamic>? entry,
+  ) {
+    if (entry == null ||
+        normalizeFileRelativePath(parentRelativePath ?? '') !=
+            currentRelativeDirectory) {
+      return this;
+    }
+    final path = _entryRelativePath(entry);
+    if (path == null) return this;
+    final existingIndex = _entryIndex(path);
+    if (existingIndex < 0) return this;
+    return _replaceAt(existingIndex, entry);
+  }
+
+  FileDirectoryState _removeIfVisible(
+    String currentRelativeDirectory,
+    String? parentRelativePath,
+    String? relativePath,
+  ) {
+    if (relativePath == null ||
+        normalizeFileRelativePath(parentRelativePath ?? '') !=
+            currentRelativeDirectory) {
+      return this;
+    }
+    final existingIndex = _entryIndex(relativePath);
+    if (existingIndex < 0) return this;
+    final next = [...entries]..removeAt(existingIndex);
+    return FileDirectoryState(
+      entries: next,
+      nextCursor: nextCursor,
+      generation: generation,
+      isStale: isStale || nextCursor != null,
+    );
+  }
+
+  FileDirectoryState _moveIfRelevant({
+    required String normalizedCurrent,
+    required String? sourceParent,
+    required String? sourcePath,
+    required String? destinationParent,
+    required Map<String, dynamic>? entry,
+  }) {
+    final sourceInCurrent =
+        sourcePath != null &&
+        normalizeFileRelativePath(sourceParent ?? '') == normalizedCurrent;
+    final destinationInCurrent =
+        entry != null &&
+        normalizeFileRelativePath(destinationParent ?? '') == normalizedCurrent;
+    if (!sourceInCurrent && !destinationInCurrent) return this;
+
+    var nextEntries = [...entries];
+    var changed = false;
+    if (sourcePath != null) {
+      final existingIndex = _entryIndex(sourcePath, nextEntries);
+      if (existingIndex >= 0) {
+        nextEntries.removeAt(existingIndex);
+        changed = true;
+      }
+    }
+    if (destinationInCurrent) {
+      final destinationPath = _entryRelativePath(entry);
+      if (destinationPath == null) return this;
+      final existingIndex = _entryIndex(destinationPath, nextEntries);
+      if (existingIndex >= 0) {
+        final existing = nextEntries[existingIndex];
+        if (!_mapShallowEquals(existing, entry)) {
+          nextEntries[existingIndex] = entry;
+          changed = true;
+        }
+      } else if (nextCursor == null) {
+        nextEntries.add(entry);
+        changed = true;
+      } else {
+        return changed
+            ? FileDirectoryState(
+                entries: nextEntries,
+                nextCursor: nextCursor,
+                generation: generation,
+                isStale: true,
+              )
+            : markStale();
+      }
+    }
+    if (!changed) return this;
+    nextEntries = sortFileDirectoryEntries(nextEntries);
+    return FileDirectoryState(
+      entries: nextEntries,
+      nextCursor: nextCursor,
+      generation: generation,
+      isStale: isStale || nextCursor != null,
+    );
+  }
+
+  FileDirectoryState markStale() => isStale
+      ? this
+      : FileDirectoryState(
+          entries: entries,
+          nextCursor: nextCursor,
+          generation: generation,
+          isStale: true,
+        );
+
+  FileDirectoryState _replaceAt(int index, Map<String, dynamic> entry) {
+    final existing = entries[index];
+    if (_mapShallowEquals(existing, entry)) return this;
+    final next = [...entries]..[index] = entry;
+    return _withSortedEntries(next);
+  }
+
+  FileDirectoryState _withSortedEntries(List<Map<String, dynamic>> next) =>
+      FileDirectoryState(
+        entries: sortFileDirectoryEntries(next),
+        nextCursor: nextCursor,
+        generation: generation,
+        isStale: isStale || nextCursor != null,
+      );
+
+  int _entryIndex(
+    String relativePath, [
+    List<Map<String, dynamic>>? candidates,
+  ]) => (candidates ?? entries).indexWhere(
+    (entry) =>
+        _entryRelativePath(entry) == normalizeFileRelativePath(relativePath),
+  );
+}
+
+enum FileDirectoryUpdateKind { added, removed, updated, moved }
+
+class FileDirectoryUpdate {
+  const FileDirectoryUpdate({
+    required this.kind,
+    this.parentRelativePath,
+    this.relativePath,
+    this.previousRelativePath,
+    this.entry,
+  });
+
+  final FileDirectoryUpdateKind kind;
+  final String? parentRelativePath;
+  final String? relativePath;
+  final String? previousRelativePath;
+  final Map<String, dynamic>? entry;
+}
+
+String normalizeFileRelativePath(String value) => value
+    .replaceAll('\\', '/')
+    .split('/')
+    .where((segment) => segment.isNotEmpty)
+    .join('/');
+
+String parentRelativeDirectoryOf(String relativePath) {
+  final normalized = normalizeFileRelativePath(relativePath);
+  final lastSeparator = normalized.lastIndexOf('/');
+  if (lastSeparator < 0) return '';
+  return normalized.substring(0, lastSeparator);
+}
+
+List<Map<String, dynamic>> sortFileDirectoryEntries(
+  Iterable<Map<String, dynamic>> entries,
+) {
+  final sorted = entries.map(Map<String, dynamic>.from).toList();
+  sorted.sort((left, right) {
+    final leftIsDirectory = left['type'] == 'DIRECTORY';
+    final rightIsDirectory = right['type'] == 'DIRECTORY';
+    if (leftIsDirectory != rightIsDirectory) {
+      return leftIsDirectory ? -1 : 1;
+    }
+    final leftName = left['name'];
+    final rightName = right['name'];
+    return (leftName is String ? leftName : '').compareTo(
+      rightName is String ? rightName : '',
+    );
+  });
+  return sorted;
+}
+
+String? _entryRelativePath(Map<String, dynamic> entry) {
+  final path = entry['relativePath'];
+  return path is String ? normalizeFileRelativePath(path) : null;
+}
+
+bool _mapShallowEquals(Map<String, dynamic> left, Map<String, dynamic> right) {
+  if (left.length != right.length) return false;
+  for (final entry in left.entries) {
+    if (right[entry.key] != entry.value) return false;
+  }
+  return true;
 }
 
 Map<String, dynamic> patchFileTransferStateForRealtimeUpdate({
@@ -721,6 +978,23 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                   '목록 버전: ${_directoryState.generation}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+              ),
+            ),
+          if (_directoryState.isStale)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.sync_problem_outlined, size: 16),
+                  const SizedBox(width: 6),
+                  const Expanded(
+                    child: Text('파일 목록이 바뀌었을 수 있어요. 필요하면 새로고침하세요.'),
+                  ),
+                  TextButton(
+                    onPressed: _busy ? null : () => _browse(),
+                    child: const Text('새로고침'),
+                  ),
+                ],
               ),
             ),
           if (_error != null)

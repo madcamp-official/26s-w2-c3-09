@@ -39,6 +39,141 @@ void main() {
     expect(second.generation, 'generation-1');
   });
 
+  test('file directory update patches only the visible directory entries', () {
+    final current = FileDirectoryState(
+      entries: [
+        _entry('reports/old.pdf', name: 'old.pdf'),
+        _entry('reports/work', name: 'work', type: 'DIRECTORY'),
+      ],
+      nextCursor: null,
+      generation: 'generation-1',
+    );
+
+    final added = current.applyUpdate(
+      currentRelativeDirectory: 'reports',
+      update: FileDirectoryUpdate(
+        kind: FileDirectoryUpdateKind.added,
+        parentRelativePath: 'reports',
+        entry: _entry('reports/a-new.pdf', name: 'a-new.pdf'),
+      ),
+    );
+    expect(added.entries.map((entry) => entry['name']), [
+      'work',
+      'a-new.pdf',
+      'old.pdf',
+    ]);
+
+    final unrelated = added.applyUpdate(
+      currentRelativeDirectory: 'reports',
+      update: FileDirectoryUpdate(
+        kind: FileDirectoryUpdateKind.added,
+        parentRelativePath: 'elsewhere',
+        entry: _entry('elsewhere/ignored.pdf', name: 'ignored.pdf'),
+      ),
+    );
+    expect(identical(unrelated, added), isTrue);
+
+    final updated = added.applyUpdate(
+      currentRelativeDirectory: 'reports',
+      update: FileDirectoryUpdate(
+        kind: FileDirectoryUpdateKind.updated,
+        parentRelativePath: 'reports',
+        entry: _entry('reports/old.pdf', name: 'old.pdf', sizeBytes: 99),
+      ),
+    );
+    expect(
+      updated.entries.singleWhere(
+        (entry) => entry['relativePath'] == 'reports/old.pdf',
+      )['sizeBytes'],
+      99,
+    );
+
+    final removed = updated.applyUpdate(
+      currentRelativeDirectory: 'reports',
+      update: const FileDirectoryUpdate(
+        kind: FileDirectoryUpdateKind.removed,
+        parentRelativePath: 'reports',
+        relativePath: 'reports/a-new.pdf',
+      ),
+    );
+    expect(removed.entries.map((entry) => entry['relativePath']), [
+      'reports/work',
+      'reports/old.pdf',
+    ]);
+  });
+
+  test(
+    'file directory move updates source and destination rows without reload',
+    () {
+      final current = FileDirectoryState(
+        entries: [
+          _entry('reports/old.pdf', name: 'old.pdf'),
+          _entry('reports/work', name: 'work', type: 'DIRECTORY'),
+        ],
+        nextCursor: null,
+        generation: 'generation-1',
+      );
+
+      final renamed = current.applyUpdate(
+        currentRelativeDirectory: 'reports',
+        update: FileDirectoryUpdate(
+          kind: FileDirectoryUpdateKind.moved,
+          previousRelativePath: 'reports/old.pdf',
+          parentRelativePath: 'reports',
+          entry: _entry('reports/final.pdf', name: 'final.pdf'),
+        ),
+      );
+
+      expect(renamed.entries.map((entry) => entry['relativePath']), [
+        'reports/work',
+        'reports/final.pdf',
+      ]);
+
+      final movedAway = renamed.applyUpdate(
+        currentRelativeDirectory: 'reports',
+        update: FileDirectoryUpdate(
+          kind: FileDirectoryUpdateKind.moved,
+          previousRelativePath: 'reports/final.pdf',
+          parentRelativePath: 'archive',
+          entry: _entry('archive/final.pdf', name: 'final.pdf'),
+        ),
+      );
+
+      expect(movedAway.entries.map((entry) => entry['relativePath']), [
+        'reports/work',
+      ]);
+    },
+  );
+
+  test(
+    'file directory update marks paginated directory stale when range is uncertain',
+    () {
+      final current = FileDirectoryState(
+        entries: [_entry('reports/middle.pdf', name: 'middle.pdf')],
+        nextCursor: 'offset:200',
+        generation: 'generation-1',
+      );
+
+      final patched = current.applyUpdate(
+        currentRelativeDirectory: 'reports',
+        update: FileDirectoryUpdate(
+          kind: FileDirectoryUpdateKind.added,
+          parentRelativePath: 'reports',
+          entry: _entry(
+            'reports/unknown-position.pdf',
+            name: 'unknown-position.pdf',
+          ),
+        ),
+      );
+
+      expect(patched.entries.map((entry) => entry['relativePath']), [
+        'reports/middle.pdf',
+      ]);
+      expect(patched.isStale, isTrue);
+      expect(patched.nextCursor, 'offset:200');
+    },
+  );
+
   test('file browse status waits on websocket before slow REST fallback', () {
     expect(fileBrowseStatusFallbackInterval, const Duration(seconds: 5));
   });
@@ -119,3 +254,16 @@ void main() {
     expect(failed['failureCode'], 'SOURCE_CHANGED');
   });
 }
+
+Map<String, dynamic> _entry(
+  String relativePath, {
+  required String name,
+  String type = 'FILE',
+  int sizeBytes = 10,
+}) => {
+  'type': type,
+  'name': name,
+  'relativePath': relativePath,
+  'sizeBytes': type == 'FILE' ? sizeBytes : null,
+  'modifiedAt': '2026-07-13T00:00:00.000Z',
+};
