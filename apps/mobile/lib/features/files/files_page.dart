@@ -56,6 +56,40 @@ List<Map<String, dynamic>> mergeBrowseEntries({
   required bool append,
 }) => append ? [...existing, ...received] : [...received];
 
+class FileDirectoryState {
+  FileDirectoryState({
+    required List<Map<String, dynamic>> entries,
+    required this.nextCursor,
+    required this.generation,
+  }) : entries = List.unmodifiable(entries);
+
+  const FileDirectoryState.empty()
+    : entries = const [],
+      nextCursor = null,
+      generation = null;
+
+  final List<Map<String, dynamic>> entries;
+  final String? nextCursor;
+  final String? generation;
+
+  bool get isEmpty => entries.isEmpty;
+
+  FileDirectoryState withPage({
+    required List<Map<String, dynamic>> received,
+    required bool append,
+    required String? nextCursor,
+    required String? generation,
+  }) => FileDirectoryState(
+    entries: mergeBrowseEntries(
+      existing: entries,
+      received: received,
+      append: append,
+    ),
+    nextCursor: nextCursor,
+    generation: generation,
+  );
+}
+
 Map<String, dynamic> patchFileTransferStateForRealtimeUpdate({
   required Map<String, dynamic> current,
   required RealtimeFileTransferUpdate update,
@@ -150,11 +184,9 @@ class FilesPage extends ConsumerStatefulWidget {
 }
 
 class _FilesPageState extends ConsumerState<FilesPage> {
-  final List<Map<String, dynamic>> _entries = [];
+  FileDirectoryState _directoryState = const FileDirectoryState.empty();
   final TextEditingController _searchController = TextEditingController();
   String _relativeDirectory = '';
-  String? _nextCursor;
-  String? _generation;
   Object? _error;
   bool _browseLoading = false;
   bool _transferLoading = false;
@@ -220,9 +252,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       _browseLoading = true;
       _error = null;
       if (shouldClearBrowseEntries(append: append)) {
-        _entries.clear();
-        _nextCursor = null;
-        _generation = null;
+        _directoryState = const FileDirectoryState.empty();
       }
     });
     try {
@@ -253,16 +283,12 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           .toList();
       if (!mounted || requestVersion != _requestVersion) return;
       setState(() {
-        final merged = mergeBrowseEntries(
-          existing: _entries,
+        _directoryState = _directoryState.withPage(
           received: received,
           append: append,
+          nextCursor: page['nextCursor'] as String?,
+          generation: completed['desktopGeneration'] as String?,
         );
-        _entries
-          ..clear()
-          ..addAll(merged);
-        _nextCursor = page['nextCursor'] as String?;
-        _generation = completed['desktopGeneration'] as String?;
       });
     } catch (error) {
       if (cursor != null &&
@@ -380,9 +406,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       _searchQuery = query;
       _browseLoading = false;
       _error = null;
-      _entries.clear();
-      _nextCursor = null;
-      _generation = null;
+      _directoryState = const FileDirectoryState.empty();
     });
     if (query.isEmpty) {
       unawaited(_browse());
@@ -401,8 +425,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     _completeBrowseWaiter();
     setState(() {
       _searchScope = value;
-      _entries.clear();
-      _nextCursor = null;
+      _directoryState = const FileDirectoryState.empty();
       _error = null;
       _browseLoading = false;
     });
@@ -689,13 +712,13 @@ class _FilesPageState extends ConsumerState<FilesPage> {
             enabled: !_busy,
             onSelected: _openBreadcrumb,
           ),
-          if (_generation != null)
+          if (_directoryState.generation != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text(
-                  '목록 버전: $_generation',
+                  '목록 버전: ${_directoryState.generation}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
@@ -751,10 +774,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         ),
       );
     }
-    if (_entries.isEmpty && _browseLoading) {
+    if (_directoryState.isEmpty && _browseLoading) {
       return const Center(child: Text('PC의 파일 목록을 기다리는 중입니다.'));
     }
-    if (_entries.isEmpty) {
+    if (_directoryState.isEmpty) {
       return Center(
         child: Text(_searchActive ? '검색 결과가 없습니다.' : '이 폴더에 표시할 파일이 없습니다.'),
       );
@@ -763,7 +786,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       onRefresh: _browse,
       child: ListView(
         children: [
-          ..._entries.map((entry) {
+          ..._directoryState.entries.map((entry) {
             final isFile = entry['type'] == 'FILE';
             return ListTile(
               leading: Icon(
@@ -788,13 +811,16 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                   : () => _openDirectory(entry['relativePath'] as String),
             );
           }),
-          if (_nextCursor != null)
+          if (_directoryState.nextCursor != null)
             Padding(
               padding: const EdgeInsets.all(16),
               child: OutlinedButton(
                 onPressed: _busy
                     ? null
-                    : () => _browse(cursor: _nextCursor, append: true),
+                    : () => _browse(
+                        cursor: _directoryState.nextCursor,
+                        append: true,
+                      ),
                 child: const Text('다음 파일 불러오기'),
               ),
             ),

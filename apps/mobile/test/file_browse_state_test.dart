@@ -4,6 +4,41 @@ import 'package:mousekeeper/core/sync/realtime_controller.dart';
 import 'package:mousekeeper/features/files/files_page.dart';
 
 void main() {
+  test('file directory state keeps entries and cursor metadata together', () {
+    final first = const FileDirectoryState.empty().withPage(
+      received: [
+        {'relativePath': 'first.pdf'},
+      ],
+      append: false,
+      nextCursor: 'cursor-1',
+      generation: 'generation-1',
+    );
+
+    expect(first.entries.map((entry) => entry['relativePath']), ['first.pdf']);
+    expect(first.nextCursor, 'cursor-1');
+    expect(first.generation, 'generation-1');
+    expect(
+      () => first.entries.add({'relativePath': 'mutate.pdf'}),
+      throwsA(isA<UnsupportedError>()),
+    );
+
+    final second = first.withPage(
+      received: [
+        {'relativePath': 'second.pdf'},
+      ],
+      append: true,
+      nextCursor: null,
+      generation: 'generation-1',
+    );
+
+    expect(second.entries.map((entry) => entry['relativePath']), [
+      'first.pdf',
+      'second.pdf',
+    ]);
+    expect(second.nextCursor, isNull);
+    expect(second.generation, 'generation-1');
+  });
+
   test('file browse status waits on websocket before slow REST fallback', () {
     expect(fileBrowseStatusFallbackInterval, const Duration(seconds: 5));
   });

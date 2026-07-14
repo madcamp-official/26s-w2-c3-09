@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Mobile file browsing now keeps the visible directory page, next cursor, and desktop generation in `FileDirectoryState`, so the next `fileDirectoryProvider(rootId, relativePath)` split has one reducer-backed state object instead of scattered page fields.
 - Mobile chat read paths now expose `chatSessionListProvider(roomId)`, `chatMessagesProvider(sessionId)`, and cursor-scoped page reads, with ChatPage loading through those providers in production while preserving test gateway injection.
 - Mobile chat conversation state is now centralized in `ChatConversationState`, keeping sessions, selected session, message page, pagination cursor, and `hasMoreMessages` together so the next Riverpod provider split can avoid scattered `setState` reload paths.
 - Mobile chat state now has provider-backed gateway injection and pure reducers for session selection, pagination merge, preview touching, and command-draft patching; no-op updates preserve object identity so later realtime/chat pagination work can avoid full page reloads.
