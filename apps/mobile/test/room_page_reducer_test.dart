@@ -1,8 +1,48 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mousekeeper/core/sync/realtime_controller.dart';
 import 'package:mousekeeper/features/rooms/room_page.dart';
 
 void main() {
+  test('room read providers request split room projections', () async {
+    final listPaths = <String>[];
+    final nullablePaths = <String>[];
+    final container = ProviderContainer(
+      overrides: [
+        roomListFetcherProvider.overrideWithValue((path) async {
+          listPaths.add(path);
+          return [
+            {'path': path},
+          ];
+        }),
+        roomNullableFetcherProvider.overrideWithValue((path) async {
+          nullablePaths.add(path);
+          return {'path': path};
+        }),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await Future.wait([
+      container.read(roomCommandListProvider('room-a').future),
+      container.read(roomProposalListProvider('room-a').future),
+      container.read(roomExecutionListProvider('room-a').future),
+      container.read(roomActivityListProvider('room-a').future),
+    ]);
+    final snapshot = await container.read(
+      roomSnapshotProvider('room-a').future,
+    );
+
+    expect(listPaths, [
+      '/v1/rooms/room-a/commands',
+      '/v1/rooms/room-a/proposals/open',
+      '/v1/rooms/room-a/executions',
+      '/v1/rooms/room-a/activity?limit=20',
+    ]);
+    expect(nullablePaths, ['/v1/rooms/room-a/snapshots/latest']);
+    expect(snapshot, {'path': '/v1/rooms/room-a/snapshots/latest'});
+  });
+
   test('command realtime update patches only the matching command row', () {
     final original = [
       {'id': 'command-a', 'intent': 'ANALYZE', 'status': 'DELIVERED'},

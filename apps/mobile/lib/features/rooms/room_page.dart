@@ -46,6 +46,55 @@ class RoomContent {
   );
 }
 
+typedef RoomListFetcher =
+    Future<List<Map<String, dynamic>>> Function(String path);
+
+typedef RoomNullableFetcher =
+    Future<Map<String, dynamic>?> Function(String path);
+
+final roomListFetcherProvider = Provider<RoomListFetcher>((ref) {
+  final api = ref.watch(apiClientProvider);
+  return api.getList;
+});
+
+final roomNullableFetcherProvider = Provider<RoomNullableFetcher>((ref) {
+  final api = ref.watch(apiClientProvider);
+  return api.getNullable;
+});
+
+final roomCommandListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) =>
+          ref.watch(roomListFetcherProvider)('/v1/rooms/$roomId/commands'),
+    );
+
+final roomProposalListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) => ref.watch(roomListFetcherProvider)(
+        '/v1/rooms/$roomId/proposals/open',
+      ),
+    );
+
+final roomExecutionListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) =>
+          ref.watch(roomListFetcherProvider)('/v1/rooms/$roomId/executions'),
+    );
+
+final roomActivityListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>(
+      (ref, roomId) => ref.watch(roomListFetcherProvider)(
+        '/v1/rooms/$roomId/activity?limit=20',
+      ),
+    );
+
+final roomSnapshotProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>?, String>(
+      (ref, roomId) => ref.watch(roomNullableFetcherProvider)(
+        '/v1/rooms/$roomId/snapshots/latest',
+      ),
+    );
+
 List<Map<String, dynamic>> patchCommandItemsForRealtimeUpdate({
   required List<Map<String, dynamic>> commands,
   required RealtimeHomeUpdate update,
@@ -277,17 +326,16 @@ class _RoomPageState extends ConsumerState<RoomPage> {
   }
 
   Future<RoomContent> _load() async {
-    final api = ref.read(apiClientProvider);
     final cache = ref.read(displayCacheProvider);
     final id = widget.room['id'] as String;
     try {
       final lists = await Future.wait([
-        api.getList('/v1/rooms/$id/commands'),
-        api.getList('/v1/rooms/$id/proposals/open'),
-        api.getList('/v1/rooms/$id/executions'),
-        api.getList('/v1/rooms/$id/activity?limit=20'),
+        ref.read(roomCommandListProvider(id).future),
+        ref.read(roomProposalListProvider(id).future),
+        ref.read(roomExecutionListProvider(id).future),
+        ref.read(roomActivityListProvider(id).future),
       ]);
-      final snapshot = await api.getNullable('/v1/rooms/$id/snapshots/latest');
+      final snapshot = await ref.read(roomSnapshotProvider(id).future);
       if (!_roomIsActive(id)) throw StateError('ROOM_REMOVED');
       await Future.wait([
         cache.replaceCommands(id, lists[0]),
@@ -339,6 +387,12 @@ class _RoomPageState extends ConsumerState<RoomPage> {
   }
 
   void _reload() {
+    final roomId = widget.room['id'] as String;
+    ref.invalidate(roomCommandListProvider(roomId));
+    ref.invalidate(roomProposalListProvider(roomId));
+    ref.invalidate(roomExecutionListProvider(roomId));
+    ref.invalidate(roomActivityListProvider(roomId));
+    ref.invalidate(roomSnapshotProvider(roomId));
     _content = _load().then((content) {
       if (mounted) _latestContent = content;
       return content;

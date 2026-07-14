@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Mobile Room REST reads are now split into Riverpod providers for commands, proposals, executions, activity, and latest cleanliness snapshot. RoomPage still preserves the existing offline cache fallback, but explicit/manual reloads are the only path that invalidates those providers; WebSocket updates continue to patch the affected item instead of reloading the whole room.
 - Mobile Room state now has a `RoomContent` reducer that applies realtime command/proposal/execution/cleanliness patches as one object, preserving unchanged slices by identity and returning the same object for unrelated events.
 - Mobile realtime now accepts `file.directory.updated` payloads as directory-scoped patches and routes them to the visible Files page without bumping the generic page revision or reloading Home.
 - Mobile file directory state now has a reducer for `FILE_ADDED`, `FILE_REMOVED`, `FILE_UPDATED`, and `FILE_MOVED` style patches, updating only the visible folder entries and marking paginated/uncertain ranges stale instead of forcing an immediate full browse reload.
