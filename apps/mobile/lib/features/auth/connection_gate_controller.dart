@@ -148,8 +148,7 @@ String disconnectErrorMessage(Object error) {
 }
 
 abstract interface class ConnectionControlApi {
-  Future<List<Map<String, dynamic>>> listDevices();
-  Future<List<Map<String, dynamic>>> listRooms();
+  Future<ConnectionGateData> summary();
   Future<void> claimPairing(String code);
   Future<void> revokeDevice(String deviceId, String idempotencyKey);
   Future<void> removeRoom(String roomId, String idempotencyKey);
@@ -181,25 +180,26 @@ class ApiConnectionControl implements ConnectionControlApi {
   ApiConnectionControl(this._api);
 
   final ApiClient _api;
-  Future<Map<String, dynamic>>? _connectionSummaryInFlight;
+  Future<ConnectionGateData>? _connectionSummaryInFlight;
 
   @override
-  Future<List<Map<String, dynamic>>> listDevices() async =>
-      connectionItemsFromSummary(await _connectionSummary(), 'devices');
-
-  @override
-  Future<List<Map<String, dynamic>>> listRooms() async =>
-      connectionItemsFromSummary(await _connectionSummary(), 'rooms');
-
-  Future<Map<String, dynamic>> _connectionSummary() {
+  Future<ConnectionGateData> summary() {
     final existing = _connectionSummaryInFlight;
     if (existing != null) return existing;
-    late final Future<Map<String, dynamic>> request;
-    request = _api.get(connectionGateSummaryPath).whenComplete(() {
-      if (identical(_connectionSummaryInFlight, request)) {
-        _connectionSummaryInFlight = null;
-      }
-    });
+    late final Future<ConnectionGateData> request;
+    request = _api
+        .get(connectionGateSummaryPath)
+        .then(
+          (summary) => ConnectionGateData(
+            devices: connectionItemsFromSummary(summary, 'devices'),
+            rooms: connectionItemsFromSummary(summary, 'rooms'),
+          ),
+        )
+        .whenComplete(() {
+          if (identical(_connectionSummaryInFlight, request)) {
+            _connectionSummaryInFlight = null;
+          }
+        });
     _connectionSummaryInFlight = request;
     return request;
   }
@@ -462,8 +462,8 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
 
   Future<ConnectionGateData> _readAuthoritative() async {
     final api = ref.read(connectionControlApiProvider);
-    final results = await Future.wait([api.listDevices(), api.listRooms()]);
-    final devices = results[0]
+    final summary = await api.summary();
+    final devices = summary.devices
         .where(isActiveConnectionItem)
         .map((value) => Map<String, dynamic>.from(value))
         .toList(growable: false);
@@ -471,7 +471,7 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
         .map((device) => device['id'])
         .whereType<String>()
         .toSet();
-    final rooms = results[1]
+    final rooms = summary.rooms
         .where(isActiveConnectionItem)
         .where((room) {
           final desktopDeviceId = room['desktopDeviceId'];

@@ -385,12 +385,10 @@ class _FakeConnectionControlApi implements ConnectionControlApi {
   List<Map<String, dynamic>> rooms = [];
 
   @override
-  Future<List<Map<String, dynamic>>> listDevices() async =>
-      devices.map(Map<String, dynamic>.from).toList();
-
-  @override
-  Future<List<Map<String, dynamic>>> listRooms() async =>
-      rooms.map(Map<String, dynamic>.from).toList();
+  Future<ConnectionGateData> summary() async => ConnectionGateData(
+    devices: devices.map(Map<String, dynamic>.from).toList(),
+    rooms: rooms.map(Map<String, dynamic>.from).toList(),
+  );
 
   @override
   Future<void> claimPairing(String code) async {}

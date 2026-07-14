@@ -8,7 +8,9 @@
 - [x] Git conflict marker와 unmerged path를 재확인했다. 현재 저장소에는 표준 Git conflict marker 문자열이나 `UU` 상태 파일이 없다.
 - [x] 모바일 통신 지연 개선 상태를 재검증했다. Home은 최초/명시 갱신 때 `/v1/home/summary`를 한 번 읽고, `presence.updated`, proposal/decision/execution/snapshot/file browse/transfer 이벤트는 WebSocket payload로 해당 항목만 patch한다.
 - [x] 5초 모바일 연결 안전 reconcile은 ACTIVE device/room gate만 확인하며 Home summary 전체 재호출을 유발하지 않는다.
+- [x] 모바일 연결 안전 reconcile의 API 추상화를 `summary()` 단일 경로로 고정했다. `/v1/connections/summary` 한 번으로 device/room gate를 읽기 때문에 별도 device/room fan-out이나 `/v1/home/summary` 회귀가 생기기 어렵다.
 - [x] 데스크톱 background runtime은 heartbeat를 5초로 유지하고, REST reconcile은 15초 fast pass와 30초 heavy pass로 분리되어 있다.
+- [x] 데스크톱 AgentPanel의 local status refresh도 heartbeat freshness 5초 기준, background status 15초, connection status 30초로 분리했다.
 - [x] pairing status 조회는 일반 pairing mutation과 다른 60회/분 rate-limit bucket을 쓰며, 데스크톱 pairing UI는 2초 간격으로 status를 확인한다.
 - [x] Rust file engine은 서버/모바일 `RuleDefinition` draft를 내부 `RuleSet`으로 변환할 수 있게 되었고, modified/created age, size, relative path, file kind, name operator, `TRASH`, `CREATE_DIR`를 proposal 단계에서 검증한다. `CREATE_DIR` proposal은 중복 생성되지 않으며 기존 디렉터리는 `DestinationExists`로 표시된다.
 

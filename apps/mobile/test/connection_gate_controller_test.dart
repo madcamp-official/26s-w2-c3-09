@@ -586,7 +586,12 @@ class _FakeConnectionControlApi implements ConnectionControlApi {
   final List<String> roomKeys = [];
 
   @override
-  Future<List<Map<String, dynamic>>> listDevices() async {
+  Future<ConnectionGateData> summary() async {
+    final results = await Future.wait([_listDevices(), _listRooms()]);
+    return ConnectionGateData(devices: results[0], rooms: results[1]);
+  }
+
+  Future<List<Map<String, dynamic>>> _listDevices() async {
     deviceListCalls++;
     final completer = deviceListCompleter;
     if (completer != null) {
@@ -596,8 +601,7 @@ class _FakeConnectionControlApi implements ConnectionControlApi {
     return devices.map(Map<String, dynamic>.from).toList();
   }
 
-  @override
-  Future<List<Map<String, dynamic>>> listRooms() async {
+  Future<List<Map<String, dynamic>>> _listRooms() async {
     roomListCalls++;
     final completer = roomListCompleter;
     if (completer != null) {
