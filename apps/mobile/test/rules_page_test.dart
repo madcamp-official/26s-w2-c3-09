@@ -177,6 +177,53 @@ void main() {
     expect(find.text('확장자 [.pdf] · 버전 1'), findsOneWidget);
   });
 
+  testWidgets(
+    'rule draft preview fails closed when desktop dry-run is absent',
+    (tester) async {
+      final gateway = _FakeRuleGateway([]);
+      gateway.nextDraftResult = {
+        'status': 'READY',
+        'kind': 'RULE_DRAFT',
+        'draft': {
+          'id': 'draft-1',
+          'roomId': 'room-1',
+          'name': 'Old PDFs',
+          'definition': {
+            'match': 'ALL',
+            'conditions': [
+              {
+                'field': 'extension',
+                'operator': 'IN',
+                'value': ['.pdf'],
+              },
+            ],
+            'action': {'type': 'MOVE', 'destinationTemplate': 'Archive'},
+          },
+          'explanation': 'Move old PDFs after explicit approval.',
+          'ambiguities': [],
+          'status': 'DRAFT',
+          'expiresAt': '2026-07-14T00:00:00.000Z',
+          'ruleId': null,
+        },
+      };
+      gateway.previewError = StateError('RULE_DRAFT_PREVIEW_UNCONFIGURED');
+
+      await _pumpRules(tester, gateway);
+      await tester.enterText(
+        find.byKey(const ValueKey('rule-draft-instruction-field')),
+        'Move old PDFs',
+      );
+      await tester.tap(find.byKey(const ValueKey('rule-draft-submit')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('rule-draft-preview')));
+      await tester.pumpAndSettle();
+
+      expect(gateway.previewedDraftIds, ['draft-1']);
+      expect(gateway.createBodies, isEmpty);
+      expect(find.textContaining('데스크톱 dry-run 연결이 준비된 뒤'), findsOneWidget);
+    },
+  );
+
   test('upsertRule replaces existing rule and keeps priority order', () {
     final result = upsertRule([
       _rule('later', 'Later', priority: 100, createdAt: '2026-07-14T00:02:00Z'),
@@ -289,7 +336,14 @@ class _FakeRuleGateway implements RuleGateway {
   final List<Map<String, dynamic>> updateBodies = [];
   final List<String> createDraftInstructions = [];
   final List<String> confirmedDraftIds = [];
+  final List<String> previewedDraftIds = [];
   final List<String> rejectedDraftIds = [];
+  Object? previewError;
+  Map<String, dynamic> nextPreviewResult = {
+    'status': 'READY',
+    'items': <Map<String, dynamic>>[],
+    'truncated': false,
+  };
   Map<String, dynamic> nextDraftResult = {
     'status': 'UNCONFIGURED',
     'code': 'AI_PROVIDER_UNCONFIGURED',
@@ -362,6 +416,14 @@ class _FakeRuleGateway implements RuleGateway {
       'draft': {...draft, 'status': 'MATERIALIZED', 'ruleId': rule['id']},
       'rule': rule,
     };
+  }
+
+  @override
+  Future<Map<String, dynamic>> previewRuleDraft(String draftId) async {
+    previewedDraftIds.add(draftId);
+    final error = previewError;
+    if (error != null) throw error;
+    return Map<String, dynamic>.from(nextPreviewResult);
   }
 
   @override

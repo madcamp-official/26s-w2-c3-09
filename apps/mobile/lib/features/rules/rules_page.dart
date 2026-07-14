@@ -24,6 +24,7 @@ abstract interface class RuleGateway {
     String draftId,
     String idempotencyKey,
   );
+  Future<Map<String, dynamic>> previewRuleDraft(String draftId);
   Future<Map<String, dynamic>> rejectRuleDraft(String draftId);
 }
 
@@ -63,6 +64,10 @@ class ApiRuleGateway implements RuleGateway {
     const {},
     idempotencyKey: idempotencyKey,
   );
+
+  @override
+  Future<Map<String, dynamic>> previewRuleDraft(String draftId) =>
+      _api.post('/v1/rule-drafts/$draftId/preview', const {});
 
   @override
   Future<Map<String, dynamic>> rejectRuleDraft(String draftId) =>
@@ -115,6 +120,9 @@ String ruleMutationErrorMessage(Object error) {
   }
   if (raw.contains('ROOM_REMOVED') || raw.contains('NOT_FOUND')) {
     return '연결 해제되었거나 찾을 수 없는 규칙입니다.';
+  }
+  if (raw.contains('RULE_DRAFT_PREVIEW_UNCONFIGURED')) {
+    return '규칙 미리보기는 데스크톱 dry-run 연결이 준비된 뒤 사용할 수 있습니다.';
   }
   return '규칙 작업을 완료하지 못했습니다.';
 }
@@ -691,6 +699,28 @@ class _RulesPageState extends ConsumerState<RulesPage> {
     }
   }
 
+  Future<void> _previewRuleDraft() async {
+    final draftId = _pendingDraft?['id'] as String?;
+    if (draftId == null || _drafting) return;
+    setState(() => _drafting = true);
+    try {
+      final result = await _gateway.previewRuleDraft(draftId);
+      final items = result['items'];
+      if (items is List) {
+        final truncated = result['truncated'] == true ? ' 이상' : '';
+        _showSnack('미리보기: ${items.length}$truncated개 항목이 예상됩니다.');
+        return;
+      }
+      _showSnack('Rule draft preview response was not recognized.');
+    } catch (error) {
+      _showSnack(
+        'Rule draft preview failed: ${ruleMutationErrorMessage(error)}',
+      );
+    } finally {
+      if (!_disposed) setState(() => _drafting = false);
+    }
+  }
+
   Future<void> _rejectRuleDraft() async {
     final draftId = _pendingDraft?['id'] as String?;
     if (draftId == null || _drafting) return;
@@ -892,6 +922,12 @@ class _RulesPageState extends ConsumerState<RulesPage> {
               const SizedBox(height: 12),
               Row(
                 children: [
+                  OutlinedButton(
+                    key: const ValueKey('rule-draft-preview'),
+                    onPressed: _drafting ? null : _previewRuleDraft,
+                    child: const Text('Preview'),
+                  ),
+                  const SizedBox(width: 8),
                   FilledButton(
                     key: const ValueKey('rule-draft-confirm'),
                     onPressed: _drafting ? null : _confirmRuleDraft,
