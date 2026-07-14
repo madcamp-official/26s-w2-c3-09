@@ -31,6 +31,50 @@ final chatGatewayProvider = Provider<ChatGateway>(
   (ref) => ApiChatGateway(ref.watch(apiClientProvider)),
 );
 
+final chatSessionListProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>((ref, roomId) {
+      return ref.watch(chatGatewayProvider).listSessions(roomId);
+    });
+
+final chatMessagesProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, String>((ref, sessionId) {
+      return ref.watch(chatGatewayProvider).listMessages(sessionId);
+    });
+
+final chatMessagePageProvider = FutureProvider.autoDispose
+    .family<List<Map<String, dynamic>>, ChatMessagesPageQuery>((ref, query) {
+      return ref
+          .watch(chatGatewayProvider)
+          .listMessages(
+            query.sessionId,
+            cursor: query.cursor,
+            limit: query.limit,
+          );
+    });
+
+class ChatMessagesPageQuery {
+  const ChatMessagesPageQuery({
+    required this.sessionId,
+    required this.cursor,
+    this.limit = chatMessagePageSize,
+  });
+
+  final String sessionId;
+  final String cursor;
+  final int limit;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ChatMessagesPageQuery &&
+          other.sessionId == sessionId &&
+          other.cursor == cursor &&
+          other.limit == limit;
+
+  @override
+  int get hashCode => Object.hash(sessionId, cursor, limit);
+}
+
 class ApiChatGateway implements ChatGateway {
   ApiChatGateway(this._api);
 
@@ -318,6 +362,41 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   ChatGateway get _gateway => widget.gateway ?? ref.read(chatGatewayProvider);
 
+  Future<List<Map<String, dynamic>>> _listSessions() {
+    final gateway = widget.gateway;
+    if (gateway != null) return gateway.listSessions(widget.roomId);
+    return ref.read(chatSessionListProvider(widget.roomId).future);
+  }
+
+  Future<List<Map<String, dynamic>>> _listInitialMessages(String sessionId) {
+    final gateway = widget.gateway;
+    if (gateway != null) return gateway.listMessages(sessionId);
+    return ref.read(chatMessagesProvider(sessionId).future);
+  }
+
+  Future<List<Map<String, dynamic>>> _listMoreMessages(
+    String sessionId,
+    String cursor,
+  ) {
+    final gateway = widget.gateway;
+    if (gateway != null) {
+      return gateway.listMessages(sessionId, cursor: cursor);
+    }
+    return ref.read(
+      chatMessagePageProvider(
+        ChatMessagesPageQuery(sessionId: sessionId, cursor: cursor),
+      ).future,
+    );
+  }
+
+  void _invalidateChatReadModels({String? sessionId}) {
+    if (widget.gateway != null) return;
+    ref.invalidate(chatSessionListProvider(widget.roomId));
+    if (sessionId != null) {
+      ref.invalidate(chatMessagesProvider(sessionId));
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -340,10 +419,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _error = null;
     });
     try {
-      var sessions = await _gateway.listSessions(widget.roomId);
+      var sessions = await _listSessions();
       if (_stale(version)) return;
       if (sessions.isEmpty) {
         final created = await _gateway.createSession(widget.roomId);
+        _invalidateChatReadModels(sessionId: created['id'] as String?);
         if (_stale(version)) return;
         sessions = [created];
       }
@@ -353,7 +433,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
       final messages = selectedId == null
           ? <Map<String, dynamic>>[]
-          : await _gateway.listMessages(selectedId);
+          : await _listInitialMessages(selectedId);
       if (_stale(version)) return;
       setState(() {
         _conversation = ChatConversationState(
@@ -388,7 +468,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _error = null;
     });
     try {
-      final messages = await _gateway.listMessages(sessionId);
+      final messages = await _listInitialMessages(sessionId);
       if (_stale(version)) return;
       setState(() {
         _conversation = _conversation.withLoadedMessages(messages);
@@ -410,6 +490,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       final created = await _gateway.createSession(widget.roomId);
       if (_disposed) return;
+      _invalidateChatReadModels(sessionId: created['id'] as String?);
       setState(() {
         _conversation = _conversation.copyWith(
           sessions: [created, ..._conversation.sessions],
@@ -434,6 +515,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       await _gateway.deleteSession(sessionId);
       if (_disposed) return;
+      _invalidateChatReadModels(sessionId: sessionId);
       final remaining = _conversation.sessions
           .where((session) => session['id'] != sessionId)
           .toList(growable: false);
@@ -466,6 +548,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       final result = await _gateway.sendMessage(sessionId, content);
       if (_disposed) return;
+      _invalidateChatReadModels(sessionId: sessionId);
       input.clear();
       final newMessages = <Map<String, dynamic>>[
         ..._conversation.messages,
@@ -502,7 +585,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (sessionId == null || cursor == null || _loadingMore) return;
     setState(() => _loadingMore = true);
     try {
-      final next = await _gateway.listMessages(sessionId, cursor: cursor);
+      final next = await _listMoreMessages(sessionId, cursor);
       if (_disposed || sessionId != _conversation.selectedSessionId) return;
       final merged = mergeChatMessages(_conversation.messages, next);
       setState(() {
@@ -531,6 +614,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
       if (_disposed) return;
       _patchDraftMessage(draftId, result['draft']);
+      _invalidateChatReadModels(sessionId: _conversation.selectedSessionId);
       _showSnack('Command draft confirmed.');
     } catch (error) {
       _showSnack(
@@ -548,6 +632,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final result = await _gateway.rejectCommandDraft(draftId);
       if (_disposed) return;
       _patchDraftMessage(draftId, result['draft']);
+      _invalidateChatReadModels(sessionId: _conversation.selectedSessionId);
       _showSnack('Command draft rejected.');
     } catch (error) {
       _showSnack('Command draft rejection failed: ${chatErrorMessage(error)}');

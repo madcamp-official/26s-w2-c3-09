@@ -100,6 +100,29 @@ void main() {
     expect(gateway.messageLoads, {'s1': 1, 's2': 1});
   });
 
+  testWidgets('provider backed chat loaders share the gateway provider', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', 'provider session')],
+      messagesBySession: {
+        's1': [_message('m1', 's1', 'USER', 'provider message')],
+      },
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [chatGatewayProvider.overrideWithValue(gateway)],
+        child: const MaterialApp(home: ChatPage(roomId: 'room-1')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('provider session'), findsOneWidget);
+    expect(find.text('provider message'), findsOneWidget);
+    expect(gateway.messageLoads, {'s1': 1});
+  });
+
   testWidgets('sending appends user and assistant messages without reload', (
     tester,
   ) async {
