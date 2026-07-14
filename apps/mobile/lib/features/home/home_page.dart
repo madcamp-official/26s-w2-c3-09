@@ -19,7 +19,7 @@ const _mouseMoveCurve = Curves.easeInOutCubic;
 const _mouseDisplaySize = 263.0;
 const _mouseFixedYAlignment = 0.22;
 
-enum _SpeechBubbleStage { hidden, ellipsis, menu }
+enum _SpeechBubbleStage { hidden, ellipsis, missingFolder, menu }
 
 List<Map<String, dynamic>> mergeAuthoritativeConnectionItems({
   required List<Map<String, dynamic>> authoritative,
@@ -262,7 +262,9 @@ class _HomePageState extends ConsumerState<HomePage> {
                       bubbleStage: _bubbleStage,
                       selectedRoom: selectedRoom,
                       onMouseTap: _handleMouseTap,
-                      onBubbleTap: _handleBubbleTap,
+                      onBubbleTap: () => _handleBubbleTap(
+                        hasManagedFolder: selectedRoom != null,
+                      ),
                       onFiles: selectedRoom == null
                           ? null
                           : () => _openFiles(selectedRoom),
@@ -316,11 +318,15 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
   }
 
-  void _handleBubbleTap() {
+  void _handleBubbleTap({required bool hasManagedFolder}) {
     setState(() {
-      _bubbleStage = _bubbleStage == _SpeechBubbleStage.ellipsis
-          ? _SpeechBubbleStage.menu
-          : _SpeechBubbleStage.ellipsis;
+      if (_bubbleStage == _SpeechBubbleStage.ellipsis) {
+        _bubbleStage = hasManagedFolder
+            ? _SpeechBubbleStage.menu
+            : _SpeechBubbleStage.missingFolder;
+      } else {
+        _bubbleStage = _SpeechBubbleStage.ellipsis;
+      }
     });
   }
 
@@ -615,7 +621,7 @@ class _MousePlayground extends StatelessWidget {
           alignment: Offset(
             mouseAlignment.dx - 0.28,
             mouseAlignment.dy +
-                (bubbleStage == _SpeechBubbleStage.ellipsis ? 0.22 : 0.40),
+                (bubbleStage == _SpeechBubbleStage.menu ? 0.40 : 0.22),
           ),
           stage: bubbleStage,
           selectedRoom: selectedRoom,
@@ -697,39 +703,49 @@ class _MouseSpeechBubble extends StatelessWidget {
         ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: stage == _SpeechBubbleStage.ellipsis
-              ? Text(
-                  '…',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    color: const Color(0xFF436577),
-                    fontWeight: FontWeight.w900,
+          child: switch (stage) {
+            _SpeechBubbleStage.ellipsis => Text(
+              '…',
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                color: const Color(0xFF436577),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            _SpeechBubbleStage.missingFolder => Text(
+              '파일을 연결해 주세요!',
+              key: const ValueKey('missing-folder-bubble-message'),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                color: const Color(0xFF294B60),
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            _SpeechBubbleStage.menu => SizedBox(
+              width: 150,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _BubbleMenuButton(
+                    onPressed: onFiles,
+                    icon: Icons.folder_outlined,
+                    label: '파일 목록',
                   ),
-                )
-              : SizedBox(
-                  width: 150,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _BubbleMenuButton(
-                        onPressed: onFiles,
-                        icon: Icons.folder_outlined,
-                        label: '파일 목록',
-                      ),
-                      const SizedBox(height: 7),
-                      _BubbleMenuButton(
-                        onPressed: onChat,
-                        icon: Icons.chat_bubble_outline,
-                        label: '대화',
-                      ),
-                      const SizedBox(height: 7),
-                      _BubbleMenuButton(
-                        onPressed: onSettings,
-                        icon: Icons.settings_outlined,
-                        label: '설정',
-                      ),
-                    ],
+                  const SizedBox(height: 7),
+                  _BubbleMenuButton(
+                    onPressed: onChat,
+                    icon: Icons.chat_bubble_outline,
+                    label: '대화',
                   ),
-                ),
+                  const SizedBox(height: 7),
+                  _BubbleMenuButton(
+                    onPressed: onSettings,
+                    icon: Icons.settings_outlined,
+                    label: '설정',
+                  ),
+                ],
+              ),
+            ),
+            _ => const SizedBox.shrink(),
+          },
         ),
       ),
     ),
