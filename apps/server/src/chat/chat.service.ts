@@ -995,6 +995,22 @@ export class ChatService {
         content: message.content,
       },
     });
+    if (ai.status === 'READY' && ai.kind === 'NO_ACTION') {
+      const assistant = await this.createAiTextAssistantMessage(
+        userId,
+        session,
+        ai.reply,
+      );
+      return {
+        message,
+        assistant,
+        aiStatus: 'READY' as const,
+        ai: {
+          status: 'READY' as const,
+          kind: 'NO_ACTION' as const,
+        },
+      };
+    }
     if (ai.status === 'READY' && ai.kind === 'RULE_DRAFT') {
       const draft = await this.createRuleDraftFromAi(userId, session, message, ai);
       if (!draft) {
@@ -1188,6 +1204,51 @@ export class ChatService {
         fileBrowseRequest: null,
         cacheEntries: [],
       };
+    });
+  }
+
+  private async createAiTextAssistantMessage(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+    content: string,
+  ) {
+    return this.db.transaction(async (tx) => {
+      const currentSession = await this.requireOwnedSessionIn(
+        tx,
+        userId,
+        session.id,
+      );
+      const message = (
+        await tx
+          .insert(chatMessages)
+          .values({
+            roomId: currentSession.roomId,
+            sessionId: currentSession.id,
+            senderType: 'ASSISTANT',
+            messageType: 'TEXT',
+            content,
+          })
+          .returning()
+      )[0]!;
+      await tx
+        .update(chatSessions)
+        .set({ updatedAt: new Date() })
+        .where(eq(chatSessions.id, currentSession.id));
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId: currentSession.roomId,
+        eventType: 'chat.message.created',
+        aggregateType: 'chat_message',
+        aggregateId: message.id,
+        payload: {
+          messageId: message.id,
+          sessionId: currentSession.id,
+          senderType: message.senderType,
+          messageType: message.messageType,
+        },
+      });
+      return this.publicMessage(message);
     });
   }
 

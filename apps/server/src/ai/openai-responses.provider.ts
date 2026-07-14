@@ -222,7 +222,9 @@ export class OpenAiResponsesProvider implements AiProvider {
       };
     }
     if (parsed.data.kind !== 'COMMAND_DRAFT') {
-      return { status: 'READY', kind: 'NO_ACTION' };
+      const reply = parsed.data.reply.trim();
+      if (reply === '') return this.invalid();
+      return { status: 'READY', kind: 'NO_ACTION', reply };
     }
     if (
       parsed.data.intent === 'NONE' ||

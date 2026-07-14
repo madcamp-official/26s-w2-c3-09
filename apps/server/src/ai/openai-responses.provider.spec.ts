@@ -124,6 +124,32 @@ describe('OpenAiResponsesProvider', () => {
     });
   });
 
+  it('preserves a validated conversational reply for chat persistence', async () => {
+    const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
+      okOutput({
+        kind: 'NO_ACTION',
+        reasonCode: '',
+        reply: '네, MouseKeeper AI가 연결되어 있어요.',
+        intent: 'NONE',
+        argumentsJson: '{}',
+        confirmationSummary: '',
+      }),
+    );
+
+    await expect(
+      providerWith(fetcher).classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: { id: 'message-1', content: 'AI가 연결됐어?' },
+      }),
+    ).resolves.toEqual({
+      status: 'READY',
+      kind: 'NO_ACTION',
+      reply: '네, MouseKeeper AI가 연결되어 있어요.',
+    });
+  });
+
   it('classifies chat rule requests into validated rule drafts', async () => {
     const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
       okOutput({

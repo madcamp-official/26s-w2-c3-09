@@ -25,6 +25,7 @@ describe('mapAiResultToCommandDraft', () => {
       mapAiResultToCommandDraft(sourceMessageId, {
         status: 'READY',
         kind: 'NO_ACTION',
+        reply: 'How can I help with your managed folder?',
       }),
     ).toEqual({
       kind: 'NO_DRAFT',
@@ -32,6 +33,7 @@ describe('mapAiResultToCommandDraft', () => {
       ai: {
         status: 'READY',
         kind: 'NO_ACTION',
+        reply: 'How can I help with your managed folder?',
       },
     });
   });

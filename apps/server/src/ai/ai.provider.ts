@@ -36,6 +36,7 @@ export type AiInvalidResult = {
 export type AiNoActionResult = {
   status: 'READY';
   kind: 'NO_ACTION';
+  reply: string;
 };
 
 export type AiCommandDraftResult = {

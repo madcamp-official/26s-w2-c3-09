@@ -161,6 +161,46 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     });
   });
 
+  it('stores and syncs conversational AI replies as assistant text', async () => {
+    service = new ChatService(
+      connection.db,
+      new SyncService(),
+      new ScriptedAiProvider({
+        status: 'READY',
+        kind: 'NO_ACTION',
+        reply: '네, MouseKeeper AI가 연결되어 있어요.',
+      }),
+    );
+    const session = await service.createSession(userId, roomId);
+    const result = await service.createMessage(
+      userId,
+      session.id,
+      '지금 인공지능이 되나?',
+    );
+
+    expect(result).toMatchObject({
+      aiStatus: 'READY',
+      ai: { status: 'READY', kind: 'NO_ACTION' },
+      assistant: {
+        senderType: 'ASSISTANT',
+        messageType: 'TEXT',
+        content: '네, MouseKeeper AI가 연결되어 있어요.',
+      },
+    });
+    expect(
+      (await service.listMessages(userId, session.id)).map((message) => ({
+        senderType: message.senderType,
+        content: message.content,
+      })),
+    ).toEqual([
+      { senderType: 'USER', content: '지금 인공지능이 되나?' },
+      {
+        senderType: 'ASSISTANT',
+        content: '네, MouseKeeper AI가 연결되어 있어요.',
+      },
+    ]);
+  });
+
   it('keeps legacy room chat compatible while storing through a session', async () => {
     const result = await service.createLegacyRoomMessage(
       userId,
