@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -12,6 +12,7 @@ type DragStart = {
 };
 
 export function HouseOverlay() {
+  const [locked, setLocked] = useState(false);
   const dragStart = useRef<DragStart | null>(null);
   const draggingStarted = useRef(false);
 
@@ -26,6 +27,7 @@ export function HouseOverlay() {
 
   function beginHousePointer(pointer: PointerEvent<HTMLButtonElement>) {
     if (pointer.button !== 0) return;
+    if (locked) return;
     dragStart.current = { x: pointer.clientX, y: pointer.clientY };
     draggingStarted.current = false;
     pointer.currentTarget.setPointerCapture(pointer.pointerId);
@@ -53,16 +55,20 @@ export function HouseOverlay() {
     }
   }
 
-  function lockHouse() {
-    void setHouseOverlayLocked(true);
+  function toggleHouseLock() {
+    setLocked((current) => {
+      const next = !current;
+      void setHouseOverlayLocked(next);
+      return next;
+    });
   }
 
   return (
-    <div className="house-overlay">
+    <div className={`house-overlay ${locked ? "is-locked" : ""}`}>
       <button
         type="button"
         className="house-drag-surface"
-        onDoubleClick={lockHouse}
+        onDoubleClick={toggleHouseLock}
         onPointerDown={beginHousePointer}
         onPointerMove={continueHouseDrag}
         onPointerUp={finishHousePointer}

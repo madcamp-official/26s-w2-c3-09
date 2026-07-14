@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { getAgentConnectionStatus } from "./features/agent/agentApi";
-import { AgentPanel } from "./features/agent/AgentPanel";
+import { AgentPanel, AutostartSetting } from "./features/agent/AgentPanel";
 import { listManagedRoots } from "./features/files/fileEngineApi";
 import { FileEnginePanel } from "./features/files/FileEnginePanel";
 import { OnboardingSlot } from "./features/onboarding/OnboardingSlot";
-import { setHouseOverlayLocked, showOverlay } from "./features/overlay/overlayApi";
 
 const splashUrl = new URL("./assets/mousekeeper-splash.png", import.meta.url).href;
 const setupMascotUrl = new URL(
@@ -13,7 +12,7 @@ const setupMascotUrl = new URL(
   import.meta.url
 ).href;
 
-type DashboardSection = "connection" | "organize" | "explore" | "history";
+type DashboardSection = "rooms" | "organize" | "explore" | "history" | "connection" | "settings";
 type FileSection = Exclude<DashboardSection, "connection">;
 
 const DASHBOARD_SECTIONS: ReadonlyArray<{
@@ -22,22 +21,18 @@ const DASHBOARD_SECTIONS: ReadonlyArray<{
   label: string;
   hint: string;
 }> = [
-  { id: "organize", icon: "🧹", label: "폴더 정리", hint: "분석 · 제안 · 실행" },
-  { id: "explore", icon: "🔍", label: "검색 · 탐색", hint: "파일 찾기 · 열기" },
-  { id: "history", icon: "🗂️", label: "작업 기록", hint: "결과 · 되돌리기" },
-  { id: "connection", icon: "🔌", label: "PC 연결", hint: "페어링 · 백그라운드" }
+  { id: "rooms", icon: "▦", label: "방 관리", hint: "root 폴더 선택" },
+  { id: "organize", icon: "▣", label: "폴더 정리", hint: "제안 · 실행" },
+  { id: "explore", icon: "⌕", label: "폴더 탐색", hint: "탐색 · 검색" },
+  { id: "history", icon: "▤", label: "작업 기록", hint: "결과 · 되돌리기" },
+  { id: "connection", icon: "●", label: "PC 연결", hint: "페어링 · 상태" },
+  { id: "settings", icon: "⚙", label: "설정", hint: "권한 · 정책" }
 ];
 
-/**
- * Main-window shell. The setup screen stays visible until both halves are ready: one paired
- * desktop device and at least one managed folder. That keeps users from registering a folder,
- * pairing later, then wondering why they need to register the same folder again.
- */
 export function AppShell() {
-  // null = unknown (loading or no Tauri runtime); confirmed values drive the setup gate.
   const [rootCount, setRootCount] = useState<number | null>(null);
   const [connectionState, setConnectionState] = useState<string | null>(null);
-  const [section, setSection] = useState<DashboardSection>("organize");
+  const [section, setSection] = useState<DashboardSection>("rooms");
 
   const reloadRootCount = useCallback(async () => {
     try {
@@ -83,25 +78,6 @@ export function AppShell() {
     document.getElementById("agent-panel")?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  const [overlayError, setOverlayError] = useState<string | null>(null);
-  const openOverlay = useCallback(async () => {
-    setOverlayError(null);
-    try {
-      await showOverlay();
-    } catch (cause) {
-      setOverlayError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, []);
-
-  const unlockHouseOverlay = useCallback(async () => {
-    setOverlayError(null);
-    try {
-      await setHouseOverlayLocked(false);
-    } catch (cause) {
-      setOverlayError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }, []);
-
   const hasFolder = rootCount !== null && rootCount > 0;
   const needsSetup = rootCount === null || isPaired === null || rootCount === 0 || isPaired === false;
 
@@ -119,14 +95,7 @@ export function AppShell() {
           <span className={`setup-mini-status ${isPaired ? "is-ready" : ""}`}>
             {isPaired ? "모바일 연결됨" : "페어링 필요"}
           </span>
-          <button type="button" onClick={() => void openOverlay()}>
-            마스코트 열기
-          </button>
-          <button type="button" onClick={() => void unlockHouseOverlay()}>
-            집 위치 조정
-          </button>
         </div>
-        {overlayError ? <span className="error-text">{overlayError}</span> : null}
       </div>
 
       {needsSetup ? (
@@ -137,10 +106,10 @@ export function AppShell() {
             </div>
             <div className="manager-hero-copy">
               <span className="setup-kicker">초기 설정</span>
-              <h1 id="manager-hero-title">PC 방을 생쥐 매니저에게 맡길 준비를 해요</h1>
+              <h1 id="manager-hero-title">PC 방을 MOUSEKEEPER에게 맡길 준비가 필요해요</h1>
               <p>
-                모바일 앱과 PC를 연결하고, 정리할 폴더를 한 번만 등록하면 됩니다. 순서가
-                바뀌어도 괜찮고, 등록된 폴더는 페어링 뒤 자동으로 모바일 방과 이어집니다.
+                모바일 앱과 PC를 연결하고, 정리할 root 폴더를 등록하면 매니저를 사용할 수
+                있습니다. 등록된 폴더 안에서만 제안과 파일 작업이 실행됩니다.
               </p>
               <div className="setup-checklist" aria-label="설치 진행 상태">
                 <span className={isPaired ? "is-done" : ""}>1. 모바일 페어링</span>
@@ -185,7 +154,7 @@ export function AppShell() {
               <img src={setupMascotUrl} alt="" aria-hidden="true" />
               <div>
                 <strong>관리 콘솔</strong>
-                <small>안전하게 정리할 준비 완료</small>
+                <small>방을 고르고 작업을 실행합니다</small>
               </div>
             </div>
             <nav className="dashboard-nav">
@@ -214,17 +183,26 @@ export function AppShell() {
 
           <div className="dashboard-main">
             <div className="dashboard-view" hidden={section !== "connection"} aria-label="PC 연결 상태">
-              <AgentPanel />
+              <AgentPanel showAutostart={false} />
+            </div>
+            <div className="dashboard-view" hidden={section !== "settings"} aria-label="설정">
+              <section className="panel settings-shell-panel">
+                <div className="section-header">
+                  <div>
+                    <h2>PC 연결 설정</h2>
+                    <p className="path-text">앱 시작과 백그라운드 실행 관련 설정입니다.</p>
+                  </div>
+                </div>
+                <AutostartSetting />
+              </section>
+              <FileEnginePanel embedded activeSection="settings" />
             </div>
             <div
               className="dashboard-view"
-              hidden={section === "connection"}
-              aria-label="파일 관리 작업대"
+              hidden={section === "connection" || section === "settings"}
+              aria-label="파일 관리 작업"
             >
-              <FileEnginePanel
-                embedded
-                activeSection={(section === "connection" ? "organize" : section) as FileSection}
-              />
+              <FileEnginePanel embedded activeSection={section as FileSection} />
             </div>
           </div>
         </div>

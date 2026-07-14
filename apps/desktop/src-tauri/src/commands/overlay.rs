@@ -93,9 +93,6 @@ pub fn set_house_overlay_locked(app: tauri::AppHandle, locked: bool) -> Result<(
         Some(window) => window,
         None => build_house_overlay_window(&app)?,
     };
-    window
-        .set_ignore_cursor_events(locked)
-        .map_err(|error| format!("WINDOW_MISSING: cannot update house overlay lock: {error}"))?;
     let _ = window.set_always_on_bottom(true);
     if !locked {
         window_show_without_focus(&window, "house overlay")?;

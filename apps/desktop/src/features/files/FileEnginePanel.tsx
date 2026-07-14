@@ -31,7 +31,6 @@ import {
   OperationHistoryEntry,
   precheckFileChanges,
   PrecheckReport,
-  prepareDemoRoot,
   Proposal,
   ProposalReport,
   proposeFileChanges,
@@ -61,11 +60,11 @@ type PrecheckSnapshot = {
 
 const demoRootHint = "test-fixtures/file-trees/ui-demo의 임시 복사본을 만들어요";
 
-type FileSection = "organize" | "explore" | "history";
+type FileSection = "rooms" | "organize" | "explore" | "history" | "settings";
 
 export function FileEnginePanel({
   embedded = false,
-  activeSection = "organize"
+  activeSection = "rooms"
 }: { embedded?: boolean; activeSection?: FileSection } = {}) {
   const [pathInput, setPathInput] = useState("");
   const [roots, setRoots] = useState<ManagedRoot[]>([]);
@@ -320,19 +319,6 @@ export function FileEnginePanel({
       }
     } catch (caught) {
       setError(errorMessage(caught));
-    }
-  }
-
-  async function prepareDemoRootPath() {
-    setError(null);
-    setStatus("데모 폴더 준비 중");
-    try {
-      const path = await prepareDemoRoot();
-      setPathInput(path);
-      setStatus("데모 폴더 준비 완료");
-    } catch (caught) {
-      setError(errorMessage(caught));
-      setStatus("데모 준비 실패");
     }
   }
 
@@ -992,12 +978,18 @@ export function FileEnginePanel({
 
   // In embedded (dashboard) mode the sidebar picks one section at a time so the window is not
   // crammed. Standalone mode keeps every panel visible.
+  const showRooms = !embedded || activeSection === "rooms";
   const showOrganize = !embedded || activeSection === "organize";
   const showExplore = !embedded || activeSection === "explore";
   const showHistory = !embedded || activeSection === "history";
-  const sectionTitle = { organize: "폴더 정리", explore: "검색 · 탐색", history: "작업 기록" }[
-    activeSection
-  ];
+  const showSettings = !embedded || activeSection === "settings";
+  const sectionTitle = {
+    rooms: "방 관리",
+    organize: "폴더 정리",
+    explore: "폴더 탐색",
+    history: "작업 기록",
+    settings: "설정"
+  }[activeSection];
 
   return (
     <div className={embedded ? "file-engine-panel embedded-file-engine" : "app-shell file-engine-panel"}>
@@ -1040,10 +1032,10 @@ export function FileEnginePanel({
         <p className="path-text fe-folder-path">{selectedRoot.root}</p>
       ) : null}
 
-      {showOrganize ? (
+      {showRooms ? (
       <>
       <section className="panel root-register-panel">
-        <label htmlFor="root-path">관리 폴더 경로</label>
+        <label htmlFor="root-path">root 폴더 경로</label>
         <div className="input-row">
           <input
             id="root-path"
@@ -1054,39 +1046,53 @@ export function FileEnginePanel({
           <button type="button" onClick={browseForRoot}>
             폴더 찾기
           </button>
-          <button type="button" onClick={() => void prepareDemoRootPath()}>
-            데모
-          </button>
           <button type="button" onClick={registerRoot} disabled={!pathInput.trim()}>
             등록
           </button>
         </div>
         <p className="path-text">
-          경로를 입력하면 등록 버튼이 활성화돼요.
+          방으로 사용할 root 폴더를 등록하고, 아래 목록에서 작업할 방을 선택합니다.
         </p>
       </section>
 
-      <section className="workspace-grid file-engine-workspace">
-        <div className="panel">
-          {!embedded ? (
-            <>
-              <label htmlFor="root-select">등록된 폴더</label>
-              <select
-                id="root-select"
-                value={selectedRootId}
-                onChange={(event) => selectRoot(event.target.value)}
-              >
-                <option value="">선택된 폴더 없음</option>
-                {roots.map((root) => (
-                  <option key={root.root_id} value={root.root_id}>
-                    {root.display_name}
-                  </option>
-                ))}
-              </select>
-              {selectedRoot ? <p className="path-text">{selectedRoot.root}</p> : null}
-            </>
-          ) : null}
-          {selectedRoot ? (
+      <section className="panel room-list-panel">
+        <div className="section-header">
+          <div>
+            <h2>등록된 방</h2>
+            <p className="path-text">선택한 방이 폴더 정리, 폴더 탐색, 작업 기록의 기준이 됩니다.</p>
+          </div>
+        </div>
+        <div className="room-card-list">
+          {roots.map((root) => (
+            <button
+              key={root.root_id}
+              type="button"
+              className={`room-card ${selectedRootId === root.root_id ? "is-active" : ""}`}
+              onClick={() => selectRoot(root.root_id)}
+            >
+              <strong>{root.display_name}</strong>
+              <small>{root.root}</small>
+              <span>{rootStatusLabel(root.last_seen_status)}</span>
+            </button>
+          ))}
+          {roots.length === 0 ? <p>아직 등록된 방이 없습니다.</p> : null}
+        </div>
+      </section>
+      </>
+      ) : null}
+
+      {showSettings && selectedRoot ? (
+        <section className="panel permission-panel">
+          <div className="section-header">
+            <div>
+              <h2>방 관리 권한</h2>
+              <p className="path-text">
+                선택한 방의 로컬 사용 권한, 감시, 모바일 방 연결 상태를 설정합니다.
+              </p>
+            </div>
+            <span className="permission-state">{rootStatusLabel(selectedRoot.last_seen_status)}</span>
+          </div>
+          <div className="permission-grid">
             <div className="root-state-grid">
               <label>
                 <input
@@ -1096,7 +1102,7 @@ export function FileEnginePanel({
                     void updateSelectedRootState({ enabled: event.target.checked })
                   }
                 />
-                사용
+                이 방 사용
               </label>
               <label>
                 <input
@@ -1106,15 +1112,12 @@ export function FileEnginePanel({
                     void updateSelectedRootState({ watch_on_startup: event.target.checked })
                   }
                 />
-                시작 시 감시
+                시작 시 변경 감시
               </label>
-              <small>{rootStatusLabel(selectedRoot.last_seen_status)}</small>
             </div>
-          ) : null}
-          {selectedRoot ? (
-            <div className="agent-actions">
+            <div className="permission-actions">
               <span className="path-text">
-                휴대폰 방: {roomSyncLabel(roomSyncStates[selectedRoot.root_id])}
+                모바일 방: {roomSyncLabel(roomSyncStates[selectedRoot.root_id])}
                 {selectedRoot.room_id
                   ? ` (${selectedRoot.room_id})`
                   : selectedRoot.detached_room_id
@@ -1127,15 +1130,8 @@ export function FileEnginePanel({
                 onClick={() => void syncRootToMobile(selectedRoot, true)}
               >
                 {selectedRoot.room_binding_status === "detached"
-                  ? "휴대폰 폴더 다시 연결"
-                  : "휴대폰과 동기화"}
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={() => void unregisterSelectedRoot()}
-              >
-                관리 폴더 해제
+                  ? "모바일 방 다시 연결"
+                  : "모바일과 동기화"}
               </button>
               {selectedRoot.room_binding_status === "active" ? (
                 <button
@@ -1145,13 +1141,20 @@ export function FileEnginePanel({
                   onClick={() => void disconnectRootFromMobile(selectedRoot)}
                 >
                   {roomDisconnectKeys.current[selectedRoot.root_id]
-                    ? "휴대폰 연결 해제 재시도"
-                    : "휴대폰 폴더 연결 해제"}
+                    ? "모바일 연결 해제 재시도"
+                    : "모바일 방 연결 해제"}
                 </button>
               ) : null}
+              <button
+                type="button"
+                className="danger-button"
+                onClick={() => void unregisterSelectedRoot()}
+              >
+                방 등록 해제
+              </button>
             </div>
-          ) : null}
-          {selectedRoot && autoApprovalPolicy ? (
+          </div>
+          {autoApprovalPolicy ? (
             <div className="auto-approval-panel">
               <label>
                 <input
@@ -1193,13 +1196,35 @@ export function FileEnginePanel({
                 />
               </label>
               <small className="auto-approval-hint">
-                위 동작에 대해 준비된 제안 항목을 미리 점검해요. 자동 승인만으로는 파일 작업을 실행하지 않으며,
-                아래의 사전 점검·실행이 여전히 필요해요. 이 정책은 휴대폰이나 에이전트가 시작한 제안에는 적용되지 않아요.
+                자동 승인은 준비된 제안을 선택 상태로 바꿀 뿐입니다. 실제 파일 변경은 사전 점검과 실행 단계를 거칩니다.
               </small>
             </div>
           ) : null}
+        </section>
+      ) : null}
 
-          <div className="button-grid">
+      {showOrganize ? (
+      <section className="workspace-grid file-engine-workspace">
+        <div className="panel task-panel">
+          {!embedded ? (
+            <>
+              <label htmlFor="root-select">등록된 폴더</label>
+              <select
+                id="root-select"
+                value={selectedRootId}
+                onChange={(event) => selectRoot(event.target.value)}
+              >
+                <option value="">선택된 폴더 없음</option>
+                {roots.map((root) => (
+                  <option key={root.root_id} value={root.root_id}>
+                    {root.display_name}
+                  </option>
+                ))}
+              </select>
+              {selectedRoot ? <p className="path-text">{selectedRoot.root}</p> : null}
+            </>
+          ) : null}
+          <div className="button-grid task-button-grid">
             <button type="button" onClick={analyzeSelectedRoot} disabled={!selectedRootId}>
               파일 분석
             </button>
@@ -1325,12 +1350,11 @@ export function FileEnginePanel({
           </div>
         </div>
       </section>
-      </>
       ) : null}
 
       {showExplore ? (
       <div className="file-engine-duo">
-      <section className="panel search-panel">
+      <section className="panel search-panel search-panel-hidden">
         <div className="section-header">
           <h2>검색</h2>
           <button type="button" onClick={reindexSelectedRoot} disabled={!selectedRootId}>
@@ -1378,10 +1402,35 @@ export function FileEnginePanel({
               이 영역의 작업은 현재 PC에서 사용자가 직접 누를 때만 실행됩니다.
             </p>
           </div>
-          <button type="button" onClick={() => void refreshBrowse()} disabled={!selectedRootId}>
-            새로고침
-          </button>
+          <div className="explore-actions">
+            <button type="button" onClick={reindexSelectedRoot} disabled={!selectedRootId}>
+              색인 갱신
+            </button>
+            <button type="button" onClick={() => void refreshBrowse()} disabled={!selectedRootId}>
+              새로고침
+            </button>
+          </div>
         </div>
+        <form
+          className="input-row search-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void runSearch();
+          }}
+        >
+          <input
+            value={searchQuery}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              if (!event.target.value.trim()) setSearchResults(null);
+            }}
+            placeholder="현재 방에서 파일 이름 검색"
+            disabled={!selectedRootId}
+          />
+          <button type="submit" disabled={!selectedRootId || !searchQuery.trim()}>
+            검색
+          </button>
+        </form>
         <nav className="breadcrumb">
           <button type="button" onClick={() => setBrowsePath("")} disabled={!selectedRootId}>
             {selectedRoot?.display_name || "루트"}
@@ -1399,9 +1448,17 @@ export function FileEnginePanel({
             ))}
         </nav>
         <div className="browse-list">
-          {browseEntries.map((entry) => (
+          {searchResults?.map((file) => (
+            <article key={file.relative_path} className="browse-row search-row-item">
+              <span>FILE</span>
+              <strong>{file.relative_path}</strong>
+              <small>{formatBrowseSize(file.size_bytes)}</small>
+            </article>
+          ))}
+          {searchResults?.length === 0 ? <p>일치하는 색인 파일이 없습니다.</p> : null}
+          {searchResults === null ? browseEntries.map((entry) => (
             <article key={entry.path} className="browse-row">
-              <span>{entry.is_dir ? "📁" : "📄"}</span>
+              <span>{entry.is_dir ? "DIR" : "FILE"}</span>
               {entry.is_dir ? (
                 <button
                   type="button"
@@ -1425,8 +1482,8 @@ export function FileEnginePanel({
                 </button>
               ) : null}
             </article>
-          ))}
-          {selectedRootId && browseEntries.length === 0 ? <p>이 폴더는 비어 있습니다.</p> : null}
+          )) : null}
+          {selectedRootId && searchResults === null && browseEntries.length === 0 ? <p>이 폴더는 비어 있습니다.</p> : null}
           {!selectedRootId ? <p>탐색할 폴더를 먼저 선택하세요.</p> : null}
         </div>
       </section>

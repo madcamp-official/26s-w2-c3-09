@@ -78,7 +78,59 @@ function hasRecentHeartbeat(background: BackgroundRuntimeStatus | null) {
   );
 }
 
-export function AgentPanel() {
+export function AutostartSetting() {
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function refreshAutostart() {
+      try {
+        setAutostart(await isAutostartEnabled());
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+    }
+
+    void refreshAutostart();
+  }, []);
+
+  async function changeAutostart(enabled: boolean) {
+    setAutostartBusy(true);
+    setError(null);
+    try {
+      if (enabled) {
+        await enableAutostart();
+      } else {
+        await disableAutostart();
+      }
+      setAutostart(await isAutostartEnabled());
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setAutostartBusy(false);
+    }
+  }
+
+  return (
+    <>
+      {autostart !== null ? (
+        <label className="autostart-setting">
+          <input
+            type="checkbox"
+            checked={autostart}
+            disabled={autostartBusy}
+            onChange={(event) => void changeAutostart(event.target.checked)}
+          />
+          컴퓨터에 로그인하면 MouseKeeper 자동 실행
+        </label>
+      ) : null}
+      {error ? <p className="error-text">{error}</p> : null}
+    </>
+  );
+}
+
+export function AgentPanel({ showAutostart = true }: { showAutostart?: boolean } = {}) {
   const [connection, setConnection] = useState<AgentConnectionStatus | null>(null);
   const [background, setBackground] = useState<BackgroundRuntimeStatus | null>(null);
   const [deviceName, setDeviceName] = useState("MouseKeeper Desktop");
@@ -589,7 +641,7 @@ export function AgentPanel() {
         </>
       ) : null}
 
-      {autostart !== null ? (
+      {showAutostart && autostart !== null ? (
         <label className="autostart-setting">
           <input
             type="checkbox"
