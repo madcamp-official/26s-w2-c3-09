@@ -56,7 +56,8 @@ export function OnboardingSlot({
       </div>
 
       <p className="mode-note">
-        폴더를 먼저 등록해도 괜찮습니다. 모바일 페어링이 끝나면 등록된 폴더가 자동으로 방과 연결됩니다.
+        폴더만 등록해도 PC의 로컬 관리 기능을 바로 사용할 수 있습니다. 모바일이 필요하면 이후
+        PC 연결 탭에서 페어링하고, 방 관리에서 폴더를 동기화하세요.
       </p>
       {error ? <p className="error-text">{error}</p> : null}
     </section>

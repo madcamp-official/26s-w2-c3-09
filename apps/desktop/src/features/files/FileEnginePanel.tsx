@@ -288,17 +288,7 @@ export function FileEnginePanel({
       if (!selectedRootIdRef.current && storedRoots[0]?.root_id) {
         setPanelSelectedRootId(storedRoots[0].root_id);
       }
-      const results = await Promise.allSettled(
-        storedRoots
-          .filter((root) => root.room_binding_status === "unbound")
-          .map((root) => syncRootToMobile(root, false))
-      );
-      const failedCount = results.filter((result) => result.status === "rejected").length;
-      if (failedCount > 0) {
-        setStatus(`폴더 ${storedRoots.length}개 불러옴 · 휴대폰 동기화 ${failedCount}개 대기 중`);
-      } else if (storedRoots.length > 0) {
-        setStatus(`폴더 ${storedRoots.length}개를 휴대폰과 동기화했어요`);
-      }
+      setStatus(mobileSyncSummary(storedRoots));
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -309,6 +299,7 @@ export function FileEnginePanel({
       const storedRoots = await listManagedRoots();
       setRoots(storedRoots);
       setRoomSyncStates(bindingStates(storedRoots));
+      setStatus(mobileSyncSummary(storedRoots));
       const detachedIds = new Set(
         storedRoots
           .filter((root) => root.room_binding_status === "detached")
@@ -403,11 +394,10 @@ export function FileEnginePanel({
       setStatus("등록 실패");
       return;
     }
-    try {
-      await syncRootToMobile(managed, true);
-    } catch {
-      // The managed root remains registered locally and the UI exposes an explicit retry.
-    }
+    const storedRoots = await listManagedRoots();
+    setRoots(storedRoots);
+    setRoomSyncStates(bindingStates(storedRoots));
+    setStatus("폴더 등록 완료 · 휴대폰과 동기화하세요!");
   }
 
   async function syncRootToMobile(root: ManagedRoot, announce: boolean) {
@@ -417,16 +407,17 @@ export function FileEnginePanel({
       setRoomSyncStates((current) => ({ ...current, [root.root_id]: "synced" }));
       const storedRoots = await listManagedRoots();
       setRoots(storedRoots);
+      setRoomSyncStates(bindingStates(storedRoots));
       if (announce) {
         setError(null);
-        setStatus(room.created ? "폴더 등록 및 방 생성 완료" : "휴대폰과 동기화 완료");
+        setStatus("휴대폰과 동기화됨");
       }
       return room;
     } catch (caught) {
       setRoomSyncStates((current) => ({ ...current, [root.root_id]: "failed" }));
       if (announce) {
         setError(`폴더는 로컬에 안전하게 저장됐지만, 휴대폰 방 동기화에 실패했어요: ${errorMessage(caught)}`);
-        setStatus("휴대폰 방 동기화 대기");
+        setStatus("휴대폰과 동기화하세요!");
       }
       throw caught;
     }
@@ -1062,6 +1053,12 @@ export function FileEnginePanel({
     history: "작업 기록",
     settings: "설정"
   }[activeSection];
+  const topbarStatus =
+    activeSection === "rooms"
+      ? selectedRoot
+        ? roomTopbarStatus(selectedRoot, roomSyncStates[selectedRoot.root_id])
+        : mobileSyncSummary(roots)
+      : status;
 
   return (
     <div className={embedded ? "file-engine-panel embedded-file-engine" : "app-shell file-engine-panel"}>
@@ -1092,8 +1089,8 @@ export function FileEnginePanel({
             </div>
           )}
           <div className="fe-topbar-actions">
-            <span className="fe-status-text" title={status}>
-              {status}
+            <span className="fe-status-text" title={topbarStatus}>
+              {topbarStatus}
             </span>
             <button type="button" onClick={refreshRoots}>
               새로고침
@@ -1848,10 +1845,25 @@ function roomSyncLabel(state: RoomSyncState | undefined) {
     case "detached":
       return "연결 해제됨";
     case "unbound":
-      return "연결 대기";
+      return "휴대폰과 동기화하세요!";
     default:
-      return "대기 중";
+      return "휴대폰과 동기화하세요!";
   }
+}
+
+function roomTopbarStatus(root: ManagedRoot, state: RoomSyncState | undefined) {
+  if (state === "syncing") return "휴대폰과 동기화 중";
+  if (root.room_binding_status === "active" || state === "synced") {
+    return "휴대폰과 동기화됨";
+  }
+  return "휴대폰과 동기화하세요!";
+}
+
+function mobileSyncSummary(roots: ManagedRoot[]) {
+  if (roots.length === 0) return "관리 폴더를 등록하세요";
+  return roots.every((root) => root.room_binding_status === "active")
+    ? "휴대폰과 동기화됨"
+    : "휴대폰과 동기화하세요!";
 }
 
 function operationActionText(operation: OperationHistoryEntry) {

@@ -93,17 +93,19 @@ export function AppShell() {
       : !["unconfigured", "revoked"].includes(connectionState);
 
   useEffect(() => {
-    if (rootCount !== 0 && isPaired !== false) return;
+    if (rootCount !== null && rootCount > 0) return;
     const timer = window.setInterval(() => void refreshSetupState(), 2_000);
     return () => window.clearInterval(timer);
-  }, [isPaired, refreshSetupState, rootCount]);
+  }, [refreshSetupState, rootCount]);
 
   const focusPairing = useCallback(() => {
     document.getElementById("agent-panel")?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   const hasFolder = rootCount !== null && rootCount > 0;
-  const needsSetup = rootCount === null || isPaired === null || rootCount === 0 || isPaired === false;
+  // A desktop-managed root is a complete local workspace even without a phone. Pairing only adds
+  // remote/mobile access; it must never block the local file-safety workflow.
+  const needsSetup = rootCount === null || rootCount === 0;
 
   return (
     <main className={`app-shell ${needsSetup ? "app-shell-setup" : ""}`}>
@@ -117,7 +119,7 @@ export function AppShell() {
             {hasFolder ? `폴더 ${rootCount}개` : "폴더 필요"}
           </span>
           <span className={`setup-mini-status ${isPaired ? "is-ready" : ""}`}>
-            {isPaired ? "모바일 연결됨" : "페어링 필요"}
+            {isPaired ? "모바일 연결됨" : "모바일 미연결 · 로컬 사용 가능"}
           </span>
         </div>
       </div>
@@ -132,13 +134,14 @@ export function AppShell() {
               <span className="setup-kicker">초기 설정</span>
               <h1 id="manager-hero-title">PC 방을 MOUSEKEEPER에게 맡길 준비가 필요해요</h1>
               <p>
-                모바일 앱과 PC를 연결하고, 정리할 root 폴더를 등록하면 매니저를 사용할 수
-                있습니다. 등록된 폴더 안에서만 제안과 파일 작업이 실행됩니다.
+                정리할 root 폴더를 등록하면 PC에서 바로 매니저를 사용할 수 있습니다. 모바일
+                연결은 원격 확인이 필요할 때 추가하며, 모든 파일 작업은 등록된 폴더 안에서만
+                실행됩니다.
               </p>
               <div className="setup-checklist" aria-label="설치 진행 상태">
-                <span className={isPaired ? "is-done" : ""}>1. 모바일 페어링</span>
-                <span className={hasFolder ? "is-done" : ""}>2. 관리 폴더 등록</span>
-                <span className={isPaired && hasFolder ? "is-done" : ""}>3. 관리 시작</span>
+                <span className={hasFolder ? "is-done" : ""}>1. 관리 폴더 등록</span>
+                <span className={isPaired ? "is-done" : ""}>2. 모바일 연결 (선택)</span>
+                <span className={hasFolder ? "is-done" : ""}>3. 로컬 관리 시작</span>
               </div>
             </div>
             <img className="manager-hero-mascot" src={setupMascotUrl} alt="" aria-hidden="true" />
@@ -150,7 +153,7 @@ export function AppShell() {
                 <span className="setup-step-number">1</span>
                 <div>
                   <h2>모바일 앱 연결</h2>
-                  <p>QR 또는 6자리 코드로 이 PC를 계정에 연결합니다.</p>
+                  <p>선택 사항 · QR 또는 6자리 코드로 원격 모바일 기능을 연결합니다.</p>
                 </div>
               </div>
               <AgentPanel key={`setup-pairing-${pairingEpoch}`} />
