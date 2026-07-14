@@ -2,6 +2,8 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Desktop overlay chat now uses the same server-backed room chat sessions as mobile: it lists/creates `/v1/rooms/:roomId/chat-sessions`, loads `/v1/chat-sessions/:sessionId/messages`, and sends messages through the authenticated desktop agent bridge so chat history continues across desktop and Android.
+- OpenAI provider configuration is ready for `AI_MODEL=gpt-5.4` through the Responses API path. Provider authentication/model access errors now fail closed as `AI_PROVIDER_UNCONFIGURED` instead of crashing chat message creation.
 - Release E2E preflight is now available through `pnpm e2e:preflight`. It checks the API base URL, `/health`, `/ready`, Android tooling/device presence, desktop Rust tooling, required repo paths, and dirty worktree state without creating fake pass evidence.
 - Release E2E preflight `-RunLocalChecks` now also runs the mobile smart-cache encrypted download, verified download, and owner-scoped display-cache regression tests so encrypted plaintext handoff changes cannot skip the release gate.
 - Smart-cache policy now supports `pinnedPatterns`: mobile can save pinned path globs, the server stores and returns them with the room policy, and Desktop marks matching local candidates as `manualPin` before reservation submission.
@@ -264,6 +266,10 @@ CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 
 ## 실행 방법
 
 필수 환경 변수는 [.env.example](.env.example)을 기준으로 현재 shell 또는 secret manager에 주입한다. 실제 secret과 서비스 계정 원문은 Git에 넣지 않는다.
+
+### AI 채팅 설정
+
+서버 채팅은 메시지를 PostgreSQL에 먼저 저장하고, OpenAI Responses provider가 설정된 경우에만 AI 명령 초안을 만든다. 운영 EC2에서는 `/etc/mousekeeper/server.env`에 `AI_PROVIDER=openai`, `AI_MODEL=gpt-5.4`, 실제 `AI_API_KEY`를 설정한 뒤 `mousekeeper-server`를 재시작한다. 키나 모델 접근 권한이 없으면 채팅 저장은 유지되고 AI 응답만 `AI_PROVIDER_UNCONFIGURED`로 표시된다.
 
 ```powershell
 # Node workspace

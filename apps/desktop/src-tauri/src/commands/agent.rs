@@ -1,6 +1,7 @@
 use crate::agent::{
-    AgentCommand, AgentConnectionStatus, AgentRoomSnapshot, AgentRoomSync, AgentRuntime,
-    HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
+    AgentChatMessage, AgentChatSendResult, AgentChatSession, AgentCommand, AgentConnectionStatus,
+    AgentRoomSnapshot, AgentRoomSync, AgentRuntime, HeartbeatResult, PairingSession, PairingStatus,
+    SyncEvent,
 };
 use crate::cleanliness::{calculate_cleanliness_snapshot, CleanlinessSnapshot};
 use crate::command_processor::{process_pending_commands, CommandProcessingReport};
@@ -342,6 +343,102 @@ fn activate_agent_room_binding(
 ) -> Result<(), String> {
     roots.bind_room(&room.root_id, room.room_id.clone())?;
     Ok(())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn list_agent_chat_sessions(
+    room_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<Vec<AgentChatSession>, String> {
+    runtime
+        .list_chat_sessions(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn list_agent_chat_sessions(
+    runtime: &AgentRuntime,
+    room_id: String,
+) -> Result<Vec<AgentChatSession>, String> {
+    runtime
+        .list_chat_sessions(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn create_agent_chat_session(
+    room_id: String,
+    title: Option<String>,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentChatSession, String> {
+    runtime
+        .create_chat_session(room_id, title)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn create_agent_chat_session(
+    runtime: &AgentRuntime,
+    room_id: String,
+    title: Option<String>,
+) -> Result<AgentChatSession, String> {
+    runtime
+        .create_chat_session(room_id, title)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn list_agent_chat_messages(
+    session_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<Vec<AgentChatMessage>, String> {
+    runtime
+        .list_chat_messages(session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn list_agent_chat_messages(
+    runtime: &AgentRuntime,
+    session_id: String,
+) -> Result<Vec<AgentChatMessage>, String> {
+    runtime
+        .list_chat_messages(session_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn send_agent_chat_message(
+    session_id: String,
+    content: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentChatSendResult, String> {
+    runtime
+        .send_chat_message(session_id, content)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn send_agent_chat_message(
+    runtime: &AgentRuntime,
+    session_id: String,
+    content: String,
+) -> Result<AgentChatSendResult, String> {
+    runtime
+        .send_chat_message(session_id, content)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "tauri-commands")]
