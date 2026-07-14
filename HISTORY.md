@@ -139,7 +139,7 @@
 - [ ] **Android release signing:** keystore 4개 환경 변수가 없으며 release build는 fail-fast한다.
 - [ ] **Sentry 운영 수신:** SDK와 redaction test는 있으나 DSN/dashboard 수신 검증은 없다.
 - [~] **FCM 실기기:** server/worker/mobile 코드와 새 package debug build는 있으나 release SHA 기준 background/terminated 수신을 다시 검증해야 한다.
-- [~] **Socket.IO 다중 인스턴스:** Redis presence는 구현됐지만 Socket.IO Redis adapter는 없다. 단일 API process에는 동작하나 horizontal scale 전 선행해야 한다.
+- [x] **Socket.IO 다중 인스턴스:** 서버 부팅 시 기존 `REDIS_URL`에서 전용 pub/sub client를 복제해 Socket.IO Redis adapter를 설치한다. room broadcast는 다중 API process에서도 Redis를 통해 전파되며, 실제 로드밸런서 topology 검증은 배포 E2E로 남는다.
 - [~] **worker 기술 차이:** 계획의 BullMQ 대신 PostgreSQL durable job + polling worker를 사용한다. 현재 단일 배포에는 기능적으로 유효하지만 계획과 다른 선택을 ADR로 남겨야 한다.
 - [ ] **updater signing, macOS adapter/notarization, iOS release:** MVP 이후 또는 release hardening 범위로 남아 있다.
 
@@ -257,7 +257,7 @@
 4. Firebase debug/release SHA, release keystore, Sentry DSN을 secret manager와 provider console에 등록한다.
 5. 새 systemd/path/IAM 이름으로 EC2를 migration하고 health/ready/worker/backup/restore를 재검증한다.
 6. 물리 Android와 Windows PC를 사용하는 release E2E script와 체크리스트를 만든다.
-7. worker polling 채택과 Socket.IO 단일 인스턴스 제약을 ADR로 기록한다.
+7. worker polling 채택과 Socket.IO Redis adapter 운영 topology를 ADR로 기록한다.
 
 ### 우선순위 2 — Frontend UI/UX 고도화
 

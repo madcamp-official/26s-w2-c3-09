@@ -1,7 +1,8 @@
 # MOUSEKEEPER (26s-w2-c3-09)
 
-## Recent implementation notes (2026-07-13)
+## Recent implementation notes (2026-07-13/14)
 
+- Server `/realtime` now installs a Socket.IO Redis adapter from the existing `REDIS_URL`, using dedicated duplicated pub/sub clients so multi-process room broadcasts no longer depend on a single API process.
 - Mobile smart-cache downloads now POST `DOWNLOAD_COMPLETED` to `/v1/cached-files/:cachedFileId/access-events` only after local save and SHA-256 verification; the server records `lastAccessedAt`/usage score from that verified ACK instead of treating signed URL issuance as a completed access.
 - Realtime/event contract artifacts now include independent JSON Schema files for `presence.updated`, item-scoped `smart-cache.updated`, and the safe declarative Rule DSL, with OpenAPI component refs and regression checks.
 - Mobile smart-cache file listing now uses the plan-aligned `/v1/rooms/:roomId/smart-cache/files` endpoint, while the older `/v1/rooms/:roomId/cached-files` route remains as a compatibility alias.
@@ -89,7 +90,7 @@ MOUSEKEEPER는 사용자가 등록한 로컬 폴더를 데스크톱 에이전트
 Flutter Android
   ↕ REST + Socket.IO
 NestJS/Fastify Server ─ PostgreSQL
-  ├─ Redis/Valkey: presence TTL, rate limit, 짧은 lock
+  ├─ Redis/Valkey: presence TTL, rate limit, 짧은 lock, Socket.IO adapter
   ├─ PostgreSQL durable worker: 알림, 재시도, object 만료·삭제
   └─ S3-compatible Storage: P0 만료형 전송 / P1 opt-in cache
   ↕ REST + Socket.IO
@@ -150,7 +151,7 @@ Tauri Desktop
 - Firebase Android 및 Google 로그인, Firebase Admin token 검증 경로
 - PostgreSQL/Drizzle 17개 migration과 Redis/Valkey local compose
 - pairing, device, room, heartbeat/presence, command/proposal/decision/execution API
-- Socket.IO `/realtime`, idempotency, audit, cursor replay
+- Socket.IO `/realtime`, Redis adapter, idempotency, audit, cursor replay
 - Flutter home/room/rule partial-update·expanded DSL form/proposal/result/chat session/files/smart-cache UI와 Drift cache/outbox
 - P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
 - FCM token API·outbox·worker 전송과 모바일 foreground/background 수신 경로
