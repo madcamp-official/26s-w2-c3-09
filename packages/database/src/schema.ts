@@ -445,6 +445,8 @@ export const fileBrowseRequests = pgTable(
     relativeDirectory: text("relative_directory").notNull(),
     cursor: varchar("cursor", { length: 512 }),
     query: varchar("query", { length: 100 }),
+    extensions: jsonb("extensions").notNull().default([]),
+    limit: integer("limit").notNull().default(200),
     searchScope: varchar("search_scope", { length: 30 })
       .notNull()
       .default("CURRENT_DIRECTORY"),
@@ -661,6 +663,10 @@ export const commandDrafts = pgTable(
     confirmationSummary: text("confirmation_summary").notNull(),
     status: varchar("status", { length: 30 }).notNull().default("DRAFT"),
     commandId: uuid("command_id").references(() => commands.id),
+    fileBrowseRequestId: uuid("file_browse_request_id").references(
+      () => fileBrowseRequests.id,
+    ),
+    confirmIdempotencyKey: varchar("confirm_idempotency_key", { length: 128 }),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

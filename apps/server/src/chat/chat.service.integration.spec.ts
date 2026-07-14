@@ -6,6 +6,7 @@ import {
   commands,
   createDatabase,
   devices,
+  fileBrowseRequests,
   rooms,
   syncEvents,
   users,
@@ -19,6 +20,7 @@ import type {
   RuleTranslationContext,
 } from '../ai/ai.provider';
 import { UnconfiguredAiProvider } from '../ai/unconfigured-ai.provider';
+import { FileBrowseService } from '../file-access/file-browse.service';
 import { SyncService } from '../sync/sync.service';
 import { ChatService } from './chat.service';
 
@@ -37,10 +39,17 @@ describeDatabase('ChatService PostgreSQL integration', () => {
 
   beforeEach(async () => {
     connection = createDatabase(databaseUrl!);
+    const sync = new SyncService();
+    const redis = {
+      status: 'ready',
+      connect: jest.fn(async () => undefined),
+      get: jest.fn(async () => 'ONLINE_IDLE'),
+    };
     service = new ChatService(
       connection.db,
-      new SyncService(),
+      sync,
       new UnconfiguredAiProvider(),
+      new FileBrowseService(connection.db, redis as never, sync),
     );
     const user = (
       await connection.db
@@ -262,13 +271,15 @@ describeDatabase('ChatService PostgreSQL integration', () => {
       draftResult.draft.id,
       'confirm-draft-key',
     );
+    const command = materialized.command;
+    if (!command) throw new Error('RENAME draft did not create a command');
 
     expect(materialized.draft).toMatchObject({
       id: draftResult.draft.id,
       status: 'MATERIALIZED',
-      commandId: materialized.command.id,
+      commandId: command.id,
     });
-    expect(materialized.command).toMatchObject({
+    expect(command).toMatchObject({
       roomId,
       targetDeviceId: deviceId,
       intent: 'RENAME',
@@ -286,18 +297,109 @@ describeDatabase('ChatService PostgreSQL integration', () => {
         requiresApproval: true,
       }),
     });
-    expect(materialized.command).not.toHaveProperty('idempotencyKey');
-    expect(materialized.command).not.toHaveProperty('createdByUserId');
+    expect(command).not.toHaveProperty('idempotencyKey');
+    expect(command).not.toHaveProperty('createdByUserId');
 
     const replay = await service.confirmCommandDraft(
       userId,
       draftResult.draft.id,
       'confirm-draft-key',
     );
-    expect(replay.command.id).toBe(materialized.command.id);
+    const replayCommand = replay.command;
+    if (!replayCommand)
+      throw new Error('RENAME draft replay did not return a command');
+    expect(replayCommand.id).toBe(command.id);
     await expect(
       service.confirmCommandDraft(userId, draftResult.draft.id, 'another-key'),
     ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_CONFLICT' } });
+  });
+
+  it('materializes FIND drafts as file browse requests without creating commands', async () => {
+    const session = await service.createSession(userId, roomId);
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Find report PDFs',
+    );
+    const draftResult = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'FIND',
+        payload: {
+          rootId: 'Downloads',
+          query: 'report',
+          extensions: ['.pdf'],
+          scopeRelativePath: 'Documents',
+          limit: 25,
+        },
+      },
+      confirmationSummary: 'Find report PDFs under Documents',
+    });
+
+    const materialized = await service.confirmCommandDraft(
+      userId,
+      draftResult.draft.id,
+      'find-draft-key',
+    );
+    const fileBrowseRequest = materialized.fileBrowseRequest;
+    if (!fileBrowseRequest) {
+      throw new Error('FIND draft did not create a file browse request');
+    }
+
+    expect(materialized).not.toHaveProperty('command');
+    expect(materialized.draft).toMatchObject({
+      id: draftResult.draft.id,
+      status: 'MATERIALIZED',
+      commandId: null,
+      fileBrowseRequestId: fileBrowseRequest.id,
+    });
+    expect(fileBrowseRequest).toMatchObject({
+      roomId,
+      desktopDeviceId: deviceId,
+      relativeDirectory: 'Documents',
+      query: 'report',
+      extensions: ['.pdf'],
+      limit: 25,
+      searchScope: 'CURRENT_DIRECTORY',
+      status: 'REQUESTED',
+    });
+    expect(
+      await connection.db
+        .select()
+        .from(commands)
+        .where(eq(commands.roomId, roomId)),
+    ).toHaveLength(0);
+    expect(
+      await connection.db
+        .select()
+        .from(fileBrowseRequests)
+        .where(eq(fileBrowseRequests.roomId, roomId)),
+    ).toHaveLength(1);
+
+    const replay = await service.confirmCommandDraft(
+      userId,
+      draftResult.draft.id,
+      'find-draft-key',
+    );
+    const replayFileBrowseRequest = replay.fileBrowseRequest;
+    if (!replayFileBrowseRequest) {
+      throw new Error('FIND draft replay did not return a file browse request');
+    }
+    expect(replayFileBrowseRequest.id).toBe(fileBrowseRequest.id);
+    await expect(
+      service.confirmCommandDraft(userId, draftResult.draft.id, 'another-key'),
+    ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_CONFLICT' } });
+
+    const events = await connection.db
+      .select()
+      .from(syncEvents)
+      .where(eq(syncEvents.roomId, roomId));
+    expect(events.map((event) => event.eventType)).toEqual(
+      expect.arrayContaining([
+        'file.browse.requested',
+        'command.draft.updated',
+      ]),
+    );
   });
 
   it('rejects and expires command drafts without creating commands', async () => {
@@ -357,6 +459,9 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     await connection.db
       .delete(commandDrafts)
       .where(eq(commandDrafts.roomId, roomId));
+    await connection.db
+      .delete(fileBrowseRequests)
+      .where(eq(fileBrowseRequests.roomId, roomId));
     await connection.db
       .delete(chatMessages)
       .where(eq(chatMessages.roomId, roomId));

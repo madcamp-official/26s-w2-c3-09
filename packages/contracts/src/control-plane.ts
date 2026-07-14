@@ -326,17 +326,33 @@ export const trashCommandPayloadSchema = z
   })
   .strict();
 
+export const fileBrowseExtensionsSchema = z
+  .array(z.string().regex(/^\.[a-z0-9]+$/i))
+  .min(1)
+  .max(50);
+
+const optionalFileBrowseExtensionsSchema = z
+  .array(z.string().regex(/^\.[a-z0-9]+$/i))
+  .max(50);
+
+export const fileBrowseLimitSchema = z.number().int().min(1).max(200);
+
+export const fileBrowseSearchQuerySchema = z
+  .string()
+  .trim()
+  .max(200)
+  .refine((value) => {
+    const codePointLength = Array.from(value).length;
+    return codePointLength >= 2 && codePointLength <= 100;
+  }, "File search query must contain 2 to 100 characters");
+
 export const findCommandPayloadSchema = z
   .object({
     rootId: commandRootIdSchema,
-    query: z.string().trim().min(1).max(200),
-    extensions: z
-      .array(z.string().regex(/^\.[a-z0-9]+$/i))
-      .min(1)
-      .max(50)
-      .optional(),
+    query: fileBrowseSearchQuerySchema,
+    extensions: fileBrowseExtensionsSchema.optional(),
     scopeRelativePath: relativeDirectorySchema.optional(),
-    limit: z.number().int().min(1).max(200),
+    limit: fileBrowseLimitSchema,
   })
   .strict();
 
@@ -625,21 +641,23 @@ export const createFileBrowseRequestSchema = z
   .object({
     relativeDirectory: relativePathSchema.or(z.literal("")),
     cursor: z.string().max(512).nullable().default(null),
-    query: z
-      .string()
-      .trim()
-      .max(200)
-      .refine((value) => {
-        const codePointLength = Array.from(value).length;
-        return codePointLength >= 2 && codePointLength <= 100;
-      }, "File search query must contain 2 to 100 characters")
-      .nullable()
-      .default(null),
+    query: fileBrowseSearchQuerySchema.nullable().default(null),
+    extensions: optionalFileBrowseExtensionsSchema.default([]),
+    limit: fileBrowseLimitSchema.default(200),
     searchScope: z
       .enum(["CURRENT_DIRECTORY", "MANAGED_ROOT"])
       .default("CURRENT_DIRECTORY"),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if (value.extensions.length > 0 && value.query == null) {
+      context.addIssue({
+        code: "custom",
+        path: ["extensions"],
+        message: "extensions can only be applied to a file search query",
+      });
+    }
+  });
 
 export const devicePairedEventPayloadSchema = z
   .object({
@@ -910,6 +928,7 @@ export const commandDraftSummarySchema = z
     status: commandDraftStatusSchema,
     expiresAt: z.iso.datetime(),
     commandId: uuidSchema.nullable(),
+    fileBrowseRequestId: uuidSchema.nullable().optional(),
   })
   .strict();
 export const confirmCommandDraftSchema = z.object({}).strict();

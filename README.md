@@ -2,6 +2,7 @@
 
 ## Recent implementation notes (2026-07-13/14)
 
+- Chat `FIND` command drafts now materialize as read-only file-browse requests instead of queued write-capable commands. The server stores the browse request idempotently, Desktop validates `query`/`extensions`/`limit`, and the local SQLite file index filters extensions before applying page limits.
 - Desktop command processing now fails contract-level `FIND`, `DOWNLOAD`, and `UPLOAD` commands visibly instead of silently skipping them. Until those intent-specific handlers are wired, the agent queues a durable `FAILED` command status so server/mobile state can leave `QUEUED` rather than polling forever.
 - Mobile Room now exposes an approval-first manual file command form for `RENAME`, `MOVE`, `TRASH`, and `CREATE`. The form validates obvious unsafe relative paths locally, sends the existing server command contract with `requiresApproval`, and relies on the desktop agent to create proposals before any file mutation.
 - Mobile Smart Cache reads now use `smartCachePolicyProvider(roomId)`, `smartCacheFilesProvider(roomId)`, and `smartCacheStatusProvider(roomId)`, preserving the existing transport-only offline fallback while keeping policy/file projections behind provider-backed reads.

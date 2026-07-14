@@ -119,6 +119,8 @@ pub struct AgentFileBrowseRequest {
     pub relative_directory: String,
     pub cursor: Option<String>,
     pub query: Option<String>,
+    pub extensions: Vec<String>,
+    pub limit: usize,
     pub search_scope: AgentFileSearchScope,
 }
 
@@ -1736,8 +1738,16 @@ struct FileBrowseRequestResponse {
     #[serde(default)]
     query: Option<String>,
     #[serde(default)]
+    extensions: Vec<String>,
+    #[serde(default = "default_file_browse_limit")]
+    limit: usize,
+    #[serde(default)]
     search_scope: AgentFileSearchScope,
     status: String,
+}
+
+fn default_file_browse_limit() -> usize {
+    200
 }
 
 #[derive(Deserialize)]
@@ -2069,6 +2079,10 @@ fn validate_file_browse_request(
         || response.query.as_ref().is_some_and(|query| {
             !(2..=100).contains(&query.trim().chars().count()) || query != query.trim()
         })
+        || response.limit == 0
+        || response.limit > 200
+        || !file_browse_extensions_are_valid(&response.extensions)
+        || (response.query.is_none() && !response.extensions.is_empty())
         || response.status != "REQUESTED"
     {
         return Err(invalid_response_error(
@@ -2081,8 +2095,21 @@ fn validate_file_browse_request(
         relative_directory: response.relative_directory,
         cursor: response.cursor,
         query: response.query,
+        extensions: response.extensions,
+        limit: response.limit,
         search_scope: response.search_scope,
     })
+}
+
+fn file_browse_extensions_are_valid(extensions: &[String]) -> bool {
+    extensions.is_empty()
+        || (extensions.len() <= 50
+            && extensions.iter().all(|extension| {
+                let bytes = extension.as_bytes();
+                bytes.len() >= 2
+                    && bytes[0] == b'.'
+                    && bytes[1..].iter().all(|byte| byte.is_ascii_alphanumeric())
+            }))
 }
 
 fn validate_file_transfers(
@@ -3135,6 +3162,8 @@ mod tests {
                 "relativeDirectory":"docs",
                 "cursor":null,
                 "query":"report",
+                "extensions":[".pdf"],
+                "limit":25,
                 "searchScope":"MANAGED_ROOT",
                 "status":"REQUESTED"
             }]"#,
@@ -3160,6 +3189,8 @@ mod tests {
 
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].query.as_deref(), Some("report"));
+        assert_eq!(requests[0].extensions, vec![".pdf"]);
+        assert_eq!(requests[0].limit, 25);
         assert_eq!(requests[0].search_scope, AgentFileSearchScope::ManagedRoot);
     }
 
@@ -3173,6 +3204,8 @@ mod tests {
             relative_directory: String::new(),
             cursor: None,
             query: Some(query.clone()),
+            extensions: Vec::new(),
+            limit: 200,
             search_scope: AgentFileSearchScope::ManagedRoot,
             status: "REQUESTED".to_string(),
         })

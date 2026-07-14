@@ -2,5 +2,7 @@
   "relativeDirectory": "Documents",
   "cursor": null,
   "query": "report",
+  "extensions": [],
+  "limit": 200,
   "searchScope": "MANAGED_ROOT"
 }

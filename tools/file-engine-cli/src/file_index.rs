@@ -41,6 +41,7 @@ pub struct IndexedSearchEntry {
     pub name: String,
     pub relative_path: String,
     pub is_dir: bool,
+    pub extension: Option<String>,
     pub size_bytes: Option<u64>,
     pub modified_unix_ms: Option<u128>,
 }
@@ -381,6 +382,28 @@ pub fn search_index_page(
     offset: usize,
     limit: usize,
 ) -> Result<IndexedSearchPage, FileIndexError> {
+    search_index_page_with_extensions(
+        root,
+        query,
+        scope,
+        relative_directory,
+        expected_generation,
+        offset,
+        limit,
+        &[],
+    )
+}
+
+pub fn search_index_page_with_extensions(
+    root: impl AsRef<Path>,
+    query: &str,
+    scope: IndexedSearchScope,
+    relative_directory: &str,
+    expected_generation: Option<u64>,
+    offset: usize,
+    limit: usize,
+    extensions: &[String],
+) -> Result<IndexedSearchPage, FileIndexError> {
     let query = query.trim();
     if !(2..=100).contains(&query.chars().count()) {
         return Err(FileIndexError::InvalidSearch(
@@ -392,6 +415,7 @@ pub fn search_index_page(
             "search page limit must be between 1 and 200".to_string(),
         ));
     }
+    let extensions = normalize_extension_filter(extensions)?;
     let guard = PathGuard::new(root).map_err(FileIndexError::Guard)?;
     let relative_directory = normalize_relative_directory(relative_directory)?;
     if scope == IndexedSearchScope::CurrentDirectory {
@@ -429,7 +453,7 @@ pub fn search_index_page(
             let rows = match scope {
                 IndexedSearchScope::CurrentDirectory => {
                     sqlx::query(
-                        "SELECT name, relative_path, entry_type, size_bytes, modified_unix_ms
+                        "SELECT name, relative_path, entry_type, extension, size_bytes, modified_unix_ms
                      FROM file_search_entries
                      WHERE parent_relative_path = ? AND instr(normalized_name, ?) > 0
                      ORDER BY normalized_name, relative_path
@@ -444,7 +468,7 @@ pub fn search_index_page(
                 }
                 IndexedSearchScope::ManagedRoot => {
                     sqlx::query(
-                        "SELECT name, relative_path, entry_type, size_bytes, modified_unix_ms
+                        "SELECT name, relative_path, entry_type, extension, size_bytes, modified_unix_ms
                      FROM file_search_entries
                      WHERE instr(normalized_name, ?) > 0
                      ORDER BY normalized_name, relative_path
@@ -466,7 +490,9 @@ pub fn search_index_page(
             let row_count = rows.len();
             for row in rows {
                 let entry = indexed_search_entry_from_row(&row)?;
-                if validate_indexed_search_hit(&guard, &entry) {
+                if validate_indexed_search_hit(&guard, &entry)
+                    && indexed_entry_matches_extensions(&entry, &extensions)
+                {
                     if entries.len() == limit {
                         next_offset = Some(scanned_offset);
                         break 'pages;
@@ -573,8 +599,13 @@ fn indexed_search_entry(
         .to_string();
     Some(IndexedSearchEntry {
         name,
-        relative_path: normalized_path,
         is_dir,
+        extension: if is_dir {
+            None
+        } else {
+            extension_of(&normalized_path)
+        },
+        relative_path: normalized_path,
         size_bytes: if is_dir { None } else { size_bytes },
         modified_unix_ms,
     })
@@ -596,14 +627,15 @@ async fn insert_search_entry(
     sqlx::query(
         "INSERT INTO file_search_entries (
              relative_path, parent_relative_path, name, normalized_name,
-             entry_type, size_bytes, modified_unix_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?)",
+             entry_type, extension, size_bytes, modified_unix_ms
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&entry.relative_path)
     .bind(parent)
     .bind(&entry.name)
     .bind(normalize_name(&entry.name))
     .bind(if entry.is_dir { "directory" } else { "file" })
+    .bind(&entry.extension)
     .bind(entry.size_bytes.map(|value| value as i64))
     .bind(entry.modified_unix_ms.map(|value| value as i64))
     .execute(&mut **tx)
@@ -653,6 +685,10 @@ fn indexed_search_entry_from_row(
         .try_get("modified_unix_ms")
         .map_err(query_error)
         .map_err(FileIndexError::Db)?;
+    let extension: Option<String> = row
+        .try_get("extension")
+        .map_err(query_error)
+        .map_err(FileIndexError::Db)?;
     Ok(IndexedSearchEntry {
         name: row
             .try_get("name")
@@ -663,9 +699,44 @@ fn indexed_search_entry_from_row(
             .map_err(query_error)
             .map_err(FileIndexError::Db)?,
         is_dir: entry_type == "directory",
+        extension,
         size_bytes: size_bytes.map(|value| value as u64),
         modified_unix_ms: modified.map(|value| value as u128),
     })
+}
+
+fn normalize_extension_filter(extensions: &[String]) -> Result<Vec<String>, FileIndexError> {
+    if extensions.len() > 50 {
+        return Err(FileIndexError::InvalidSearch(
+            "extension filter may contain at most 50 extensions".to_string(),
+        ));
+    }
+    extensions
+        .iter()
+        .map(|extension| {
+            let normalized = extension.trim().to_ascii_lowercase();
+            let Some(raw) = normalized.strip_prefix('.') else {
+                return Err(FileIndexError::InvalidSearch(
+                    "extension filters must start with a dot".to_string(),
+                ));
+            };
+            if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+                return Err(FileIndexError::InvalidSearch(
+                    "extension filters may contain only ASCII letters and digits".to_string(),
+                ));
+            }
+            Ok(raw.to_string())
+        })
+        .collect()
+}
+
+fn indexed_entry_matches_extensions(entry: &IndexedSearchEntry, extensions: &[String]) -> bool {
+    extensions.is_empty()
+        || (!entry.is_dir
+            && entry
+                .extension
+                .as_ref()
+                .is_some_and(|extension| extensions.iter().any(|item| item == extension)))
 }
 
 fn normalize_relative_directory(path: &str) -> Result<String, FileIndexError> {
@@ -828,7 +899,8 @@ mod tests {
 
     use super::{
         clear_index, list_index, reindex_root, remove_file, remove_path, search_index,
-        search_index_page, upsert_existing_file, upsert_file, FileIndexError, IndexedSearchScope,
+        search_index_page, search_index_page_with_extensions, upsert_existing_file, upsert_file,
+        FileIndexError, IndexedSearchScope,
     };
 
     fn make_root() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -1046,6 +1118,39 @@ mod tests {
             .map(|entry| entry.relative_path.as_str())
             .collect::<Vec<_>>();
         assert_eq!(paths, vec!["needle-parent"]);
+    }
+
+    #[test]
+    fn search_filters_extensions_before_applying_limit() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("root");
+        for index in 0..20 {
+            fs::write(root.join(format!("report-{index:02}.txt")), "x").expect("txt");
+        }
+        for index in 0..3 {
+            fs::write(root.join(format!("report-{index:02}.pdf")), "x").expect("pdf");
+        }
+        reindex_root(&root).expect("reindex");
+
+        let page = search_index_page_with_extensions(
+            &root,
+            "report",
+            IndexedSearchScope::ManagedRoot,
+            "",
+            None,
+            0,
+            2,
+            &[".pdf".to_string()],
+        )
+        .expect("extension-filtered search");
+
+        assert_eq!(page.entries.len(), 2);
+        assert!(page.next_offset.is_some());
+        assert!(page
+            .entries
+            .iter()
+            .all(|entry| entry.extension.as_deref() == Some("pdf")));
     }
 
     #[test]

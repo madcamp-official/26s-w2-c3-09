@@ -141,6 +141,7 @@ async fn migrate(pool: &SqlitePool) -> Result<(), DbError> {
             name                  TEXT NOT NULL,
             normalized_name       TEXT NOT NULL,
             entry_type            TEXT NOT NULL CHECK(entry_type IN ('file', 'directory')),
+            extension             TEXT,
             size_bytes            INTEGER,
             modified_unix_ms      INTEGER
         )",
@@ -150,6 +151,13 @@ async fn migrate(pool: &SqlitePool) -> Result<(), DbError> {
     .map_err(|error| DbError::Migrate {
         message: error.to_string(),
     })?;
+    add_column_if_missing(
+        pool,
+        "PRAGMA table_info(file_search_entries)",
+        "extension",
+        "ALTER TABLE file_search_entries ADD COLUMN extension TEXT",
+    )
+    .await?;
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS file_search_entries_parent_name_idx
          ON file_search_entries(parent_relative_path, normalized_name, relative_path)",

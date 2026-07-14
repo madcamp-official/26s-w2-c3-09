@@ -205,9 +205,9 @@ describe("event JSON schema artifacts", () => {
       "AVAILABLE",
       "INVALIDATED",
     ]);
-    expect(schema.$defs.FreshnessUpdated.properties?.freshnessStatus?.const).toBe(
-      "STALE",
-    );
+    expect(
+      schema.$defs.FreshnessUpdated.properties?.freshnessStatus?.const,
+    ).toBe("STALE");
   });
 
   it("keeps the exported rule DSL declarative and path-bounded", () => {
@@ -493,6 +493,8 @@ describe("v1.4 connection and browse contracts", () => {
       relativeDirectory: "Documents",
       cursor: null,
       query: null,
+      extensions: [],
+      limit: 200,
       searchScope: "CURRENT_DIRECTORY",
     });
     expect(
@@ -512,6 +514,26 @@ describe("v1.4 connection and browse contracts", () => {
       createFileBrowseRequestSchema.safeParse({
         relativeDirectory: "Documents",
         query: "r",
+      }).success,
+    ).toBe(false);
+    expect(
+      createFileBrowseRequestSchema.safeParse({
+        relativeDirectory: "Documents",
+        extensions: [".pdf"],
+      }).success,
+    ).toBe(false);
+    expect(
+      createFileBrowseRequestSchema.safeParse({
+        relativeDirectory: "Documents",
+        query: "report",
+        extensions: ["pdf"],
+      }).success,
+    ).toBe(false);
+    expect(
+      createFileBrowseRequestSchema.safeParse({
+        relativeDirectory: "Documents",
+        query: "report",
+        limit: 201,
       }).success,
     ).toBe(false);
     expect(

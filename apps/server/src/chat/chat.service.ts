@@ -3,23 +3,30 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
-import { createCommandDraftSchema } from '@mousekeeper/contracts';
+import {
+  createCommandDraftSchema,
+  createFileBrowseRequestSchema,
+  findCommandPayloadSchema,
+} from '@mousekeeper/contracts';
 import {
   chatMessages,
   chatSessions,
   commandDrafts,
   commands,
   devices,
+  fileBrowseRequests,
   rooms,
   type Database,
 } from '@mousekeeper/database';
-import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { mapAiResultToCommandDraft } from '../ai/ai-command-draft.mapper';
 import { AI_PROVIDER, type AiProvider } from '../ai/ai.provider';
 import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
+import { FileBrowseService } from '../file-access/file-browse.service';
 import { SyncService } from '../sync/sync.service';
 
 const CHAT_SESSION_LIMIT = 5;
@@ -45,6 +52,7 @@ export class ChatService {
     @Inject(DATABASE) private readonly db: Database,
     private readonly sync: SyncService,
     @Inject(AI_PROVIDER) private readonly ai: AiProvider,
+    @Optional() private readonly browse?: FileBrowseService,
   ) {}
 
   async listSessions(userId: string, roomId: string) {
@@ -264,16 +272,30 @@ export class ChatService {
     return this.db.transaction(async (tx) => {
       const owned = await this.requireOwnedDraftIn(tx, userId, draftId);
       const draft = owned.draft;
-      if (draft.status === 'MATERIALIZED' && draft.commandId) {
-        const command = await this.requireMaterializedCommandIn(
-          tx,
-          draft.commandId,
-          key,
-        );
-        return {
-          draft: this.publicDraft(draft),
-          command: this.publicCommand(command),
-        };
+      if (draft.status === 'MATERIALIZED') {
+        if (draft.commandId) {
+          const command = await this.requireMaterializedCommandIn(
+            tx,
+            draft.commandId,
+            key,
+          );
+          return {
+            draft: this.publicDraft(draft),
+            command: this.publicCommand(command),
+          };
+        }
+        if (draft.fileBrowseRequestId) {
+          this.requireMaterializedDraftKey(draft, key);
+          const fileBrowseRequest =
+            await this.requireMaterializedFileBrowseRequestIn(
+              tx,
+              draft.fileBrowseRequestId,
+            );
+          return {
+            draft: this.publicDraft(draft),
+            fileBrowseRequest: this.publicFileBrowseRequest(fileBrowseRequest),
+          };
+        }
       }
       if (draft.status === 'REJECTED') {
         throw new ConflictException({
@@ -304,6 +326,10 @@ export class ChatService {
           from: draft.status,
           to: 'MATERIALIZED',
         });
+      }
+      await this.ensureConfirmKeyAvailableIn(tx, userId, key, draft.id);
+      if (draft.intent === 'FIND') {
+        return this.materializeFindDraftIn(tx, userId, owned, key);
       }
       const device = await this.requireActiveRoomDeviceIn(
         tx,
@@ -345,7 +371,11 @@ export class ChatService {
       const updated = (
         await tx
           .update(commandDrafts)
-          .set({ status: 'MATERIALIZED', commandId: command.id })
+          .set({
+            status: 'MATERIALIZED',
+            commandId: command.id,
+            confirmIdempotencyKey: key,
+          })
           .where(eq(commandDrafts.id, draft.id))
           .returning()
       )[0]!;
@@ -376,6 +406,76 @@ export class ChatService {
         command: this.publicCommand(command),
       };
     });
+  }
+
+  private async materializeFindDraftIn(
+    tx: Transaction,
+    userId: string,
+    owned: {
+      draft: typeof commandDrafts.$inferSelect;
+      session: typeof chatSessions.$inferSelect;
+    },
+    key: string,
+  ) {
+    if (!this.browse) {
+      throw new ConflictException({ code: 'FILE_BROWSE_UNCONFIGURED' });
+    }
+    const parsed = findCommandPayloadSchema.safeParse(owned.draft.arguments);
+    if (!parsed.success) {
+      throw new ConflictException({ code: 'INVALID_DRAFT_ARGUMENTS' });
+    }
+    const room = await this.requireOwnedRoomIn(
+      tx,
+      userId,
+      owned.session.roomId,
+    );
+    if (parsed.data.rootId !== room.rootAlias) {
+      throw new ConflictException({ code: 'ROOT_MISMATCH' });
+    }
+    const browseBody = createFileBrowseRequestSchema.parse({
+      relativeDirectory: parsed.data.scopeRelativePath ?? '',
+      cursor: null,
+      query: parsed.data.query,
+      extensions: parsed.data.extensions ?? [],
+      limit: parsed.data.limit,
+      searchScope: parsed.data.scopeRelativePath
+        ? 'CURRENT_DIRECTORY'
+        : 'MANAGED_ROOT',
+    });
+    const fileBrowseRequest = await this.browse.createInTransaction(
+      tx,
+      userId,
+      owned.session.roomId,
+      browseBody,
+    );
+    const updated = (
+      await tx
+        .update(commandDrafts)
+        .set({
+          status: 'MATERIALIZED',
+          fileBrowseRequestId: fileBrowseRequest.id,
+          confirmIdempotencyKey: key,
+        })
+        .where(eq(commandDrafts.id, owned.draft.id))
+        .returning()
+    )[0]!;
+    await this.sync.append(tx, {
+      userId,
+      deviceId: null,
+      roomId: owned.session.roomId,
+      eventType: 'command.draft.updated',
+      aggregateType: 'command_draft',
+      aggregateId: owned.draft.id,
+      payload: {
+        commandDraftId: owned.draft.id,
+        status: updated.status,
+        fileBrowseRequestId: fileBrowseRequest.id,
+      },
+    });
+    return {
+      draft: this.publicDraft(updated),
+      fileBrowseRequest: this.publicFileBrowseRequest(fileBrowseRequest),
+    };
   }
 
   async rejectCommandDraft(userId: string, draftId: string) {
@@ -750,6 +850,69 @@ export class ChatService {
     return command;
   }
 
+  private requireMaterializedDraftKey(
+    draft: typeof commandDrafts.$inferSelect,
+    key: string,
+  ) {
+    if (draft.confirmIdempotencyKey !== key) {
+      throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+    }
+  }
+
+  private async requireMaterializedFileBrowseRequestIn(
+    tx: Transaction,
+    requestId: string,
+  ) {
+    const request = (
+      await tx
+        .select()
+        .from(fileBrowseRequests)
+        .where(eq(fileBrowseRequests.id, requestId))
+        .limit(1)
+    )[0];
+    if (!request) throw new ConflictException({ code: 'CONFLICT' });
+    return request;
+  }
+
+  private async ensureConfirmKeyAvailableIn(
+    tx: Transaction,
+    userId: string,
+    key: string,
+    draftId: string,
+  ) {
+    const existingCommand = (
+      await tx
+        .select({ id: commands.id })
+        .from(commands)
+        .where(
+          and(
+            eq(commands.createdByUserId, userId),
+            eq(commands.idempotencyKey, key),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (existingCommand) {
+      throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+    }
+    const existingDraft = (
+      await tx
+        .select({ id: commandDrafts.id })
+        .from(commandDrafts)
+        .where(
+          and(
+            eq(commandDrafts.createdByUserId, userId),
+            eq(commandDrafts.confirmIdempotencyKey, key),
+            ne(commandDrafts.id, draftId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (existingDraft) {
+      throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT' });
+    }
+  }
+
   private async withPreviews(
     db: DbExecutor,
     sessions: (typeof chatSessions.$inferSelect)[],
@@ -814,12 +977,19 @@ export class ChatService {
       status: draft.status,
       expiresAt: draft.expiresAt,
       commandId: draft.commandId,
+      fileBrowseRequestId: draft.fileBrowseRequestId,
     };
   }
 
   private publicCommand(command: typeof commands.$inferSelect) {
     const { createdByUserId: _, idempotencyKey: __, ...safe } = command;
     return safe;
+  }
+
+  private publicFileBrowseRequest(
+    request: typeof fileBrowseRequests.$inferSelect,
+  ) {
+    return request;
   }
 }
 
