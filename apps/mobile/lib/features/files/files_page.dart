@@ -48,6 +48,59 @@ class ApiFileBrowseGateway implements FileBrowseGateway {
       _api.get('/v1/file-browse-requests/$requestId');
 }
 
+final fileBrowseGatewayProvider = Provider<FileBrowseGateway>((ref) {
+  return ApiFileBrowseGateway(ref.watch(apiClientProvider));
+});
+
+class FileDirectoryBrowseRequest {
+  const FileDirectoryBrowseRequest({
+    required this.roomId,
+    required this.relativeDirectory,
+    this.cursor,
+    this.query,
+    this.searchScope,
+  });
+
+  final String roomId;
+  final String relativeDirectory;
+  final String? cursor;
+  final String? query;
+  final String? searchScope;
+
+  Map<String, dynamic> toBody() {
+    final body = <String, dynamic>{
+      'relativeDirectory': relativeDirectory,
+      'cursor': cursor,
+    };
+    final trimmedQuery = query?.trim();
+    if (trimmedQuery != null && trimmedQuery.isNotEmpty) {
+      body['query'] = trimmedQuery;
+      body['searchScope'] = searchScope ?? fileSearchScopeDirectory;
+    }
+    return body;
+  }
+}
+
+typedef FileDirectoryBrowseRequester =
+    Future<Map<String, dynamic>> Function(FileDirectoryBrowseRequest request);
+
+typedef FileBrowseStatusFetcher =
+    Future<Map<String, dynamic>> Function(String requestId);
+
+final fileDirectoryBrowseRequesterProvider =
+    Provider<FileDirectoryBrowseRequester>((ref) {
+      final gateway = ref.watch(fileBrowseGatewayProvider);
+      return (request) =>
+          gateway.createRequest(request.roomId, request.toBody());
+    });
+
+final fileBrowseStatusFetcherProvider = Provider<FileBrowseStatusFetcher>((
+  ref,
+) {
+  final gateway = ref.watch(fileBrowseGatewayProvider);
+  return gateway.getRequest;
+});
+
 bool shouldClearBrowseEntries({required bool append}) => !append;
 
 List<Map<String, dynamic>> mergeBrowseEntries({
@@ -483,8 +536,21 @@ class _FilesPageState extends ConsumerState<FilesPage> {
   bool _disposed = false;
   bool _transferCancelled = false;
 
-  FileBrowseGateway get _browseGateway =>
-      widget.browseGateway ?? ApiFileBrowseGateway(ref.read(apiClientProvider));
+  Future<Map<String, dynamic>> _createBrowseRequest(
+    FileDirectoryBrowseRequest request,
+  ) {
+    final gateway = widget.browseGateway;
+    if (gateway != null) {
+      return gateway.createRequest(request.roomId, request.toBody());
+    }
+    return ref.read(fileDirectoryBrowseRequesterProvider)(request);
+  }
+
+  Future<Map<String, dynamic>> _getBrowseRequest(String requestId) {
+    final gateway = widget.browseGateway;
+    if (gateway != null) return gateway.getRequest(requestId);
+    return ref.read(fileBrowseStatusFetcherProvider)(requestId);
+  }
 
   bool get _searchActive => isValidFileSearchQuery(_searchQuery);
   bool get _busy => _browseLoading || _transferLoading;
@@ -533,15 +599,15 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       }
     });
     try {
-      final body = <String, dynamic>{
-        'relativeDirectory': relativeDirectory,
-        'cursor': cursor,
-      };
-      if (query != null) {
-        body['query'] = query;
-        body['searchScope'] = searchScope;
-      }
-      final created = await _browseGateway.createRequest(widget.roomId, body);
+      final created = await _createBrowseRequest(
+        FileDirectoryBrowseRequest(
+          roomId: widget.roomId,
+          relativeDirectory: relativeDirectory,
+          cursor: cursor,
+          query: query,
+          searchScope: searchScope,
+        ),
+      );
       final requestId = created['id'] as String;
       if (requestVersion != _requestVersion) return;
       _activeBrowseRequestId = requestId;
@@ -611,7 +677,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       if (requestVersion != _requestVersion) {
         throw const _StaleBrowseResponse();
       }
-      value = await _browseGateway.getRequest(requestId);
+      value = await _getBrowseRequest(requestId);
       if (requestVersion != _requestVersion) {
         throw const _StaleBrowseResponse();
       }

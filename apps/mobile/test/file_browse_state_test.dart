@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mousekeeper/core/sync/realtime_controller.dart';
 import 'package:mousekeeper/features/files/files_page.dart';
@@ -202,6 +203,43 @@ void main() {
     expect(fileBrowseStatusFallbackInterval, const Duration(seconds: 5));
   });
 
+  test(
+    'file browse providers create requests through the injected gateway',
+    () async {
+      final gateway = _RecordingFileBrowseGateway();
+      final container = ProviderContainer(
+        overrides: [fileBrowseGatewayProvider.overrideWithValue(gateway)],
+      );
+      addTearDown(container.dispose);
+
+      final created =
+          await container.read(fileDirectoryBrowseRequesterProvider)(
+            const FileDirectoryBrowseRequest(
+              roomId: 'room-a',
+              relativeDirectory: 'reports',
+              cursor: 'cursor-1',
+              query: ' final ',
+              searchScope: fileSearchScopeManagedRoot,
+            ),
+          );
+      final status = await container.read(fileBrowseStatusFetcherProvider)(
+        'request-1',
+      );
+
+      expect(created, {'id': 'request-1'});
+      expect(gateway.createdRoomIds, ['room-a']);
+      expect(gateway.createdBodies, [
+        {
+          'relativeDirectory': 'reports',
+          'cursor': 'cursor-1',
+          'query': 'final',
+          'searchScope': fileSearchScopeManagedRoot,
+        },
+      ]);
+      expect(status, {'status': 'READY'});
+    },
+  );
+
   test('다음 페이지 실패 전에는 기존 READY page를 지우지 않는다', () {
     final existing = <Map<String, dynamic>>[
       {'relativePath': 'first.pdf'},
@@ -291,3 +329,26 @@ Map<String, dynamic> _entry(
   'sizeBytes': type == 'FILE' ? sizeBytes : null,
   'modifiedAt': '2026-07-13T00:00:00.000Z',
 };
+
+class _RecordingFileBrowseGateway implements FileBrowseGateway {
+  final List<String> createdRoomIds = [];
+  final List<Map<String, dynamic>> createdBodies = [];
+
+  @override
+  Future<Map<String, dynamic>> createRequest(
+    String roomId,
+    Map<String, dynamic> body,
+  ) async {
+    createdRoomIds.add(roomId);
+    createdBodies.add(Map<String, dynamic>.from(body));
+    return {'id': 'request-${createdBodies.length}'};
+  }
+
+  @override
+  Future<Map<String, dynamic>> getRequest(String requestId) async {
+    if (requestId != 'request-1') {
+      throw StateError('UNKNOWN_BROWSE_REQUEST: $requestId');
+    }
+    return {'status': 'READY'};
+  }
+}
