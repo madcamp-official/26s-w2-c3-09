@@ -165,6 +165,32 @@ void main() {
     expect(find.byType(PixelFillMouse), findsOneWidget);
   });
 
+  testWidgets('Pairing Gate loading은 짧은 로딩 깜빡임을 숨기고 장기 대기 재시도를 표시한다', (
+    tester,
+  ) async {
+    var retried = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DeferredPairingGateLoadingPage(onRetry: () => retried = true),
+      ),
+    );
+
+    expect(find.text('연결된 PC를 확인하는 중입니다'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 199));
+    expect(find.text('연결된 PC를 확인하는 중입니다'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(find.text('연결된 PC를 확인하는 중입니다'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 10));
+    expect(find.text('연결이 평소보다 오래 걸리고 있어요.'), findsOneWidget);
+    expect(find.text('다시 확인'), findsNothing);
+
+    await tester.pump(const Duration(seconds: 10));
+    expect(find.text('다시 확인'), findsOneWidget);
+    await tester.tap(find.text('다시 확인'));
+    expect(retried, isTrue);
+  });
+
   testWidgets('Pairing Gate 오류는 stale cache 대신 재시도를 표시한다', (tester) async {
     var retried = false;
     await tester.pumpWidget(

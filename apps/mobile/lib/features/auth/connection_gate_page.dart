@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mousekeeper_character_assets/character_assets.dart';
@@ -14,7 +16,10 @@ class ConnectionGatePage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final gate = ref.watch(connectionGateControllerProvider);
     return gate.when(
-      loading: () => const PairingGateLoadingPage(),
+      loading: () => DeferredPairingGateLoadingPage(
+        onRetry: () =>
+            ref.read(connectionGateControllerProvider.notifier).retryLoad(),
+      ),
       error: (error, _) => PairingGateErrorPage(
         error: error,
         onRetry: () =>
@@ -51,9 +56,13 @@ class PairingGateLoadingPage extends StatelessWidget {
   const PairingGateLoadingPage({
     super.key,
     this.stage = PairingGateLoadingStage.loadingConnections,
+    this.showLongWaitMessage = false,
+    this.onRetry,
   });
 
   final PairingGateLoadingStage stage;
+  final bool showLongWaitMessage;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -75,9 +84,91 @@ class PairingGateLoadingPage extends StatelessWidget {
               '${(stage.progress * 100).round()}%',
               style: Theme.of(context).textTheme.labelMedium,
             ),
+            if (showLongWaitMessage) ...[
+              const SizedBox(height: 16),
+              const Text('연결이 평소보다 오래 걸리고 있어요.', textAlign: TextAlign.center),
+            ],
+            if (onRetry != null) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('다시 확인'),
+              ),
+            ],
           ],
         ),
       ),
+    );
+  }
+}
+
+class DeferredPairingGateLoadingPage extends StatefulWidget {
+  const DeferredPairingGateLoadingPage({
+    super.key,
+    required this.onRetry,
+    this.showAfter = const Duration(milliseconds: 200),
+    this.longWaitAfter = const Duration(seconds: 10),
+    this.retryAfter = const Duration(seconds: 20),
+  });
+
+  final VoidCallback onRetry;
+  final Duration showAfter;
+  final Duration longWaitAfter;
+  final Duration retryAfter;
+
+  @override
+  State<DeferredPairingGateLoadingPage> createState() =>
+      _DeferredPairingGateLoadingPageState();
+}
+
+class _DeferredPairingGateLoadingPageState
+    extends State<DeferredPairingGateLoadingPage> {
+  final List<Timer> _timers = [];
+  bool _visible = false;
+  bool _longWait = false;
+  bool _showRetry = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
+  }
+
+  @override
+  void dispose() {
+    for (final timer in _timers) {
+      timer.cancel();
+    }
+    _timers.clear();
+    super.dispose();
+  }
+
+  void _schedule() {
+    _after(widget.showAfter, () => _visible = true);
+    _after(widget.longWaitAfter, () => _longWait = true);
+    _after(widget.retryAfter, () => _showRetry = true);
+  }
+
+  void _after(Duration duration, void Function() update) {
+    if (duration <= Duration.zero) {
+      update();
+      return;
+    }
+    _timers.add(
+      Timer(duration, () {
+        if (!mounted) return;
+        setState(update);
+      }),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_visible) return const Scaffold(body: SizedBox.shrink());
+    return PairingGateLoadingPage(
+      showLongWaitMessage: _longWait,
+      onRetry: _showRetry ? widget.onRetry : null,
     );
   }
 }
