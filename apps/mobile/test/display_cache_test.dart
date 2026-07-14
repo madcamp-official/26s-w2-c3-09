@@ -250,6 +250,46 @@ void main() {
   });
 
   test(
+    'encrypted smart-cache local metadata records plaintext checksum and size',
+    () async {
+      final cache = DisplayCache(database, 'firebase-user-a');
+      final listed = {
+        'id': 'cached-file-encrypted',
+        'roomId': 'room-a',
+        'sourceRelativePath': 'docs/encrypted.pdf',
+        'availabilityStatus': 'AVAILABLE',
+        'freshnessStatus': 'VERIFIED_CURRENT',
+        'sizeBytes': 128,
+        'sha256': List.filled(64, 'a').join(),
+      };
+      await cache.replaceRooms([
+        {'id': 'room-a'},
+      ]);
+      await cache.replaceSmartCacheFiles('room-a', [listed]);
+
+      await cache.markSmartCacheFileDownloaded(
+        roomId: 'room-a',
+        file: listed,
+        downloadTarget: {
+          'sha256': List.filled(64, 'b').join(),
+          'sizeBytes': 160,
+          'encryptionMetadata': {
+            'plaintextSha256': List.filled(64, 'c').join(),
+            'plaintextSizeBytes': 128,
+          },
+        },
+        localDownloadPath: '/local/encrypted.pdf',
+      );
+
+      final file = (await cache.smartCacheFiles('room-a')).single;
+      expect(file['sha256'], List.filled(64, 'c').join());
+      expect(file['objectSha256'], List.filled(64, 'b').join());
+      expect(file['sizeBytes'], 128);
+      expect(file['localDownloadPath'], '/local/encrypted.pdf');
+    },
+  );
+
+  test(
     'room cascade removes only outbox mutations targeting that room',
     () async {
       final cache = DisplayCache(database, 'firebase-user-a');

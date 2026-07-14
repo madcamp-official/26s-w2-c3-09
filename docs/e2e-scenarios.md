@@ -159,8 +159,9 @@ Goal: prove smart-cache remains explicit, encrypted, quota-bound, and stale-awar
 Pass evidence:
 
 - Feature remains opt-in.
-- Mobile plaintext handoff stays `UNCONFIGURED` until key sync/tag verification
-  is implemented.
+- Mobile plaintext handoff verifies the encrypted object only after a real
+  synced key is available; without key sync it remains
+  `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`.
 - Quota/LRU deletion does not remove unrelated room objects.
 
 ## Release evidence template

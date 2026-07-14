@@ -439,14 +439,27 @@ class DisplayCache {
       final previousPayload = existing == null
           ? const <String, dynamic>{}
           : _decode(existing.payloadJson);
+      final encryptionMetadata = downloadTarget['encryptionMetadata'];
+      final plaintextSha256 = encryptionMetadata is Map
+          ? encryptionMetadata['plaintextSha256']
+          : null;
+      final plaintextSizeBytes = encryptionMetadata is Map
+          ? encryptionMetadata['plaintextSizeBytes']
+          : null;
+      final objectSha256 = downloadTarget['sha256'];
       final merged = {
         ...previousPayload,
         ...file,
         'id': cachedFileId,
         'roomId': roomId,
         'localDownloadPath': localDownloadPath,
-        'sha256': downloadTarget['sha256'] ?? file['sha256'],
-        'sizeBytes': downloadTarget['sizeBytes'] ?? file['sizeBytes'],
+        if (objectSha256 is String) 'objectSha256': objectSha256,
+        'sha256': plaintextSha256 is String
+            ? plaintextSha256
+            : downloadTarget['sha256'] ?? file['sha256'],
+        'sizeBytes': plaintextSizeBytes is num
+            ? plaintextSizeBytes
+            : downloadTarget['sizeBytes'] ?? file['sizeBytes'],
         'freshnessStatus':
             downloadTarget['freshnessStatus'] ?? file['freshnessStatus'],
         'lastVerifiedAt':

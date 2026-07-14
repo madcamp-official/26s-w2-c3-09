@@ -53,6 +53,7 @@ dependencies:
     path: ../../packages/character-assets
   firebase_messaging: ^16.4.1
   sentry_flutter: 9.24.0
+  cryptography: ^2.9.0
 
 dev_dependencies:
   flutter_test:
