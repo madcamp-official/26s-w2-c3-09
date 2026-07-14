@@ -63,7 +63,17 @@ describe('OpenAiResponsesProvider', () => {
       Authorization: 'Bearer test-openai-key',
       'Content-Type': 'application/json',
     });
-    expect(JSON.parse(init.body as string)).toMatchObject({
+    const requestBody = JSON.parse(init.body as string) as {
+      text: {
+        format: {
+          schema: {
+            properties: Record<string, unknown>;
+            required: string[];
+          };
+        };
+      };
+    };
+    expect(requestBody).toMatchObject({
       model: 'gpt-test',
       max_output_tokens: 500,
       text: {
@@ -74,6 +84,9 @@ describe('OpenAiResponsesProvider', () => {
         },
       },
     });
+    expect(new Set(requestBody.text.format.schema.required)).toEqual(
+      new Set(Object.keys(requestBody.text.format.schema.properties)),
+    );
     expect(JSON.parse(init.body as string).instructions).toContain(
       'Classification policy:',
     );

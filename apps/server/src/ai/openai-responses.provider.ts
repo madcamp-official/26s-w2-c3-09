@@ -78,6 +78,12 @@ const commandDraftJsonSchema = {
     'intent',
     'argumentsJson',
     'confirmationSummary',
+    'browseJson',
+    'responseSummary',
+    'name',
+    'definitionJson',
+    'explanation',
+    'ambiguities',
   ],
   properties: {
     kind: {
