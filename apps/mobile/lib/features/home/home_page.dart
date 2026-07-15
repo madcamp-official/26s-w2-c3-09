@@ -694,7 +694,8 @@ class _MousePlayground extends StatelessWidget {
           behavior: HitTestBehavior.translucent,
           onTap: onMouseTap,
           child: AnimatedScale(
-            scale: isFeeding ? 1.12 : 1,
+            // Keep the feeding GIF at the same footprint as the idle sprite.
+            scale: 1,
             duration: const Duration(milliseconds: 220),
             curve: Curves.elasticOut,
             child: Transform(
