@@ -78,6 +78,7 @@ if [[ ! -f "${CONFIG_DIR}/infra.env" || ! -f "${CONFIG_DIR}/server.env" ]]; then
   jwt_secret="$(openssl rand -hex 32)"
   umask 0027
   cat >"${CONFIG_DIR}/infra.env" <<EOF
+COMPOSE_PROJECT_NAME=mousekeeper-production
 POSTGRES_DB=mousekeeper
 POSTGRES_USER=mousekeeper
 POSTGRES_PASSWORD=${postgres_password}
@@ -109,9 +110,26 @@ EOF
   chmod 0640 "${CONFIG_DIR}/infra.env" "${CONFIG_DIR}/server.env"
 fi
 
-docker compose --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml" up -d
+set -a
+# shellcheck source=/dev/null
+source "${CONFIG_DIR}/infra.env"
+set +a
+for required_variable in POSTGRES_USER POSTGRES_DB; do
+  if [[ -z "${!required_variable:-}" ]]; then
+    echo "UNCONFIGURED: ${required_variable}" >&2
+    exit 1
+  fi
+done
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-mousekeeper-production}"
+if ! [[ "${COMPOSE_PROJECT_NAME}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+  echo 'UNCONFIGURED: COMPOSE_PROJECT_NAME' >&2
+  exit 1
+fi
+compose=(docker compose --project-name "${COMPOSE_PROJECT_NAME}" --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml")
+
+"${compose[@]}" up -d
 for _ in {1..30}; do
-  if docker compose --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml" exec -T postgres pg_isready -U mousekeeper -d mousekeeper >/dev/null 2>&1; then
+  if "${compose[@]}" exec -T postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
     break
   fi
   sleep 2
