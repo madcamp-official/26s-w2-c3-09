@@ -488,7 +488,7 @@ export function ChatOverlay() {
   }, [activeRoomId]);
 
   useEffect(() => {
-    if (!chatSession || answerPending) return;
+    if (!chatSession || !activeRoomId || answerPending) return;
     const timer = window.setInterval(() => {
       void Promise.all([
         listAgentChatSessions(activeRoomId),
