@@ -229,6 +229,26 @@ describe('OpenAiResponsesProvider', () => {
           { name: 'PDF archive', destinationTemplate: 'Archive/PDF' },
         ],
       },
+      fileContext: {
+        source: 'SERVER_CACHE',
+        isLiveFilesystemSnapshot: false,
+        generatedAt: '2026-07-15T00:00:00.000Z',
+        topLevelFolders: ['Archive', 'Documents'],
+        knownFolders: ['Archive/PDF', 'Documents'],
+        extensionDistribution: [{ extension: '.pdf', count: 32 }],
+        recentFiles: [
+          {
+            relativePath: 'Documents/report.pdf',
+            extension: '.pdf',
+            sizeBytes: 1024,
+            modifiedAt: '2026-07-14T00:00:00.000Z',
+            cachedAt: '2026-07-15T00:00:00.000Z',
+          },
+        ],
+        latestBrowse: null,
+        latestSnapshot: null,
+        recentProposals: [],
+      },
     });
 
     const init = fetcher.mock.calls[0][1] as RequestInit;
@@ -244,8 +264,13 @@ describe('OpenAiResponsesProvider', () => {
           { name: 'PDF archive', destinationTemplate: 'Archive/PDF' },
         ],
       },
+      fileContext: {
+        topLevelFolders: ['Archive', 'Documents'],
+        extensionDistribution: [{ extension: '.pdf', count: 32 }],
+      },
     });
     expect(body.instructions).toContain('NOT a live filesystem listing');
+    expect(body.instructions).toContain('fileContext from the server cache');
   });
 
   it('classifies file lookups into validated query requests', async () => {
@@ -414,6 +439,28 @@ describe('OpenAiResponsesProvider', () => {
           { name: 'Existing PDFs', destinationTemplate: 'Archive/PDF' },
         ],
       },
+      fileContext: {
+        source: 'SERVER_CACHE',
+        isLiveFilesystemSnapshot: false,
+        generatedAt: '2026-07-15T00:00:00.000Z',
+        topLevelFolders: ['Archive'],
+        knownFolders: ['Archive/PDF'],
+        extensionDistribution: [{ extension: '.pdf', count: 10 }],
+        recentFiles: [],
+        latestBrowse: {
+          relativeDirectory: '',
+          status: 'READY',
+          requestedAt: '2026-07-15T00:00:00.000Z',
+          directories: ['Archive'],
+          files: [],
+        },
+        latestSnapshot: {
+          score: 88,
+          metrics: { totalFileCount: 10 },
+          calculatedAt: '2026-07-15T00:00:00.000Z',
+        },
+        recentProposals: [],
+      },
     });
 
     const init = fetcher.mock.calls[0][1] as RequestInit;
@@ -429,8 +476,13 @@ describe('OpenAiResponsesProvider', () => {
           { name: 'Existing PDFs', destinationTemplate: 'Archive/PDF' },
         ],
       },
+      fileContext: {
+        topLevelFolders: ['Archive'],
+        knownFolders: ['Archive/PDF'],
+      },
     });
     expect(body.instructions).toContain('not a live filesystem listing');
+    expect(body.instructions).toContain('fileContext from the server cache');
   });
 
   it('returns UNCONFIGURED for missing or rejected provider credentials', async () => {

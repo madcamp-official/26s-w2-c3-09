@@ -20,7 +20,13 @@ import {
   setHouseOverlayLocked
 } from "./overlayApi";
 
-const houseUrl = new URL("../../assets/mouse-house-transparent.png", import.meta.url).href;
+const houseUrls = [
+  new URL("../../../../../packages/character-assets/house/mouse_house1.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/mouse_house2.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/mouse_house3.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/mouse_house4.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/mouse_house5.png", import.meta.url).href
+] as const;
 const messLayerUrls = {
   floor: new URL(
     "../../../../../packages/character-assets/mess/mess_floor_dirt_transparent.png",
@@ -254,6 +260,7 @@ export function HouseOverlay() {
   }
 
   const messLevel = messLevelForCleanliness(cleanlinessScore);
+  const houseImage = houseUrlForRoot(roots, selectedRootId);
 
   return (
     <div className={`house-overlay ${locked ? "is-locked" : ""} ${dropTarget ? "is-drop-target" : ""}`}>
@@ -270,7 +277,13 @@ export function HouseOverlay() {
         title={locked ? "Click to open menu / double-click to unlock" : "Drag to move / double-click to lock"}
       >
         <HouseAmbientMessLayers level={messLevel} />
-        <img className="house-overlay-image" src={houseUrl} alt="" draggable={false} />
+        <img
+          key={houseImage}
+          className="house-overlay-image"
+          src={houseImage}
+          alt=""
+          draggable={false}
+        />
         <HouseMessProps level={messLevel} />
       </button>
 
@@ -360,6 +373,22 @@ function selectStableRoot(roots: ManagedRoot[], currentRootId: string | null) {
     roots[0] ??
     null
   );
+}
+
+function houseUrlForRoot(roots: ManagedRoot[], rootId: string) {
+  const index = rootOrderIndex(roots, rootId);
+  return houseUrls[index % houseUrls.length];
+}
+
+function rootOrderIndex(roots: ManagedRoot[], rootId: string) {
+  if (!rootId) return 0;
+  const ordered = [...roots].sort((left, right) => {
+    const registered = left.registered_unix_ms - right.registered_unix_ms;
+    if (registered !== 0) return registered;
+    return left.root_id.localeCompare(right.root_id);
+  });
+  const index = ordered.findIndex((root) => root.root_id === rootId);
+  return index < 0 ? 0 : index;
 }
 
 function renderManagerSection(

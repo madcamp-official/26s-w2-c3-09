@@ -180,6 +180,7 @@ export class OpenAiResponsesProvider implements AiProvider {
         sourceMessageId: input.sourceMessage.id,
         userMessage: input.sourceMessage.content,
         roomContext: input.room,
+        fileContext: input.fileContext,
       }),
     });
     if (result.status === 'UNCONFIGURED') return this.unconfigured();
@@ -262,6 +263,7 @@ export class OpenAiResponsesProvider implements AiProvider {
         roomId: input.roomId,
         instruction: input.instruction,
         roomContext: input.room,
+        fileContext: input.fileContext,
       }),
     });
     if (result.status === 'UNCONFIGURED') return this.unconfigured();
@@ -483,8 +485,9 @@ function commandInstructions() {
     'For RULE_DRAFT, put the Rule DSL JSON in definitionJson and leave intent NONE, argumentsJson "{}", confirmationSummary empty, and browseJson "{}". Rule DSL examples: move PDFs => {"match":"ALL","conditions":[{"field":"extension","operator":"IN","value":[".pdf"]}],"action":{"type":"MOVE","destinationTemplate":"Archive/PDF"}}; trash temp files => {"match":"ALL","conditions":[{"field":"name","operator":"ENDS_WITH","value":".tmp"}],"action":{"type":"TRASH"}}.',
     'For COMMAND_DRAFT ANALYZE, use intent ANALYZE, argumentsJson "{}", and a confirmationSummary that says the PC will analyze and propose cleanup, not execute changes.',
     'Valid command intents are the MouseKeeper server contract intents.',
-    "The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is NOT a live filesystem listing - never claim to know what files or folders currently exist from it. Use it only to: prefer the room's own rootAlias as the default rootId when set; recognize when a new RULE_DRAFT duplicates or conflicts with an existingRules entry (mention this briefly in explanation/ambiguities rather than silently proceeding); and reuse an existing rule's destinationTemplate wording when the user clearly means the same folder.",
-    "A rule's destinationTemplate folder does not need to already exist — never refuse or ask a clarification question just because you cannot confirm a destination folder exists. Only ask a clarification question for genuinely missing information (which file, which condition, which destination) as instructed above.",
+    'The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is NOT a live filesystem listing - never claim to know what files or folders currently exist from it. Use it only to: prefer the room\'s own rootAlias as the default rootId when set; recognize when a new RULE_DRAFT duplicates or conflicts with an existingRules entry (mention this briefly in explanation/ambiguities rather than silently proceeding); and reuse an existing rule\'s destinationTemplate wording when the user clearly means the same folder.',
+    'The input may include fileContext from the server cache: {topLevelFolders, knownFolders, extensionDistribution, recentFiles, latestBrowse, latestSnapshot, recentProposals}. It is not live filesystem truth. Treat it as stale/partial evidence from cached files, completed browse results, cleanliness snapshots, and proposals. Use it to choose sensible defaults, mention likely existing folders, prefer destinationTemplate names that match knownFolders, and avoid redundant cleanup suggestions. Never claim a folder/file definitely exists unless the user just supplied it; say "I see it in the recent server cache" or draft the rule normally.',
+    'A rule\'s destinationTemplate folder does not need to already exist - never refuse or ask a clarification question just because you cannot confirm a destination folder exists. Only ask a clarification question for genuinely missing information (which file, which condition, which destination) as instructed above.',
   ].join('\n');
 }
 
@@ -499,6 +502,7 @@ function ruleInstructions() {
     'Use only the MouseKeeper rule definition fields allowed by the server contract.',
     'Rule DSL examples: move PDFs => {"match":"ALL","conditions":[{"field":"extension","operator":"IN","value":[".pdf"]}],"action":{"type":"MOVE","destinationTemplate":"Archive/PDF"}}; trash temp files => {"match":"ALL","conditions":[{"field":"name","operator":"ENDS_WITH","value":".tmp"}],"action":{"type":"TRASH"}}.',
     'The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is not a live filesystem listing. Use existingRules only to avoid drafting an obvious duplicate of an existing rule and to reuse consistent destinationTemplate wording; note a likely duplicate briefly in explanation rather than refusing.',
+    'The input may include fileContext from the server cache: topLevelFolders/knownFolders, extensionDistribution, recentFiles, latestBrowse, latestSnapshot, and recentProposals. It is stale/partial, not live filesystem truth. Use it to infer common extensions, likely destination folder names, and whether a requested destination appears in recent cache/browse data. Do not require the destination folder to appear there.',
     'A destinationTemplate folder does not need to already exist on disk - never refuse a rule just because you cannot confirm the destination folder exists.',
   ].join('\n');
 }
