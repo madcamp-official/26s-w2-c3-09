@@ -17,6 +17,7 @@ class _Stage {
     required this.walls,
     required this.boxes,
     required this.turns,
+    this.requiredPath = const [],
   });
   final List<String> rows;
   final math.Point<int> start;
@@ -24,6 +25,7 @@ class _Stage {
   final Set<math.Point<int>> walls;
   final Set<math.Point<int>> boxes;
   final int turns;
+  final List<math.Point<int>> requiredPath;
 }
 
 final _stages = <_Stage>[
@@ -111,6 +113,12 @@ final _stages = <_Stage>[
     boxes: {math.Point(4, 3), math.Point(3, 5), math.Point(6, 7)},
     turns: 32,
   ),
+  ...List.generate(7, (i) => _Stage(
+    rows: ['########', '#......#', '#.####.#', '#......#', '#.####.#', '#......#', '########'],
+    start: const math.Point(1, 1), cheese: const math.Point(6, 5),
+    walls: {const math.Point(2, 2), const math.Point(3, 2), const math.Point(4, 2), const math.Point(5, 2), const math.Point(2, 4), const math.Point(3, 4), const math.Point(4, 4), const math.Point(5, 4)},
+    boxes: {const math.Point(3, 3)}, turns: 20 + i * 2,
+    requiredPath: [const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0)])),
 ];
 
 class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
@@ -119,6 +127,8 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
   late int _turns;
   bool _won = false;
   bool _failed = false;
+  late Set<math.Point<int>> _boxes;
+  int _pathIndex = 0;
 
   _Stage get _current => _stages[_stage];
 
@@ -133,19 +143,25 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
     _turns = _current.turns;
     _won = false;
     _failed = false;
+    _boxes = {..._current.boxes};
+    _pathIndex = 0;
   });
 
   void _move(math.Point<int> delta) {
     if (_won || _failed) return;
     final next = math.Point(_player.x + delta.x, _player.y + delta.y);
+    if (_current.requiredPath.isNotEmpty && (_pathIndex >= _current.requiredPath.length || delta != _current.requiredPath[_pathIndex])) { setState(() => _failed = true); return; }
     if (next.x < 0 ||
         next.y < 0 ||
         next.y >= _current.rows.length ||
         next.x >= _current.rows[next.y].length ||
         _current.rows[next.y][next.x] == '#' ||
         _current.walls.contains(next) ||
-        _current.boxes.contains(next))
-      return;
+        _boxes.contains(next)) {
+      final beyond = math.Point(next.x + delta.x, next.y + delta.y);
+      if (!_boxes.contains(next) || beyond.x < 0 || beyond.y < 0 || beyond.y >= _current.rows.length || beyond.x >= _current.rows[beyond.y].length || _current.rows[beyond.y][beyond.x] == '#' || _current.walls.contains(beyond) || _boxes.contains(beyond)) return;
+      setState(() { _boxes..remove(next)..add(beyond); _turns--; if (_current.requiredPath.isNotEmpty) _pathIndex++; if (_turns <= 0) _failed = true; }); return;
+    }
     setState(() {
       _player = next;
       _turns--;
@@ -167,6 +183,8 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
       _turns = _current.turns;
       _won = false;
       _failed = false;
+      _boxes = {..._current.boxes};
+      _pathIndex = 0;
     });
   }
 
@@ -215,6 +233,7 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
                           painter: _BoardPainter(
                             stage: _current,
                             player: _player,
+                            boxes: _boxes,
                           ),
                         ),
                         AnimatedPositioned(
@@ -295,9 +314,10 @@ class _DPad extends StatelessWidget {
 }
 
 class _BoardPainter extends CustomPainter {
-  const _BoardPainter({required this.stage, required this.player});
+  const _BoardPainter({required this.stage, required this.player, required this.boxes});
   final _Stage stage;
   final math.Point<int> player;
+  final Set<math.Point<int>> boxes;
   @override
   void paint(Canvas canvas, Size size) {
     final cell = math.min(
@@ -325,7 +345,7 @@ class _BoardPainter extends CustomPainter {
           p.color = const Color(0xFFFFC857);
           canvas.drawCircle(r.center, cell * .28, p);
         }
-        if (stage.boxes.contains(point)) {
+        if (boxes.contains(point)) {
           p.color = const Color(0xFF9A5B27);
           canvas.drawRect(r.deflate(cell * .18), p);
         }
@@ -334,5 +354,5 @@ class _BoardPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BoardPainter old) =>
-      old.player != player || old.stage != stage;
+      old.player != player || old.stage != stage || old.boxes != boxes;
 }
