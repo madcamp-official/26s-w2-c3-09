@@ -19,6 +19,36 @@ const _mouseMoveCurve = Curves.easeInOutCubic;
 const _mouseDisplaySize = 263.0;
 const _mouseFixedYAlignment = 0.22;
 
+const _pixelInk = Color(0xFF3A2A1F);
+const _pixelPaper = Color(0xFFFFE9B8);
+
+class _PixelCard extends StatelessWidget {
+  const _PixelCard({required this.child, this.color});
+
+  final Widget child;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: color ?? _pixelPaper,
+    elevation: 0,
+    margin: const EdgeInsets.only(right: 5, bottom: 5),
+    shape: const BeveledRectangleBorder(
+      side: BorderSide(color: _pixelInk, width: 2),
+      borderRadius: BorderRadius.all(Radius.circular(3)),
+    ),
+    shadowColor: Colors.transparent,
+    child: DecoratedBox(
+      decoration: const BoxDecoration(
+        boxShadow: [
+          BoxShadow(color: _pixelInk, offset: Offset(5, 5), blurRadius: 0),
+        ],
+      ),
+      child: child,
+    ),
+  );
+}
+
 enum _SpeechBubbleStage { hidden, ellipsis, missingFolder, menu }
 
 List<Map<String, dynamic>> mergeAuthoritativeConnectionItems({
@@ -467,11 +497,8 @@ class _RoomPanningBackground extends StatelessWidget {
     if (background == null || background.isEmpty) {
       return const DecoratedBox(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFFFF6E9), Color(0xFFE8F4FF)],
-          ),
+          color: Color(0xFFD8C58F),
+          backgroundBlendMode: BlendMode.multiply,
         ),
       );
     }
@@ -503,10 +530,7 @@ class _RoomPanningBackground extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.16),
-                    const Color(0xFFFFF2E5).withValues(alpha: 0.28),
-                  ],
+                  colors: [Color(0x22FFE9B8), Color(0x553A2A1F)],
                 ),
               ),
             ),
@@ -533,15 +557,9 @@ class _ManagedFolderSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
-      color: const Color(0xFFFFFAF4).withValues(alpha: 0.96),
-      borderRadius: BorderRadius.circular(24),
-      border: Border.all(color: const Color(0xFFB9A696), width: 1.5),
-      boxShadow: [
-        BoxShadow(
-          color: const Color(0xFF3B2A24).withValues(alpha: 0.24),
-          offset: const Offset(3, 3),
-        ),
-      ],
+      color: _pixelPaper,
+      border: Border.all(color: _pixelInk, width: 2),
+      boxShadow: [const BoxShadow(color: _pixelInk, offset: Offset(5, 5))],
     ),
     child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -557,7 +575,7 @@ class _ManagedFolderSelector extends StatelessWidget {
               child: DropdownButton<String>(
                 key: const ValueKey('managed-folder-selector'),
                 value: selectedRoomId,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.zero,
                 items: [
                   for (var index = 0; index < rooms.length; index++)
                     DropdownMenuItem<String>(
@@ -913,7 +931,7 @@ class PushNotificationStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => state.when(
-    loading: () => const Card(
+    loading: () => const _PixelCard(
       child: ListTile(
         leading: SizedBox.square(
           dimension: 20,
@@ -922,7 +940,7 @@ class PushNotificationStatusCard extends StatelessWidget {
         title: Text('알림 연결 중'),
       ),
     ),
-    error: (error, _) => Card(
+    error: (error, _) => _PixelCard(
       color: const Color(0xFFFFEBEE),
       child: ListTile(
         leading: const Icon(Icons.notifications_off_outlined),
@@ -931,14 +949,14 @@ class PushNotificationStatusCard extends StatelessWidget {
       ),
     ),
     data: (registration) => switch (registration.status) {
-      PushNotificationStatus.active => const Card(
+      PushNotificationStatus.active => const _PixelCard(
         child: ListTile(
           leading: Icon(Icons.notifications_active_outlined),
           title: Text('알림이 연결되어 있어요'),
           subtitle: Text('작업 제안과 실행 결과를 이 휴대폰에서 알려드립니다.'),
         ),
       ),
-      PushNotificationStatus.permissionDenied => const Card(
+      PushNotificationStatus.permissionDenied => const _PixelCard(
         color: Color(0xFFFFF3E0),
         child: ListTile(
           leading: Icon(Icons.notifications_off_outlined),
@@ -946,7 +964,7 @@ class PushNotificationStatusCard extends StatelessWidget {
           subtitle: Text('휴대폰 설정에서 MOUSEKEEPER 알림을 허용해 주세요.'),
         ),
       ),
-      PushNotificationStatus.unconfigured => Card(
+      PushNotificationStatus.unconfigured => _PixelCard(
         color: const Color(0xFFFFF3E0),
         child: ListTile(
           leading: const Icon(Icons.notifications_off_outlined),
@@ -972,7 +990,7 @@ class HomeConnectionError extends StatelessWidget {
   Widget build(BuildContext context) => Center(
     child: Padding(
       padding: const EdgeInsets.all(24),
-      child: Card(
+      child: _PixelCard(
         color: Colors.white.withValues(alpha: 0.92),
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -996,7 +1014,7 @@ class OfflineCacheBanner extends StatelessWidget {
   const OfflineCacheBanner({super.key});
 
   @override
-  Widget build(BuildContext context) => const Card(
+  Widget build(BuildContext context) => const _PixelCard(
     color: Color(0xFFFFF3E0),
     child: ListTile(
       leading: Icon(Icons.cloud_off_outlined),
@@ -1010,7 +1028,7 @@ class EmptyRoomsCard extends StatelessWidget {
   const EmptyRoomsCard({super.key});
 
   @override
-  Widget build(BuildContext context) => const Card(
+  Widget build(BuildContext context) => const _PixelCard(
     child: ListTile(
       leading: Icon(Icons.meeting_room_outlined),
       title: Text('연결된 관리 폴더가 없습니다'),
