@@ -115,7 +115,7 @@ const TRANSIENT_EVENT_IDLE_DELAYS_MS: Partial<Record<CharacterEventKind, number>
 
 // How long the mouse tolerates being dragged around before it gets fed up, wriggles free, and
 // gets mad for a bit.
-const DRAG_TOO_LONG_MS = 60000;
+const DRAG_TOO_LONG_MS = 15000;
 const ANGRY_DURATION_MS = 2500;
 
 // Chat "piling up" mood: polled independently of whether the chat window is open.
