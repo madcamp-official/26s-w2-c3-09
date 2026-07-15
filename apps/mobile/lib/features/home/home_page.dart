@@ -151,7 +151,6 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(homeControllerProvider);
-    final pushNotifications = ref.watch(pushNotificationsProvider);
     final gateData = ref.watch(connectionGateControllerProvider).asData?.value;
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -161,10 +160,15 @@ class _HomePageState extends ConsumerState<HomePage> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 8),
-            child: _NotificationBell(
-              state: pushNotifications,
-              dimmed: _bubbleStage != _SpeechBubbleStage.hidden,
-              onPressed: () => _showNotificationStatus(pushNotifications),
+            child: IconButton(
+              key: const ValueKey('home-settings-button'),
+              tooltip: '설정',
+              onPressed: _openSettings,
+              icon: const Icon(
+                Icons.settings_outlined,
+                color: Color(0xFF4B6482),
+                size: 31,
+              ),
             ),
           ),
         ],
@@ -300,7 +304,6 @@ class _HomePageState extends ConsumerState<HomePage> {
                       onChat: selectedRoom == null
                           ? null
                           : () => _openChat(selectedRoom),
-                      onSettings: _openSettings,
                     ),
                   ),
                 ],
@@ -399,21 +402,6 @@ class _HomePageState extends ConsumerState<HomePage> {
       }
     }
     return rooms.first;
-  }
-
-  void _showNotificationStatus(
-    AsyncValue<PushNotificationRegistration> notifications,
-  ) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          child: PushNotificationStatusCard(state: notifications),
-        ),
-      ),
-    );
   }
 
   void _openFiles(Map<String, dynamic> room) {
@@ -620,7 +608,6 @@ class _MousePlayground extends StatelessWidget {
     required this.onBubbleTap,
     required this.onFiles,
     required this.onChat,
-    required this.onSettings,
   });
 
   final Offset mouseAlignment;
@@ -633,7 +620,6 @@ class _MousePlayground extends StatelessWidget {
   final VoidCallback onBubbleTap;
   final VoidCallback? onFiles;
   final VoidCallback? onChat;
-  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) => Stack(
@@ -641,17 +627,12 @@ class _MousePlayground extends StatelessWidget {
     children: [
       if (bubbleStage != _SpeechBubbleStage.hidden)
         _MouseSpeechBubble(
-          alignment: Offset(
-            mouseAlignment.dx - 0.14,
-            mouseAlignment.dy -
-                (bubbleStage == _SpeechBubbleStage.menu ? 0.54 : 0.38),
-          ),
+          alignment: Offset(mouseAlignment.dx - 0.38, mouseAlignment.dy - 0.42),
           stage: bubbleStage,
           selectedRoom: selectedRoom,
           onTap: onBubbleTap,
           onFiles: onFiles,
           onChat: onChat,
-          onSettings: onSettings,
         ),
       AnimatedAlign(
         duration: _mouseMoveDuration,
@@ -691,7 +672,6 @@ class _MouseSpeechBubble extends StatelessWidget {
     required this.onTap,
     required this.onFiles,
     required this.onChat,
-    required this.onSettings,
   });
 
   final Offset alignment;
@@ -700,14 +680,13 @@ class _MouseSpeechBubble extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback? onFiles;
   final VoidCallback? onChat;
-  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) => AnimatedAlign(
     duration: _mouseMoveDuration,
     curve: _mouseMoveCurve,
     alignment: Alignment(
-      alignment.dx.clamp(-0.72, 0.72),
+      alignment.dx.clamp(-0.92, 0.34),
       alignment.dy.clamp(-0.58, 0.82),
     ),
     child: GestureDetector(
@@ -757,12 +736,6 @@ class _MouseSpeechBubble extends StatelessWidget {
                     onPressed: onChat,
                     icon: Icons.chat_bubble_outline,
                     label: '대화',
-                  ),
-                  const SizedBox(height: 7),
-                  _BubbleMenuButton(
-                    onPressed: onSettings,
-                    icon: Icons.settings_outlined,
-                    label: '설정',
                   ),
                 ],
               ),
@@ -841,58 +814,6 @@ class _DummyBottomMenuButton extends StatelessWidget {
       child: Text(label),
     ),
   );
-}
-
-class _NotificationBell extends StatelessWidget {
-  const _NotificationBell({
-    required this.state,
-    required this.dimmed,
-    required this.onPressed,
-  });
-
-  final AsyncValue<PushNotificationRegistration> state;
-  final bool dimmed;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final needsAttention =
-        state.hasError ||
-        state.asData?.value.status != PushNotificationStatus.active;
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 160),
-      opacity: dimmed ? 0.38 : 1,
-      child: IgnorePointer(
-        ignoring: dimmed,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            IconButton(
-              tooltip: '알림 상태',
-              onPressed: onPressed,
-              icon: const Icon(
-                Icons.notifications_none_rounded,
-                color: Color(0xFF4B6482),
-                size: 31,
-              ),
-            ),
-            if (needsAttention)
-              const Positioned(
-                top: 8,
-                right: 7,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: Color(0xFFD66355),
-                    shape: BoxShape.circle,
-                  ),
-                  child: SizedBox.square(dimension: 9),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _OutboxNotice extends StatelessWidget {
