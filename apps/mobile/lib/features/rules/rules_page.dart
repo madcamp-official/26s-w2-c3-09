@@ -6,6 +6,14 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
 
+const _pixelInk = Color(0xFF30251F);
+const _pixelPaper = Color(0xFFFFF4D6);
+const _pixelCanvas = Color(0xFFE7CFA9);
+final _pixelCardShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.zero,
+  side: const BorderSide(color: _pixelInk, width: 2),
+);
+
 abstract interface class RuleGateway {
   Future<List<Map<String, dynamic>>> listRules(String roomId);
   Future<Map<String, dynamic>> createRule(
@@ -780,7 +788,10 @@ class _RulesPageState extends ConsumerState<RulesPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
+    backgroundColor: _pixelCanvas,
     appBar: AppBar(
+      backgroundColor: _pixelInk,
+      foregroundColor: _pixelPaper,
       title: const Text('정리 규칙'),
       actions: [
         IconButton(
@@ -855,6 +866,10 @@ class _RulesPageState extends ConsumerState<RulesPage> {
           final ruleId = rule['id'] as String?;
           final updating = ruleId != null && _updatingRuleIds.contains(ruleId);
           return Card(
+            color: _pixelPaper,
+            shape: _pixelCardShape,
+            elevation: 5,
+            shadowColor: _pixelInk,
             child: SwitchListTile(
               key: ValueKey('rule-enabled-$ruleId'),
               secondary: IconButton(
@@ -877,6 +892,10 @@ class _RulesPageState extends ConsumerState<RulesPage> {
   Widget _draftComposer() {
     final draft = _pendingDraft;
     return Card(
+      color: _pixelPaper,
+      shape: _pixelCardShape,
+      elevation: 5,
+      shadowColor: _pixelInk,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
