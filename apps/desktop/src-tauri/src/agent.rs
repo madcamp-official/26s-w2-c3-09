@@ -2719,7 +2719,7 @@ fn validate_chat_message(
         || !matches!(response.sender_type.as_str(), "USER" | "ASSISTANT")
         || !matches!(
             response.message_type.as_str(),
-            "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT" | "DECISION"
+            "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT" | "PROPOSAL" | "DECISION"
         )
         || response.content.chars().count() > 2_000
         || response.created_at.is_empty()
@@ -2868,7 +2868,7 @@ fn validate_chat_quick_history(
         )
         || !matches!(
             response.message_type.as_str(),
-            "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT" | "DECISION"
+            "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT" | "PROPOSAL" | "DECISION"
         )
         || response.content.trim().is_empty()
         || response.content.chars().count() > 2_000
