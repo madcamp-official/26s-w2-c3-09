@@ -839,20 +839,149 @@ body.overlay-body .character-motion {
 body.overlay-body .character-attention-badge {
   position: absolute;
   top: 4px;
-  right: 16px;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: 2px solid #171717;
-  border-radius: 50%;
-  background: #fee500;
-  color: #171717;
-  font-size: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #fee500;
+  font-size: 22px;
   font-weight: 900;
   line-height: 1;
-  box-shadow: 2px 2px 0 rgba(23, 23, 23, 0.34);
+  text-shadow:
+    -1px -1px 0 #171717,
+    1px -1px 0 #171717,
+    -1px 1px 0 #171717,
+    1px 1px 0 #171717;
   pointer-events: none;
+}
+
+body.speech-bubble-overlay-body {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: none;
+}
+
+/* Anchored to the window edge that faces the mascot (not centered) — the visible bubble box must
+ * hug that edge, otherwise the window can sit right next to the mascot while the centered bubble
+ * inside it still floats in the middle with a big gap, which defeats the whole point of tuning the
+ * window's position. */
+.speech-bubble-overlay {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  /* Must stay >= the tail's 16px protrusion (see `.speech-bubble::before` offsets below) plus a
+   * few px of buffer, or the tail gets clipped by the window's own edge before it ever renders. */
+  padding: 20px;
+  opacity: 1;
+  transition: opacity 300ms ease;
+  pointer-events: none;
+}
+
+.speech-bubble-overlay.is-fading {
+  opacity: 0;
+}
+
+.speech-bubble-overlay--tail-right {
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.speech-bubble-overlay--tail-left {
+  justify-content: flex-start;
+  align-items: center;
+}
+
+.speech-bubble-overlay--tail-bottom {
+  justify-content: center;
+  align-items: flex-end;
+}
+
+.speech-bubble-overlay--tail-top {
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.speech-bubble {
+  position: relative;
+  max-width: 236px;
+  padding: 10px 14px;
+  border: 2px dotted #2b3640;
+  border-radius: 12px;
+  background: rgba(255, 253, 248, 0.96);
+  box-shadow: 3px 3px 0 rgba(32, 40, 48, 0.28);
+  font-family: "Galmuri11", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #202830;
+  text-align: center;
+}
+
+.speech-bubble::before,
+.speech-bubble::after {
+  content: "";
+  position: absolute;
+  border: 8px solid transparent;
+}
+
+/* Tail points down at the mascot: bubble sits above it. */
+.speech-bubble--tail-bottom::before {
+  left: 50%;
+  bottom: -16px;
+  transform: translateX(-50%);
+  border-top-color: #2b3640;
+}
+.speech-bubble--tail-bottom::after {
+  left: 50%;
+  bottom: -12px;
+  transform: translateX(-50%);
+  border-top-color: rgba(255, 253, 248, 0.96);
+}
+
+/* Tail points up at the mascot: bubble sits below it. */
+.speech-bubble--tail-top::before {
+  left: 50%;
+  top: -16px;
+  transform: translateX(-50%);
+  border-bottom-color: #2b3640;
+}
+.speech-bubble--tail-top::after {
+  left: 50%;
+  top: -12px;
+  transform: translateX(-50%);
+  border-bottom-color: rgba(255, 253, 248, 0.96);
+}
+
+/* Tail points right at the mascot: bubble sits to its left. */
+.speech-bubble--tail-right::before {
+  right: -16px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left-color: #2b3640;
+}
+.speech-bubble--tail-right::after {
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-left-color: rgba(255, 253, 248, 0.96);
+}
+
+/* Tail points left at the mascot: bubble sits to its right. */
+.speech-bubble--tail-left::before {
+  left: -16px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-right-color: #2b3640;
+}
+.speech-bubble--tail-left::after {
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-right-color: rgba(255, 253, 248, 0.96);
+}
+
+.speech-bubble-text {
+  white-space: pre-wrap;
+  word-break: keep-all;
 }
 
 body.chat-overlay-body .chat-overlay {
@@ -1382,22 +1511,20 @@ body.house-overlay-body .house-mess-props img {
 }
 
 body.house-overlay-body .house-mess-layers.mess-level-1 img {
-  opacity: 0.18;
+  opacity: 0.34;
 }
 
 body.house-overlay-body .house-mess-layers.mess-level-2 img {
-  opacity: 0.24;
+  opacity: 0.46;
 }
 
 body.house-overlay-body .house-mess-layers.mess-level-3 img,
 body.house-overlay-body .house-mess-layers.mess-level-4 img {
-  opacity: 0.3;
+  opacity: 0.58;
 }
 
-/* The mess prop layer is a focal prop, so keep it crisp and readable
-   but do not let white antialiasing halos dominate the house art. */
 body.house-overlay-body .house-mess-props img {
-  opacity: 0.82;
+  opacity: 1;
   filter: none;
   mix-blend-mode: normal !important;
 }
@@ -3146,7 +3273,8 @@ html.overlay-root body,
 html.overlay-root #root,
 html.overlay-root .character-overlay,
 html.overlay-root .house-overlay,
-html.overlay-root .chat-overlay {
+html.overlay-root .chat-overlay,
+html.overlay-root .speech-bubble-overlay {
   border: 0 !important;
   outline: 0 !important;
   background: transparent !important;
@@ -3156,7 +3284,8 @@ html.overlay-root .chat-overlay {
 
 html.overlay-root body.overlay-body,
 html.overlay-root body.house-overlay-body,
-html.overlay-root body.chat-overlay-body {
+html.overlay-root body.chat-overlay-body,
+html.overlay-root body.speech-bubble-overlay-body {
   overflow: hidden !important;
 }
 

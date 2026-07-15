@@ -34,6 +34,7 @@ import type {
 } from "../agent/agentApi";
 import {
   CharacterEvent,
+  emitCharacterEvent,
   hideChatOverlay,
   listenForChatAutoProposals,
   listenForCharacterEvents,
@@ -564,6 +565,9 @@ export function ChatOverlay() {
     setNotice(null);
     setBusy(true);
     setAnswerPending(true);
+    // Optimistic: the organize animation should start the instant the user asks for cleanup, not
+    // after the round trip creates a real proposal (which fires its own WAITING_APPROVAL later).
+    void emitCharacterEvent({ kind: "WAITING_APPROVAL" }).catch(() => undefined);
     const optimisticId = `local-quick-cleanup-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
     try {
       if (!activeRoomId) {
@@ -604,9 +608,11 @@ export function ChatOverlay() {
           })
         );
         setNotice("정리할 항목이 없어요.");
+        void emitCharacterEvent({ kind: "IDLE" }).catch(() => undefined);
       } else {
         setChatMessages((items) => items.filter((message) => message.message_id !== optimisticId));
         setNotice(cause instanceof Error ? cause.message : String(cause));
+        void emitCharacterEvent({ kind: "IDLE" }).catch(() => undefined);
       }
     } finally {
       setBusy(false);

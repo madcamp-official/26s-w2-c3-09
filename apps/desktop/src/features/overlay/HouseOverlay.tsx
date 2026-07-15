@@ -36,11 +36,7 @@ const messLayerUrls = {
     "../../../../../packages/character-assets/mess/mess_wall_stains_transparent.png",
     import.meta.url
   ).href,
-  mess: new URL("../../assets/mess-dirty-transparent.png", import.meta.url).href,
-  web: new URL(
-    "../../../../../packages/character-assets/mess/mess_cobwebs_transparent.png",
-    import.meta.url
-  ).href
+  mess: new URL("../../assets/mess-dirty-transparent.png", import.meta.url).href
 } as const;
 
 type DragStart = {
@@ -352,7 +348,6 @@ function HouseAmbientMessLayers({ level }: { level: number }) {
     <div className={`house-mess-layers house-ambient-mess-layers mess-level-${level}`} aria-hidden="true">
       {level >= 1 ? <img src={messLayerUrls.floor} alt="" draggable={false} /> : null}
       {level >= 2 ? <img src={messLayerUrls.wall} alt="" draggable={false} /> : null}
-      {level >= 4 ? <img src={messLayerUrls.web} alt="" draggable={false} /> : null}
     </div>
   );
 }

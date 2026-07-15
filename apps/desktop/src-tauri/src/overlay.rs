@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 pub const OVERLAY_WINDOW_LABEL: &str = "character-overlay";
 pub const HOUSE_OVERLAY_WINDOW_LABEL: &str = "house-overlay";
 pub const CHAT_OVERLAY_WINDOW_LABEL: &str = "chat-overlay";
+pub const SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL: &str = "speech-bubble-overlay";
 pub const CHARACTER_EVENT_NAME: &str = "character-event";
+pub const SPEECH_BUBBLE_TEXT_EVENT: &str = "speech-bubble:show";
+pub const SPEECH_BUBBLE_CLOSED_EVENT: &str = "speech-bubble:closed";
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct OverlayStatus {

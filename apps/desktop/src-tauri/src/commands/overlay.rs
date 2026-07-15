@@ -11,7 +11,8 @@ use crate::overlay::{CharacterEvent, OverlayRuntime, OverlayStatus};
 #[cfg(feature = "tauri-commands")]
 use crate::overlay::{
     CHARACTER_EVENT_NAME, CHAT_OVERLAY_WINDOW_LABEL, HOUSE_OVERLAY_WINDOW_LABEL,
-    OVERLAY_WINDOW_LABEL,
+    OVERLAY_WINDOW_LABEL, SPEECH_BUBBLE_CLOSED_EVENT, SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL,
+    SPEECH_BUBBLE_TEXT_EVENT,
 };
 
 #[cfg(feature = "tauri-commands")]
@@ -21,6 +22,26 @@ use tauri::{Emitter, Manager};
 const CHAT_OVERLAY_WIDTH: i32 = 450;
 #[cfg(feature = "tauri-commands")]
 const CHAT_OVERLAY_HEIGHT: i32 = 360;
+// Wider/taller than the visible bubble itself so the tail (which pokes 16px past the bubble edge)
+// always has room to render before hitting the window's own edge and getting clipped.
+#[cfg(feature = "tauri-commands")]
+const SPEECH_BUBBLE_WIDTH: i32 = 300;
+#[cfg(feature = "tauri-commands")]
+const SPEECH_BUBBLE_HEIGHT: i32 = 130;
+// Negative: measured against the actual mouse artwork, not just its bounding boxes. The mascot's
+// 112x140 window has ~8px of transparent padding around its 96x118 drag-surface box, and inside
+// that box `object-fit: contain` plus the source sprite's own margin (mouse_idle_preview.gif is
+// 1400x1800 but the drawn mouse only spans roughly x:[229,1211]) adds ~17px more empty space
+// before the drawn pixels start — about 25px of total invisible padding on the mascot side.
+// This only works together with two things in styles.css: the *visible* bubble box is
+// edge-anchored to the side of its window facing the mascot (`.speech-bubble-overlay--tail-*`,
+// not centered — otherwise moving the window closer wouldn't move the visible bubble any closer,
+// it would just shrink dead space around it), and the bubble's tail (which points at the mascot)
+// pokes 16px past that box edge through the window's 20px padding, landing ~4px shy of the
+// window's own edge. Safe to sit this deep in the mascot's padding either way: the bubble window
+// is click-through (`set_ignore_cursor_events`), so it can never block dragging the mascot.
+#[cfg(feature = "tauri-commands")]
+const SPEECH_BUBBLE_GAP: i32 = -30;
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
@@ -72,6 +93,18 @@ pub fn show_overlay_window(
             if let Err(error) = build_chat_overlay_window(app) {
                 eprintln!("failed to preload chat overlay: {error}");
             }
+        }
+    }
+    // Same reasoning as chat: build the speech bubble webview now (minutes before the idle timer
+    // first fires) so its listener for SPEECH_BUBBLE_TEXT_EVENT is already registered by the time
+    // `show_speech_bubble` actually emits — otherwise the very first bubble's text is emitted
+    // before the fresh webview finishes booting and is silently dropped.
+    if app
+        .get_webview_window(SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL)
+        .is_none()
+    {
+        if let Err(error) = build_speech_bubble_window(app) {
+            eprintln!("failed to preload speech bubble overlay: {error}");
         }
     }
     let status = runtime.mark_visible().map_err(|error| error.to_string())?;
@@ -400,6 +433,176 @@ fn position_chat_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow) 
     let x = best.x;
     let y = best.y;
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// Which edge of the bubble carries the tail, i.e. the side facing the mascot. `Bottom` means the
+/// bubble sits above the mascot with its tail pointing down at it.
+#[cfg(feature = "tauri-commands")]
+#[derive(Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum TailSide {
+    Bottom,
+    Top,
+    Left,
+    Right,
+}
+
+#[cfg(feature = "tauri-commands")]
+#[derive(Clone, serde::Serialize)]
+struct SpeechBubblePayload {
+    text: String,
+    tail_side: TailSide,
+}
+
+/// The idle speech bubble lives in its own window instead of resizing the tightly-fit mascot
+/// window (its 112x140 size, plus the drag/house-snap foot-ratio math, assumes the sprite fills
+/// it). It is created lazily, positioned fresh each time it is shown — the mascot never wanders
+/// while a bubble is up — and hidden again once the bubble finishes streaming/fading.
+#[cfg(feature = "tauri-commands")]
+fn build_speech_bubble_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("MouseKeeper Speech Bubble")
+    .inner_size(SPEECH_BUBBLE_WIDTH as f64, SPEECH_BUBBLE_HEIGHT as f64)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .always_on_top(true)
+    .focusable(false)
+    .skip_taskbar(true)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("WINDOW_MISSING: cannot create speech bubble window: {error}"))?;
+    // Purely decorative and `always_on_top`: without this, whenever its (best-effort,
+    // monitor-clamped) position ends up overlapping the mascot window, it silently steals the
+    // pointer events meant for the mascot's drag surface. Ignoring cursor events makes it truly
+    // click-through no matter where it lands, so it can never block dragging the mascot.
+    let _ = window.set_ignore_cursor_events(true);
+    Ok(window)
+}
+
+/// Computes where to place the speech bubble so it never overlaps the mascot, moves the window
+/// there, then shows it and delivers the text plus which edge the tail should point from. Tries
+/// to the mascot's left (tail pointing right at it), then above, then its right, then below (in
+/// that order — the mascot never moves while a bubble is up, so only a monitor-edge clamp can
+/// force a fallback); whichever clamped candidate overlaps the mascot least wins.
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn show_speech_bubble(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    let window = match app.get_webview_window(SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL) {
+        Some(window) => window,
+        None => build_speech_bubble_window(&app)?,
+    };
+    let Some(mouse) = app.get_webview_window(OVERLAY_WINDOW_LABEL) else {
+        return Err("WINDOW_MISSING: mascot window is not open".to_string());
+    };
+    let (Ok(mouse_pos), Ok(mouse_size)) = (mouse.outer_position(), mouse.outer_size()) else {
+        return Err("WINDOW_MISSING: cannot read mascot window geometry".to_string());
+    };
+
+    let bubble_w = SPEECH_BUBBLE_WIDTH;
+    let bubble_h = SPEECH_BUBBLE_HEIGHT;
+    let gap = SPEECH_BUBBLE_GAP;
+    let mouse_w = mouse_size.width as i32;
+    let mouse_h = mouse_size.height as i32;
+    let mouse_rect = RectI {
+        x: mouse_pos.x,
+        y: mouse_pos.y,
+        w: mouse_w,
+        h: mouse_h,
+    };
+    let monitor_rect = mouse.current_monitor().ok().flatten().map(|monitor| RectI {
+        x: monitor.position().x,
+        y: monitor.position().y,
+        w: monitor.size().width as i32,
+        h: monitor.size().height as i32,
+    });
+    let align_x = mouse_pos.x + (mouse_w - bubble_w) / 2;
+    let align_y = mouse_pos.y + (mouse_h - bubble_h) / 2;
+    let candidates = [
+        (
+            RectI {
+                x: mouse_pos.x - bubble_w - gap,
+                y: align_y,
+                w: bubble_w,
+                h: bubble_h,
+            },
+            TailSide::Right,
+        ),
+        (
+            RectI {
+                x: align_x,
+                y: mouse_pos.y - bubble_h - gap,
+                w: bubble_w,
+                h: bubble_h,
+            },
+            TailSide::Bottom,
+        ),
+        (
+            RectI {
+                x: mouse_pos.x + mouse_w + gap,
+                y: align_y,
+                w: bubble_w,
+                h: bubble_h,
+            },
+            TailSide::Left,
+        ),
+        (
+            RectI {
+                x: align_x,
+                y: mouse_pos.y + mouse_h + gap,
+                w: bubble_w,
+                h: bubble_h,
+            },
+            TailSide::Top,
+        ),
+    ];
+    let default_rect = RectI {
+        x: mouse_pos.x - bubble_w - gap,
+        y: align_y,
+        w: bubble_w,
+        h: bubble_h,
+    };
+    // `min_by_key` keeps the first minimum on ties, so with equal (usually zero) overlap the
+    // mouse's-left candidate above wins by default; only a monitor-edge clamp changes the winner.
+    let (best_rect, tail_side) = candidates
+        .into_iter()
+        .map(|(candidate, side)| (clamp_rect(candidate, monitor_rect), side))
+        .min_by_key(|(candidate, _)| overlap_area(*candidate, mouse_rect))
+        .unwrap_or((default_rect, TailSide::Right));
+
+    let _ = window.set_position(tauri::PhysicalPosition::new(best_rect.x, best_rect.y));
+    window
+        .show()
+        .map_err(|error| format!("WINDOW_MISSING: cannot show speech bubble: {error}"))?;
+    window
+        .emit(
+            SPEECH_BUBBLE_TEXT_EVENT,
+            SpeechBubblePayload { text, tail_side },
+        )
+        .map_err(|error| format!("EMIT_FAILED: {error}"))?;
+    Ok(())
+}
+
+/// Hides the bubble window and tells the mascot window it closed, whether this was called by the
+/// bubble itself (finished streaming/fading) or by the mascot window forcing an early close (drag
+/// start, chat open, mood change).
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn hide_speech_bubble(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|error| format!("WINDOW_MISSING: cannot hide speech bubble: {error}"))?;
+    }
+    if let Some(mouse) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        let _ = mouse.emit(SPEECH_BUBBLE_CLOSED_EVENT, ());
+    }
+    Ok(())
 }
 
 #[cfg(feature = "tauri-commands")]

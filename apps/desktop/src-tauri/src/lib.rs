@@ -198,6 +198,8 @@ pub fn run() {
             commands::overlay::hide_overlay,
             commands::overlay::show_chat_overlay,
             commands::overlay::hide_chat_overlay,
+            commands::overlay::show_speech_bubble,
+            commands::overlay::hide_speech_bubble,
             commands::overlay::set_house_overlay_locked,
             commands::smart_cache::record_smart_cache_usage_event,
             commands::smart_cache::update_smart_cache_file_preference,

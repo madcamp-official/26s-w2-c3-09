@@ -41,8 +41,13 @@ export type OverlayStatus = {
 export const OVERLAY_WINDOW_LABEL = "character-overlay";
 export const HOUSE_OVERLAY_WINDOW_LABEL = "house-overlay";
 export const CHAT_OVERLAY_WINDOW_LABEL = "chat-overlay";
+export const SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL = "speech-bubble-overlay";
 export const CHARACTER_EVENT_NAME = "character-event";
 export const HOUSE_DROP_TARGET_EVENT = "house-drop-target";
+export const SPEECH_BUBBLE_TEXT_EVENT = "speech-bubble:show";
+/** Emitted by the speech bubble window (self-close) or the mascot window (forced early close) so
+ * whichever side didn't initiate the close can keep its own state in sync. */
+export const SPEECH_BUBBLE_CLOSED_EVENT = "speech-bubble:closed";
 /** Emitted whenever the chat overlay is hidden so the mascot window can keep its toggle/wander
  * state in sync, regardless of which window initiated the close. */
 export const CHAT_OVERLAY_CLOSED_EVENT = "chat-overlay:closed";
@@ -93,6 +98,40 @@ export async function hideChatOverlay() {
   }
 }
 
+/** Shows the idle speech bubble window with the given line. The backend computes a position next
+ * to the mascot that never overlaps it and picks which edge the tail points from. */
+export function showSpeechBubble(text: string) {
+  return invokeOverlayCommand<void>("show_speech_bubble", { text });
+}
+
+export function hideSpeechBubble() {
+  return invokeOverlayCommand<void>("hide_speech_bubble");
+}
+
+export type SpeechBubbleTailSide = "bottom" | "top" | "left" | "right";
+
+export type SpeechBubblePayload = {
+  text: string;
+  tail_side: SpeechBubbleTailSide;
+};
+
+export function listenForSpeechBubbleText(handler: (payload: SpeechBubblePayload) => void) {
+  return listen<SpeechBubblePayload>(SPEECH_BUBBLE_TEXT_EVENT, (event) => handler(event.payload));
+}
+
+export function listenForSpeechBubbleClosed(handler: () => void) {
+  return listen(SPEECH_BUBBLE_CLOSED_EVENT, () => handler());
+}
+
+export function isSpeechBubbleOverlayWindow() {
+  if (!window.__TAURI_INTERNALS__) return false;
+  try {
+    return getCurrentWindow().label === SPEECH_BUBBLE_OVERLAY_WINDOW_LABEL;
+  } catch {
+    return false;
+  }
+}
+
 export async function publishChatRoomSelection(rootId: string | null) {
   const selection = { rootId } satisfies ChatRoomSelection;
   persistChatRoomSelection(selection);
@@ -138,7 +177,12 @@ export function setHouseOverlayLocked(locked: boolean) {
 
 /** True when this JS context is running inside the overlay window (vs the main window). */
 export function isOverlayWindow() {
-  return isCharacterOverlayWindow() || isHouseOverlayWindow() || isChatOverlayWindow();
+  return (
+    isCharacterOverlayWindow() ||
+    isHouseOverlayWindow() ||
+    isChatOverlayWindow() ||
+    isSpeechBubbleOverlayWindow()
+  );
 }
 
 export function isChatOverlayWindow() {

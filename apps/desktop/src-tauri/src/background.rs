@@ -714,6 +714,7 @@ async fn run_background_tick(
 
     match work_limiter.try_write() {
         Ok(_permit) => {
+            emit_working_if_decisions_pending(app, &agent).await;
             match crate::execution_processor::process_pending_decisions(&agent, &roots, &outbox)
                 .await
             {
@@ -974,6 +975,30 @@ fn emit_overlay_activity(app: &tauri::AppHandle, activity: crate::overlay::Overl
 
     let overlay = app.state::<crate::overlay::OverlayRuntime>();
     let event = crate::overlay::character_event_for(&activity);
+    crate::commands::overlay::emit_character_event_if_open(app, &overlay, &event);
+}
+
+/// Best-effort "a file operation is executing right now" signal: peeks at the pending decisions
+/// about to be handed to `execution_processor::process_pending_decisions` and, if any exist, shows
+/// the WORKING animation immediately. The tick's final `emit_overlay_activity` call overwrites this
+/// with SUCCESS/ERROR/IDLE once execution actually finishes, so this is purely a "still going"
+/// pulse rather than a durable state.
+#[cfg(feature = "tauri-commands")]
+async fn emit_working_if_decisions_pending(app: &tauri::AppHandle, agent: &crate::agent::AgentRuntime) {
+    use tauri::Manager;
+
+    let Ok(decisions) = agent.pending_decisions().await else {
+        return;
+    };
+    if decisions.is_empty() {
+        return;
+    }
+    let overlay = app.state::<crate::overlay::OverlayRuntime>();
+    let event = crate::overlay::CharacterEvent {
+        kind: crate::overlay::CharacterEventKind::Working,
+        message: None,
+        correlation_id: None,
+    };
     crate::commands::overlay::emit_character_event_if_open(app, &overlay, &event);
 }
 

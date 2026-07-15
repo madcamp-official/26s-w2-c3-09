@@ -14,12 +14,18 @@ import {
   HOUSE_DROP_TARGET_EVENT,
   HOUSE_OVERLAY_WINDOW_LABEL,
   hideChatOverlay,
+  hideSpeechBubble,
   listenForCharacterEvents,
+  listenForChatRoomSelection,
+  listenForSpeechBubbleClosed,
   publishChatAutoProposal,
-  showChatOverlay
+  readChatRoomSelection,
+  showChatOverlay,
+  showSpeechBubble
 } from "./overlayApi";
 import { listenForAutoCleanupProposals } from "../files/fileEngineApi";
 import type { AutoCleanupProposalEvent } from "../files/fileEngineApi";
+import { getAgentChatQuickView } from "../agent/agentApi";
 import { useCharacterWander } from "./characterWander";
 
 const wanderMotionUrls = {
@@ -54,6 +60,14 @@ const overlayMotionUrls: Record<CharacterEventKind, string> = {
 
 const danglingMotionUrl = new URL(
   "../../../../../packages/character-assets/new_mouse/gif/mouse_dangling_preview.gif",
+  import.meta.url
+).href;
+const angryMotionUrl = new URL(
+  "../../../../../packages/character-assets/new_mouse/gif/mouse_mad_preview.gif",
+  import.meta.url
+).href;
+const sighMotionUrl = new URL(
+  "../../../../../packages/character-assets/new_mouse/gif/mouse_pathetic_preview.gif",
   import.meta.url
 ).href;
 const KIND_LABELS: Record<CharacterEventKind, string> = {
@@ -99,6 +113,20 @@ const TRANSIENT_EVENT_IDLE_DELAYS_MS: Partial<Record<CharacterEventKind, number>
   ERROR: 6500
 };
 
+// How long the mouse tolerates being dragged around before it gets fed up, wriggles free, and
+// gets mad for a bit.
+const DRAG_TOO_LONG_MS = 60000;
+const ANGRY_DURATION_MS = 2500;
+
+// Chat "piling up" mood: polled independently of whether the chat window is open.
+const CHAT_SIGH_POLL_MS = 20000;
+const CHAT_SIGH_UNREAD_THRESHOLD = 3;
+
+// Idle small-talk speech bubble: only fires while fully idle (see `wanderActive`).
+const IDLE_SPEECH_MIN_DELAY_MS = 45000;
+const IDLE_SPEECH_MAX_DELAY_MS = 90000;
+const IDLE_SPEECH_LINES = ["뭐 해?", "나랑 놀자~", "심심해~", "재밌어?"] as const;
+
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
   const [chatOpen, setChatOpen] = useState(false);
@@ -106,6 +134,9 @@ export function CharacterOverlay() {
   const [isDraggingOverlay, setIsDraggingOverlay] = useState(false);
   const [pointerHeld, setPointerHeld] = useState(false);
   const [dragReleaseTick, setDragReleaseTick] = useState(0);
+  const [angryUntil, setAngryUntil] = useState<number | null>(null);
+  const [chatSighActive, setChatSighActive] = useState(false);
+  const [speechActive, setSpeechActive] = useState(false);
   const dragStart = useRef<DragStart | null>(null);
   const lastDragPoint = useRef<DragStart | null>(null);
   const dragOrigin = useRef<DragOrigin | null>(null);
@@ -115,6 +146,8 @@ export function CharacterOverlay() {
   const pointerStartedWithChatOpen = useRef(false);
   const houseDropActive = useRef(false);
   const latestAutoProposal = useRef<AutoCleanupProposalEvent | null>(null);
+  const dragAngryTimer = useRef<number | null>(null);
+  const speechTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const unlisten = listenForCharacterEvents((nextEvent) => {
@@ -141,6 +174,18 @@ export function CharacterOverlay() {
     return () => window.clearTimeout(timer);
   }, [event.kind, event.correlation_id, event.message]);
 
+  // The angry reaction is a timed pulse, not a durable state: it clears itself once its window
+  // passes, the same way TRANSIENT_EVENT_IDLE_DELAYS_MS reverts server-driven states.
+  useEffect(() => {
+    if (!angryUntil) return;
+    const remaining = angryUntil - Date.now();
+    const timer = window.setTimeout(
+      () => setAngryUntil((current) => (current === angryUntil ? null : current)),
+      Math.max(0, remaining)
+    );
+    return () => window.clearTimeout(timer);
+  }, [angryUntil]);
+
   // Any window may hide chat (close button, house menu, drag start); keep wander/toggle in sync.
   useEffect(() => {
     const unlisten = listen(CHAT_OVERLAY_CLOSED_EVENT, () => setChatOpen(false));
@@ -162,10 +207,55 @@ export function CharacterOverlay() {
   }, []);
 
   useEffect(() => {
-    for (const src of [danglingMotionUrl, wanderMotionUrls.walking, wanderMotionUrls.resting]) {
+    for (const src of [
+      danglingMotionUrl,
+      angryMotionUrl,
+      sighMotionUrl,
+      wanderMotionUrls.walking,
+      wanderMotionUrls.resting
+    ]) {
       const image = new Image();
       image.src = src;
     }
+  }, []);
+
+  // Chat "piling up" mood: polled independently of the chat window's own lifecycle so the sigh
+  // still shows up while chat has never been opened this session.
+  useEffect(() => {
+    let cancelled = false;
+    let roomId = readChatRoomSelection().rootId;
+
+    async function refreshChatSigh() {
+      if (!roomId) {
+        if (!cancelled) setChatSighActive(false);
+        return;
+      }
+      const quick = await getAgentChatQuickView(roomId).catch(() => null);
+      if (cancelled) return;
+      setChatSighActive((quick?.unread_count ?? 0) >= CHAT_SIGH_UNREAD_THRESHOLD);
+    }
+
+    void refreshChatSigh();
+    const interval = window.setInterval(() => void refreshChatSigh(), CHAT_SIGH_POLL_MS);
+    const unlistenRoom = listenForChatRoomSelection((selection) => {
+      roomId = selection.rootId;
+      void refreshChatSigh();
+    });
+    const unlistenChatClosed = listen(CHAT_OVERLAY_CLOSED_EVENT, () => void refreshChatSigh());
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      void unlistenRoom.then((off) => off());
+      void unlistenChatClosed.then((off) => off());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listenForSpeechBubbleClosed(() => setSpeechActive(false));
+    return () => {
+      void unlisten.then((off) => off());
+    };
   }, []);
 
   async function setHouseDropTarget(active: boolean) {
@@ -180,6 +270,10 @@ export function CharacterOverlay() {
   }
 
   async function releaseDrag() {
+    if (dragAngryTimer.current !== null) {
+      window.clearTimeout(dragAngryTimer.current);
+      dragAngryTimer.current = null;
+    }
     const shouldSnapHome =
       draggingStarted.current && (houseDropActive.current || (await isCurrentWindowOverHouse()));
     if (shouldSnapHome) {
@@ -196,6 +290,13 @@ export function CharacterOverlay() {
     draggingStarted.current = false;
     setIsDraggingOverlay(false);
     setPointerHeld(false);
+  }
+
+  // The mouse only tolerates being held for so long: once `DRAG_TOO_LONG_MS` elapses mid-drag, it
+  // wriggles free (as if the user let go) and gets mad for a bit.
+  function triggerDragAngry() {
+    void releaseDrag();
+    setAngryUntil(Date.now() + ANGRY_DURATION_MS);
   }
 
   useEffect(() => {
@@ -220,16 +321,80 @@ export function CharacterOverlay() {
     };
   }, []);
 
-  const wanderActive = event.kind === "IDLE" && !isDraggingOverlay && !pointerHeld && !chatOpen;
+  const angryActive = angryUntil !== null;
+  const wanderActive =
+    event.kind === "IDLE" &&
+    !isDraggingOverlay &&
+    !pointerHeld &&
+    !chatOpen &&
+    !angryActive &&
+    !chatSighActive &&
+    !speechActive;
   const { phase: wanderPhase, facing } = useCharacterWander(wanderActive, dragReleaseTick);
 
   const motionUrl = useMemo(() => {
     if (isDraggingOverlay) return danglingMotionUrl;
+    if (angryActive) return angryMotionUrl;
+    if (event.kind !== "IDLE") return overlayMotionUrls[event.kind];
+    if (chatSighActive) return sighMotionUrl;
     if (wanderActive) return wanderMotionUrls[wanderPhase];
-    return overlayMotionUrls[event.kind];
-  }, [event.kind, isDraggingOverlay, wanderActive, wanderPhase]);
+    return overlayMotionUrls.IDLE;
+  }, [angryActive, chatSighActive, event.kind, isDraggingOverlay, wanderActive, wanderPhase]);
 
   const spriteFlip = wanderActive && facing === 1 ? "scaleX(-1)" : "none";
+
+  // If a more urgent state interrupts an open speech bubble, close it immediately rather than
+  // leaving it stranded once the mascot moves/reacts.
+  useEffect(() => {
+    if (!speechActive) return;
+    if (isDraggingOverlay || chatOpen || angryActive || chatSighActive) {
+      setSpeechActive(false);
+      void hideSpeechBubble().catch(() => undefined);
+    }
+  }, [speechActive, isDraggingOverlay, chatOpen, angryActive, chatSighActive]);
+
+  // Small talk fires purely on a timer, not gated on being fully idle/wandering — otherwise it
+  // rarely lines up with `wanderActive` (event.kind IDLE + not angry/sighing/etc all at once) and
+  // the mouse effectively never talks. Only genuinely conflicting states block it: mid-drag (the
+  // window is actively moving, so a bubble position would be stale immediately), chat open
+  // (already covers that area), and an already-open bubble (avoid stacking triggers).
+  const speechBlockedRef = useRef(isDraggingOverlay || chatOpen || speechActive);
+  useEffect(() => {
+    speechBlockedRef.current = isDraggingOverlay || chatOpen || speechActive;
+  }, [isDraggingOverlay, chatOpen, speechActive]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    function scheduleNext() {
+      const delay =
+        IDLE_SPEECH_MIN_DELAY_MS + Math.random() * (IDLE_SPEECH_MAX_DELAY_MS - IDLE_SPEECH_MIN_DELAY_MS);
+      speechTimer.current = window.setTimeout(async () => {
+        if (cancelled) return;
+        if (speechBlockedRef.current) {
+          scheduleNext();
+          return;
+        }
+        const line = IDLE_SPEECH_LINES[Math.floor(Math.random() * IDLE_SPEECH_LINES.length)];
+        setSpeechActive(true);
+        try {
+          await showSpeechBubble(line);
+        } catch {
+          setSpeechActive(false);
+        }
+        scheduleNext();
+      }, delay);
+    }
+
+    scheduleNext();
+    return () => {
+      cancelled = true;
+      if (speechTimer.current !== null) {
+        window.clearTimeout(speechTimer.current);
+        speechTimer.current = null;
+      }
+    };
+  }, []);
 
   function beginOverlayDrag(pointer: PointerEvent<HTMLButtonElement>) {
     if (pointer.button !== 0) return;
@@ -272,6 +437,7 @@ export function CharacterOverlay() {
       draggingStarted.current = true;
       suppressClick.current = true;
       setIsDraggingOverlay(true);
+      dragAngryTimer.current = window.setTimeout(triggerDragAngry, DRAG_TOO_LONG_MS);
       // Moving the mascot should not drag the chat with it, so tuck the chat away.
       setChatOpen(false);
       void hideChatOverlay().catch(() => undefined);
