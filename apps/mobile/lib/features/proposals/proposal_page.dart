@@ -80,7 +80,7 @@ class _ProposalPageState extends ConsumerState<ProposalPage> {
     appBar: AppBar(
       backgroundColor: _pixelInk,
       foregroundColor: _pixelPaper,
-      title: const Text('제안 검토', style: TextStyle(fontWeight: FontWeight.w900)),
+      title: const Text('제안 검토', style: TextStyle(fontWeight: FontWeight.w700)),
     ),
     body: CheeseLoadingOverlay(
       loading: _submitting,
@@ -217,12 +217,18 @@ class ProposalItemsList extends StatelessWidget {
           elevation: 5,
           shadowColor: _pixelInk,
           child: ListTile(
-            title: Text(item['actionType'] as String? ?? '작업'),
+            title: Text(
+              item['actionType'] as String? ?? '작업',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
             subtitle: Text(
               '${item['sourceRelativePath'] ?? ''}\n'
               '→ ${item['destinationRelativePath'] ?? 'MOUSEKEEPER 휴지통'}\n'
               '이유: ${item['reasonCode'] ?? '정리 규칙 일치'}'
               '${conflict == 'NONE' ? '' : '\n충돌: $conflict'}',
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         );

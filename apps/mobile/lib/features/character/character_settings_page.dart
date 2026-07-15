@@ -24,9 +24,14 @@ class CharacterSettingsPage extends StatelessWidget {
     appBar: AppBar(
       backgroundColor: _pixelInk,
       foregroundColor: _pixelPaper,
-      title: const Text(
-        'MOUSEKEEPER 캐릭터',
-        style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1),
+      title: const FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          'MOUSEKEEPER 캐릭터',
+          maxLines: 1,
+          softWrap: false,
+          style: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 1),
+        ),
       ),
     ),
     body: ListView(

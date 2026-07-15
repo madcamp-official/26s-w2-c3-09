@@ -7,10 +7,10 @@ import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../../core/notifications/push_notifications.dart';
 import '../../core/sync/realtime_controller.dart';
+import '../../core/theme/pixel_theme.dart';
 import '../../core/widgets/cheese_loading.dart';
 import '../auth/connection_gate_controller.dart';
 import '../chat/chat_page.dart';
-import '../files/files_page.dart';
 import '../settings/settings_page.dart';
 import 'home_controller.dart';
 
@@ -49,8 +49,6 @@ class _PixelCard extends StatelessWidget {
     ),
   );
 }
-
-enum _SpeechBubbleStage { hidden, ellipsis, missingFolder, menu }
 
 List<Map<String, dynamic>> mergeAuthoritativeConnectionItems({
   required List<Map<String, dynamic>> authoritative,
@@ -122,7 +120,6 @@ class _HomePageState extends ConsumerState<HomePage> {
   late final HomeAuthoritativeReconcileLoop _reconcileLoop;
   final _random = math.Random();
   Offset _mouseAlignment = const Offset(-0.08, _mouseFixedYAlignment);
-  _SpeechBubbleStage _bubbleStage = _SpeechBubbleStage.hidden;
   String? _selectedRoomId;
   bool _mouseWalking = false;
   bool _mouseMovingRight = false;
@@ -153,14 +150,30 @@ class _HomePageState extends ConsumerState<HomePage> {
   Widget build(BuildContext context) {
     final state = ref.watch(homeControllerProvider);
     final gateData = ref.watch(connectionGateControllerProvider).asData?.value;
+    final menuRooms = mergeAuthoritativeConnectionItems(
+      authoritative: gateData?.rooms ?? const [],
+      enriched: state.asData?.value.rooms ?? const [],
+    ).take(maxManagedFolderCount).toList(growable: false);
+    final menuSelectedRoom = _selectedRoom(menuRooms);
+    final horizontalInset = MediaQuery.sizeOf(context).width * 0.05;
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        toolbarHeight: 64,
+        titleSpacing: horizontalInset,
+        title: _ManagedFolderSelector(
+          rooms: menuRooms,
+          selectedRoomId: menuSelectedRoom?['id'] as String?,
+          hiddenRoomCount:
+              ((gateData?.rooms.length ?? menuRooms.length) - menuRooms.length)
+                  .clamp(0, 999),
+          onChanged: (roomId) => setState(() => _selectedRoomId = roomId),
+        ),
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: EdgeInsets.only(right: horizontalInset),
             child: IconButton(
               key: const ValueKey('home-settings-button'),
               tooltip: '설정',
@@ -193,10 +206,7 @@ class _HomePageState extends ConsumerState<HomePage> {
             authoritative: gateData?.devices ?? const [],
             enriched: data.devices,
           );
-          final rooms = mergeAuthoritativeConnectionItems(
-            authoritative: gateData?.rooms ?? const [],
-            enriched: data.rooms,
-          ).take(maxManagedFolderCount).toList(growable: false);
+          final rooms = menuRooms;
           final selectedRoom = _selectedRoom(rooms);
           final selectedRoomIndex = selectedRoom == null
               ? 0
@@ -211,28 +221,6 @@ class _HomePageState extends ConsumerState<HomePage> {
             child: LayoutBuilder(
               builder: (context, constraints) => Stack(
                 children: [
-                  Positioned(
-                    top: MediaQuery.paddingOf(context).top + 10,
-                    left: constraints.maxWidth * 0.05,
-                    right: constraints.maxWidth * 0.35,
-                    child: Align(
-                      alignment: Alignment.topLeft,
-                      child: _ManagedFolderSelector(
-                        rooms: rooms,
-                        selectedRoomId: selectedRoom?['id'] as String?,
-                        hiddenRoomCount:
-                            ((gateData?.rooms.length ?? rooms.length) -
-                                    rooms.length)
-                                .clamp(0, 999),
-                        onChanged: (roomId) {
-                          setState(() {
-                            _selectedRoomId = roomId;
-                            _bubbleStage = _SpeechBubbleStage.hidden;
-                          });
-                        },
-                      ),
-                    ),
-                  ),
                   if (data.isOffline ||
                       data.outboxPending > 0 ||
                       data.outboxFailed > 0)
@@ -240,7 +228,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                       top:
                           MediaQuery.paddingOf(context).top +
                           kToolbarHeight +
-                          84,
+                          20,
                       left: constraints.maxWidth * 0.05,
                       right: constraints.maxWidth * 0.05,
                       child: Column(
@@ -269,42 +257,12 @@ class _HomePageState extends ConsumerState<HomePage> {
                       child: EmptyRoomsCard(),
                     ),
                   Positioned.fill(
-                    child: IgnorePointer(
-                      ignoring: _bubbleStage == _SpeechBubbleStage.hidden,
-                      child: AnimatedOpacity(
-                        duration: const Duration(milliseconds: 160),
-                        opacity: _bubbleStage == _SpeechBubbleStage.hidden
-                            ? 0
-                            : 1,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTapUp: (details) =>
-                              _handleStageTap(details, constraints.biggest),
-                          child: ColoredBox(
-                            color: Colors.black.withValues(alpha: 0.52),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned.fill(
                     child: _MousePlayground(
                       mouseAlignment: _mouseAlignment,
                       mouseAsset: _mouseAsset,
                       mouseWalking: _mouseWalking,
                       mouseMovingRight: _mouseMovingRight,
-                      bubbleStage: _bubbleStage,
-                      selectedRoom: selectedRoom,
-                      onMouseTap: _handleMouseTap,
-                      onBubbleTap: () => _handleBubbleTap(
-                        hasManagedFolder: selectedRoom != null,
-                      ),
-                      onFiles: selectedRoom == null
-                          ? null
-                          : () => _openFiles(selectedRoom),
-                      onChat: selectedRoom == null
-                          ? null
-                          : () => _openChat(selectedRoom),
+                      onMouseTap: () => _handleMouseTap(selectedRoom),
                     ),
                   ),
                 ],
@@ -320,15 +278,13 @@ class _HomePageState extends ConsumerState<HomePage> {
     final dx = (details.localPosition.dx / size.width) * 2 - 1;
     _startMouseWalk(
       Offset(dx.clamp(-0.72, 0.72).toDouble(), _mouseFixedYAlignment),
-      hideBubble: true,
     );
   }
 
-  void _startMouseWalk(Offset target, {bool hideBubble = false}) {
+  void _startMouseWalk(Offset target) {
     _walkTimer?.cancel();
     final movingRight = target.dx > _mouseAlignment.dx;
     setState(() {
-      if (hideBubble) _bubbleStage = _SpeechBubbleStage.hidden;
       _mouseMovingRight = movingRight;
       _mouseWalking = true;
       _mouseAlignment = target;
@@ -341,33 +297,20 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
   }
 
-  void _handleMouseTap() {
+  void _handleMouseTap(Map<String, dynamic>? selectedRoom) {
     _walkTimer?.cancel();
-    setState(() {
-      _mouseWalking = false;
-      _bubbleStage = _bubbleStage == _SpeechBubbleStage.hidden
-          ? _SpeechBubbleStage.ellipsis
-          : _SpeechBubbleStage.hidden;
-    });
-  }
-
-  void _handleBubbleTap({required bool hasManagedFolder}) {
-    setState(() {
-      if (_bubbleStage == _SpeechBubbleStage.ellipsis) {
-        _bubbleStage = hasManagedFolder
-            ? _SpeechBubbleStage.menu
-            : _SpeechBubbleStage.missingFolder;
-      } else {
-        _bubbleStage = _SpeechBubbleStage.ellipsis;
-      }
-    });
+    setState(() => _mouseWalking = false);
+    if (selectedRoom == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('폴더를 연결해 주세요!')));
+      return;
+    }
+    _openChat(selectedRoom);
   }
 
   String get _mouseAsset {
     if (_mouseWalking) return mousekeeperMouseWalkGif;
-    if (_bubbleStage != _SpeechBubbleStage.hidden) {
-      return mousekeeperMouseWorkGif;
-    }
     return mousekeeperMouseIdleGif;
   }
 
@@ -376,7 +319,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final delay = Duration(seconds: 4 + _random.nextInt(5));
     _randomWalkTimer = Timer(delay, () {
       if (!mounted) return;
-      if (!_mouseWalking && _bubbleStage == _SpeechBubbleStage.hidden) {
+      if (!_mouseWalking) {
         _startMouseWalk(_nextRandomMouseTarget());
       }
       _scheduleRandomWalk();
@@ -403,16 +346,6 @@ class _HomePageState extends ConsumerState<HomePage> {
       }
     }
     return rooms.first;
-  }
-
-  void _openFiles(Map<String, dynamic> room) {
-    final roomId = room['id'] as String;
-    final roomName = room['name'] as String? ?? '관리 폴더';
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => FilesPage(roomId: roomId, roomName: roomName),
-      ),
-    );
   }
 
   void _openChat(Map<String, dynamic> room) {
@@ -543,55 +476,69 @@ class _ManagedFolderSelector extends StatelessWidget {
   final ValueChanged<String> onChanged;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: _pixelPaper,
-      border: Border.all(color: _pixelInk, width: 2),
-      boxShadow: [const BoxShadow(color: _pixelInk, offset: Offset(5, 5))],
-    ),
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(Icons.folder_outlined, size: 21, color: Color(0xFF4B6482)),
-          const SizedBox(width: 8),
-          if (rooms.isEmpty)
-            const Text('관리 폴더 없음')
-          else
-            DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                key: const ValueKey('managed-folder-selector'),
-                value: selectedRoomId,
-                isDense: true,
-                borderRadius: BorderRadius.zero,
-                items: [
-                  for (var index = 0; index < rooms.length; index++)
-                    DropdownMenuItem<String>(
-                      value: rooms[index]['id'] as String?,
-                      child: Text(
-                        rooms[index]['name'] as String? ?? '관리 폴더',
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w800),
+  Widget build(BuildContext context) => SizedBox(
+    width: double.infinity,
+    height: 44,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: _pixelPaper,
+        border: Border.all(color: _pixelInk, width: 2),
+        boxShadow: const [BoxShadow(color: _pixelInk, offset: Offset(4, 4))],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.folder_outlined,
+              size: 21,
+              color: Color(0xFF4B6482),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: rooms.isEmpty
+                  ? const Text(
+                      '관리 폴더 없음',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        key: const ValueKey('managed-folder-selector'),
+                        value: selectedRoomId,
+                        isDense: true,
+                        isExpanded: true,
+                        borderRadius: BorderRadius.zero,
+                        items: [
+                          for (var index = 0; index < rooms.length; index++)
+                            DropdownMenuItem<String>(
+                              value: rooms[index]['id'] as String?,
+                              child: Text(
+                                rooms[index]['name'] as String? ?? '관리 폴더',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value != null) onChanged(value);
+                        },
                       ),
                     ),
-                ],
-                onChanged: (value) {
-                  if (value != null) onChanged(value);
-                },
-              ),
             ),
-          if (hiddenRoomCount > 0) ...[
-            const SizedBox(width: 6),
-            Tooltip(
-              message: '앱 홈에서는 최대 5개 폴더만 표시합니다.',
-              child: Chip(
-                visualDensity: VisualDensity.compact,
-                label: Text('+$hiddenRoomCount'),
+            if (hiddenRoomCount > 0) ...[
+              const SizedBox(width: 4),
+              Text(
+                '+$hiddenRoomCount',
+                maxLines: 1,
+                style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-            ),
+            ],
           ],
-        ],
+        ),
       ),
     ),
   );
@@ -603,38 +550,19 @@ class _MousePlayground extends StatelessWidget {
     required this.mouseAsset,
     required this.mouseWalking,
     required this.mouseMovingRight,
-    required this.bubbleStage,
-    required this.selectedRoom,
     required this.onMouseTap,
-    required this.onBubbleTap,
-    required this.onFiles,
-    required this.onChat,
   });
 
   final Offset mouseAlignment;
   final String mouseAsset;
   final bool mouseWalking;
   final bool mouseMovingRight;
-  final _SpeechBubbleStage bubbleStage;
-  final Map<String, dynamic>? selectedRoom;
   final VoidCallback onMouseTap;
-  final VoidCallback onBubbleTap;
-  final VoidCallback? onFiles;
-  final VoidCallback? onChat;
 
   @override
   Widget build(BuildContext context) => Stack(
     clipBehavior: Clip.none,
     children: [
-      if (bubbleStage != _SpeechBubbleStage.hidden)
-        _MouseSpeechBubble(
-          alignment: Offset(mouseAlignment.dx - 0.38, mouseAlignment.dy - 0.42),
-          stage: bubbleStage,
-          selectedRoom: selectedRoom,
-          onTap: onBubbleTap,
-          onFiles: onFiles,
-          onChat: onChat,
-        ),
       AnimatedAlign(
         duration: _mouseMoveDuration,
         curve: _mouseMoveCurve,
@@ -662,119 +590,6 @@ class _MousePlayground extends StatelessWidget {
         ),
       ),
     ],
-  );
-}
-
-class _MouseSpeechBubble extends StatelessWidget {
-  const _MouseSpeechBubble({
-    required this.alignment,
-    required this.stage,
-    required this.selectedRoom,
-    required this.onTap,
-    required this.onFiles,
-    required this.onChat,
-  });
-
-  final Offset alignment;
-  final _SpeechBubbleStage stage;
-  final Map<String, dynamic>? selectedRoom;
-  final VoidCallback onTap;
-  final VoidCallback? onFiles;
-  final VoidCallback? onChat;
-
-  @override
-  Widget build(BuildContext context) => AnimatedAlign(
-    duration: _mouseMoveDuration,
-    curve: _mouseMoveCurve,
-    alignment: Alignment(
-      alignment.dx.clamp(-0.92, 0.34),
-      alignment.dy.clamp(-0.58, 0.82),
-    ),
-    child: GestureDetector(
-      onTap: onTap,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xFFDFF4FF).withValues(alpha: 0.96),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: const Color(0xFF59748B), width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.24),
-              offset: const Offset(3, 3),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: switch (stage) {
-            _SpeechBubbleStage.ellipsis => Text(
-              '…',
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                color: const Color(0xFF436577),
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            _SpeechBubbleStage.missingFolder => Text(
-              '폴더를 연결해 주세요!',
-              key: const ValueKey('missing-folder-bubble-message'),
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                color: const Color(0xFF294B60),
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            _SpeechBubbleStage.menu => SizedBox(
-              width: 150,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _BubbleMenuButton(
-                    onPressed: onFiles,
-                    icon: Icons.folder_outlined,
-                    label: '파일 목록',
-                  ),
-                  const SizedBox(height: 7),
-                  _BubbleMenuButton(
-                    onPressed: onChat,
-                    icon: Icons.chat_bubble_outline,
-                    label: '대화',
-                  ),
-                ],
-              ),
-            ),
-            _ => const SizedBox.shrink(),
-          },
-        ),
-      ),
-    ),
-  );
-}
-
-class _BubbleMenuButton extends StatelessWidget {
-  const _BubbleMenuButton({
-    required this.onPressed,
-    required this.icon,
-    required this.label,
-  });
-
-  final VoidCallback? onPressed;
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    width: double.infinity,
-    height: 38,
-    child: OutlinedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon, size: 18),
-      label: Text(label),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: const Color(0xFF3B2A24),
-        backgroundColor: const Color(0xFFFFFAF4),
-        side: const BorderSide(color: Color(0xFF3B2A24), width: 1.4),
-        padding: const EdgeInsets.symmetric(horizontal: 10),
-      ),
-    ),
   );
 }
 
@@ -810,9 +625,24 @@ class _DummyBottomMenuButton extends StatelessWidget {
           0xFFFFFAF4,
         ).withValues(alpha: 0.94),
         side: const BorderSide(color: Color(0xFFB9A696), width: 1.5),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        textStyle: const TextStyle(
+          fontFamily: mouseKeeperFontFamily,
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+        ),
       ),
-      child: Text(label),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          label,
+          maxLines: 1,
+          softWrap: false,
+          style: const TextStyle(
+            fontFamily: mouseKeeperFontFamily,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
     ),
   );
 }

@@ -81,15 +81,19 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                     children: [
                       const Center(child: PixelLabel('PAIR MODE')),
                       const SizedBox(height: 18),
-                      Text(
-                        'MOUSEKEEPER',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.displaySmall
-                            ?.copyWith(
-                              color: PixelColors.ink,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.2,
-                            ),
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          'MOUSEKEEPER',
+                          maxLines: 1,
+                          softWrap: false,
+                          style: Theme.of(context).textTheme.displaySmall
+                              ?.copyWith(
+                                color: PixelColors.ink,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1.2,
+                              ),
+                        ),
                       ),
                       const SizedBox(height: 34),
                       Image.asset(
@@ -107,7 +111,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                         style: Theme.of(context).textTheme.headlineMedium
                             ?.copyWith(
                               color: const Color(0xFF1E1717),
-                              fontWeight: FontWeight.w500,
+                              fontWeight: FontWeight.w700,
                               letterSpacing: -1.2,
                             ),
                       ),
@@ -117,7 +121,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: const Color(0xFF2D1F1F),
-                          fontWeight: FontWeight.w600,
+                          fontWeight: FontWeight.w400,
                         ),
                       ),
                       const SizedBox(height: 16),
@@ -134,8 +138,15 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                             style: Theme.of(context).textTheme.headlineMedium
                                 ?.copyWith(
                                   color: PixelColors.ink,
-                                  fontWeight: FontWeight.w700,
-                                  letterSpacing: 3,
+                                  fontSize:
+                                      (Theme.of(context)
+                                              .textTheme
+                                              .headlineMedium
+                                              ?.fontSize ??
+                                          28) *
+                                      0.8,
+                                  fontWeight: FontWeight.w400,
+                                  letterSpacing: 2.4,
                                 ),
                             inputFormatters: [
                               FilteringTextInputFormatter.digitsOnly,
@@ -203,7 +214,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                                         .bodyMedium
                                         ?.copyWith(
                                           color: const Color(0xFF7A685C),
-                                          fontWeight: FontWeight.w700,
+                                          fontWeight: FontWeight.w400,
                                         ),
                                   ),
                                 ],
@@ -215,7 +226,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                                 style: Theme.of(context).textTheme.bodyMedium
                                     ?.copyWith(
                                       color: const Color(0xFF7A685C),
-                                      fontWeight: FontWeight.w700,
+                                      fontWeight: FontWeight.w400,
                                     ),
                               ),
                       ),
@@ -231,7 +242,17 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                               : () => ref
                                     .read(authControllerProvider.notifier)
                                     .signOut(),
-                          child: const Text('다른 계정으로 로그인'),
+                          style: TextButton.styleFrom(
+                            textStyle: const TextStyle(
+                              fontFamily: mouseKeeperFontFamily,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                          child: const Text(
+                            '다른 계정으로 로그인',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ],

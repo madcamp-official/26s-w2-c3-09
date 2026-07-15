@@ -62,7 +62,12 @@ class ConfigurationRequiredPage extends StatelessWidget {
   final String error;
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('MOUSEKEEPER')),
+    appBar: AppBar(
+      title: const FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text('MOUSEKEEPER', maxLines: 1, softWrap: false),
+      ),
+    ),
     body: Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
