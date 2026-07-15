@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../home/home_page.dart';
+import '../../core/theme/pixel_theme.dart';
 import 'auth_controller.dart';
 import 'connection_gate_controller.dart';
 import 'pairing_page.dart';
@@ -73,36 +74,40 @@ class PairingGateLoadingPage extends StatelessWidget {
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              PixelFillMouse(
-                progress: stage.progress,
-                animate: !disableAnimations,
-              ),
-              const SizedBox(height: 20),
-              Text(stage.message, textAlign: TextAlign.center),
-              const SizedBox(height: 8),
-              Text(
-                '${(stage.progress * 100).round()}%',
-                style: Theme.of(context).textTheme.labelMedium,
-              ),
-              if (showLongWaitMessage) ...[
-                const SizedBox(height: 16),
-                const Text(
-                  '연결 확인이 예상보다 오래 걸리고 있어요.',
-                  textAlign: TextAlign.center,
+          child: PixelPanel(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const PixelLabel('SYNC CHECK', color: PixelColors.sage),
+                const SizedBox(height: 20),
+                PixelFillMouse(
+                  progress: stage.progress,
+                  animate: !disableAnimations,
                 ),
-              ],
-              if (onRetry != null) ...[
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('다시 확인'),
+                const SizedBox(height: 20),
+                Text(stage.message, textAlign: TextAlign.center),
+                const SizedBox(height: 8),
+                Text(
+                  '${(stage.progress * 100).round()}%',
+                  style: Theme.of(context).textTheme.labelMedium,
                 ),
+                if (showLongWaitMessage) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    '연결 확인이 예상보다 오래 걸리고 있어요.',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+                if (onRetry != null) ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: onRetry,
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('다시 확인'),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -262,27 +267,31 @@ class PairingGateErrorPage extends StatelessWidget {
     body: Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.cloud_off_outlined, size: 56),
-            const SizedBox(height: 16),
-            const Text(
-              '서버에서 활성 PC 상태를 확인하지 못했습니다.\n'
-              '페어링이 끝나기 전에는 메인 화면으로 이동하지 않습니다.',
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text('$error', textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh),
-              label: const Text('다시 확인'),
-            ),
-            const SizedBox(height: 8),
-            TextButton(onPressed: onSignOut, child: const Text('로그아웃')),
-          ],
+        child: PixelPanel(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const PixelLabel('CONNECTION ERROR', color: PixelColors.red),
+              const SizedBox(height: 16),
+              const Icon(Icons.cloud_off_outlined, size: 56),
+              const SizedBox(height: 16),
+              const Text(
+                '서버에서 활성 PC 상태를 확인하지 못했습니다.\n'
+                '페어링이 끝나기 전에는 메인 화면으로 이동하지 않습니다.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text('$error', textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('다시 확인'),
+              ),
+              const SizedBox(height: 8),
+              TextButton(onPressed: onSignOut, child: const Text('로그아웃')),
+            ],
+          ),
         ),
       ),
     ),
