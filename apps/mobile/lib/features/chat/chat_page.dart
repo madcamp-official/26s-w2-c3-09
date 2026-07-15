@@ -38,25 +38,13 @@ abstract interface class ChatGateway {
     String idempotencyKey,
   );
   Future<Map<String, dynamic>> rejectRuleDraft(String draftId);
-  Future<List<Map<String, dynamic>>> listPendingProposals(String roomId);
 }
 
 const chatMessagePageSize = 30;
-const pendingApprovalSessionId = '__mousekeeper_pending_approvals__';
 const _desktopChatBlue = Color(0xFFB7D7EA);
 const _desktopChatHeader = Color(0xFF9FC4DA);
 const _desktopChatYellow = Color(0xFFFEE500);
 const _desktopChatInk = Color(0xFF26313B);
-
-bool isPendingApprovalSessionId(String? value) =>
-    value == pendingApprovalSessionId;
-
-Map<String, dynamic> pendingApprovalSession(int count) => {
-  'id': pendingApprovalSessionId,
-  'title': count > 0 ? '승인 대기방 ($count)' : '승인 대기방',
-  'messagePreview': count > 0 ? '$count개의 제안 검토 필요' : '승인 대기 제안 없음',
-  'synthetic': true,
-};
 
 final chatGatewayProvider = Provider<ChatGateway>(
   (ref) => ApiChatGateway(ref.watch(apiClientProvider)),
@@ -81,11 +69,6 @@ final chatMessagePageProvider = FutureProvider.autoDispose
             cursor: query.cursor,
             limit: query.limit,
           );
-    });
-
-final chatPendingProposalListProvider = FutureProvider.autoDispose
-    .family<List<Map<String, dynamic>>, String>((ref, roomId) {
-      return ref.watch(chatGatewayProvider).listPendingProposals(roomId);
     });
 
 class ChatMessagesPageQuery {
@@ -193,10 +176,6 @@ class ApiChatGateway implements ChatGateway {
   @override
   Future<Map<String, dynamic>> rejectRuleDraft(String draftId) =>
       _api.post('/v1/rule-drafts/$draftId/reject', const {});
-
-  @override
-  Future<List<Map<String, dynamic>>> listPendingProposals(String roomId) =>
-      _api.getList('/v1/rooms/$roomId/proposals/open');
 }
 
 String chatSessionTitle(Map<String, dynamic> session) {
@@ -383,26 +362,6 @@ List<Map<String, dynamic>> upsertChatSession(
   final replaced = replaceChatSession(sessions, updated);
   if (sessions.any((session) => session['id'] == updatedId)) return replaced;
   return List.unmodifiable([updated, ...sessions]);
-}
-
-List<Map<String, dynamic>> _replacePendingApprovalSession(
-  List<Map<String, dynamic>> sessions,
-  int pendingCount,
-) {
-  final nextPending = pendingApprovalSession(pendingCount);
-  var replaced = false;
-  final next = [
-    for (final session in sessions)
-      if (isPendingApprovalSessionId(session['id'] as String?))
-        (() {
-          replaced = true;
-          return nextPending;
-        })()
-      else
-        session,
-  ];
-  if (!replaced) next.add(nextPending);
-  return List.unmodifiable(next);
 }
 
 List<Map<String, dynamic>> mergeChatMessages(
@@ -616,7 +575,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final _inputFocus = FocusNode();
   final _scrollController = ScrollController();
   ChatConversationState _conversation = const ChatConversationState.empty();
-  List<Map<String, dynamic>> _pendingProposals = const [];
   Map<String, dynamic>? _quickView;
   Object? _error;
   bool _loading = true;
@@ -638,12 +596,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final gateway = widget.gateway;
     if (gateway != null) return gateway.listSessions(widget.roomId);
     return ref.read(chatSessionListProvider(widget.roomId).future);
-  }
-
-  Future<List<Map<String, dynamic>>> _listPendingProposals() {
-    final gateway = widget.gateway;
-    if (gateway != null) return gateway.listPendingProposals(widget.roomId);
-    return ref.read(chatPendingProposalListProvider(widget.roomId).future);
   }
 
   Future<List<Map<String, dynamic>>> _listInitialMessages(String sessionId) {
@@ -670,7 +622,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   void _invalidateChatReadModels({String? sessionId}) {
     if (widget.gateway != null) return;
     ref.invalidate(chatSessionListProvider(widget.roomId));
-    ref.invalidate(chatPendingProposalListProvider(widget.roomId));
     if (sessionId != null) {
       ref.invalidate(chatMessagesProvider(sessionId));
     }
@@ -700,7 +651,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     });
     try {
       var sessions = await _listSessions();
-      final pendingProposals = await _listPendingProposals();
       if (_stale(version)) return;
       if (sessions.isEmpty) {
         final created = await _gateway.createSession(widget.roomId);
@@ -708,23 +658,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         if (_stale(version)) return;
         sessions = [created];
       }
-      final visibleSessions = [
-        ...sessions,
-        pendingApprovalSession(pendingProposals.length),
-      ];
       final selectedId = selectChatSessionId(
-        visibleSessions,
+        sessions,
         _conversation.selectedSessionId,
       );
-      final messages =
-          selectedId == null || isPendingApprovalSessionId(selectedId)
+      final messages = selectedId == null
           ? <Map<String, dynamic>>[]
           : await _listInitialMessages(selectedId);
       if (_stale(version)) return;
       setState(() {
-        _pendingProposals = pendingProposals;
         _conversation = ChatConversationState(
-          sessions: visibleSessions,
+          sessions: sessions,
           messages: messages,
           selectedSessionId: selectedId,
           messageCursor: lastChatMessageId(messages),
@@ -757,24 +701,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _error = null;
     });
     try {
-      if (isPendingApprovalSessionId(sessionId)) {
-        final pendingProposals = await _listPendingProposals();
-        if (_stale(version)) return;
-        setState(() {
-          _pendingProposals = pendingProposals;
-          _conversation = _conversation.copyWith(
-            sessions: _replacePendingApprovalSession(
-              _conversation.sessions,
-              pendingProposals.length,
-            ),
-            messages: const [],
-            clearMessageCursor: true,
-            hasMoreMessages: false,
-          );
-          _loading = false;
-        });
-        return;
-      }
       final messages = await _listInitialMessages(sessionId);
       if (_stale(version)) return;
       setState(() {
@@ -818,9 +744,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   Future<void> _renameSelectedSession() async {
     final sessionId = _conversation.selectedSessionId;
-    if (sessionId == null ||
-        isPendingApprovalSessionId(sessionId) ||
-        _renaming) {
+    if (sessionId == null || _renaming) {
       return;
     }
     final current = _conversation.sessions
@@ -859,9 +783,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   Future<void> _deleteSelectedSession() async {
     final sessionId = _conversation.selectedSessionId;
-    if (sessionId == null ||
-        isPendingApprovalSessionId(sessionId) ||
-        _deleting) {
+    if (sessionId == null || _deleting) {
       return;
     }
     setState(() => _deleting = true);
@@ -896,10 +818,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> send() async {
     final sessionId = _conversation.selectedSessionId;
     final content = input.text.trim();
-    if (sessionId == null ||
-        isPendingApprovalSessionId(sessionId) ||
-        content.isEmpty ||
-        _sending) {
+    if (sessionId == null || content.isEmpty || _sending) {
       return;
     }
     final optimistic = optimisticUserChatMessage(
@@ -950,11 +869,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       _scrollToBottom();
       final notice = chatSendNotice(result);
       if (notice.isNotEmpty) _showSnack(notice);
-      if (assistant is Map<String, dynamic>) {
-        if (isActionDraftMessage(assistant)) {
-          unawaited(_refreshPendingProposals());
-        }
-      }
       unawaited(_refreshQuickView());
     } catch (error) {
       if (!_disposed) {
@@ -981,10 +895,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Future<void> _loadMoreMessages() async {
     final sessionId = _conversation.selectedSessionId;
     final cursor = _conversation.messageCursor;
-    if (sessionId == null ||
-        isPendingApprovalSessionId(sessionId) ||
-        cursor == null ||
-        _loadingMore) {
+    if (sessionId == null || cursor == null || _loadingMore) {
       return;
     }
     setState(() => _loadingMore = true);
@@ -1064,22 +975,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       _invalidateChatReadModels();
       final sessions = await _listSessions();
-      final pendingProposals = await _listPendingProposals();
-      final visibleSessions = [
-        ...sessions,
-        pendingApprovalSession(pendingProposals.length),
-      ];
       if (_disposed) return;
       final selectedId = selectChatSessionId(
-        visibleSessions,
+        sessions,
         _conversation.selectedSessionId,
       );
       final selectedStillAvailable =
           selectedId != null && selectedId == _conversation.selectedSessionId;
       setState(() {
-        _pendingProposals = pendingProposals;
         _conversation = _conversation.copyWith(
-          sessions: visibleSessions,
+          sessions: sessions,
           selectedSessionId: selectedId,
           clearSelectedSessionId: selectedId == null,
           messages: selectedStillAvailable ? null : const [],
@@ -1166,7 +1071,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final result = await action();
       if (_disposed) return;
       _patchDraftMessage(draftId, result['draft']);
-      unawaited(_refreshPendingProposals());
+      unawaited(_refreshQuickView());
       _invalidateChatReadModels(sessionId: _conversation.selectedSessionId);
       _showSnack(successMessage);
     } catch (error) {
@@ -1205,7 +1110,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (_disposed) return;
     final sessionId = _conversation.selectedSessionId;
     if (sessionId != null) unawaited(_reloadMessagesForSession(sessionId));
-    unawaited(_refreshPendingProposals());
+    unawaited(_refreshQuickView());
   }
 
   Future<void> _reloadMessagesForSession(String sessionId) async {
@@ -1218,25 +1123,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     } catch (_) {
       // Best-effort refresh after returning from the proposal review page;
       // the periodic/realtime paths will catch up if this fails.
-    }
-  }
-
-  Future<void> _refreshPendingProposals() async {
-    try {
-      final pendingProposals = await _listPendingProposals();
-      if (_disposed) return;
-      setState(() {
-        _pendingProposals = pendingProposals;
-        _conversation = _conversation.copyWith(
-          sessions: _replacePendingApprovalSession(
-            _conversation.sessions,
-            pendingProposals.length,
-          ),
-        );
-      });
-    } catch (_) {
-      // Pending proposal refresh is a UI badge update. The durable command
-      // draft mutation above already completed or failed explicitly.
     }
   }
 
@@ -1274,19 +1160,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final visibleMessages = sessionId == _conversation.selectedSessionId
           ? mergeChatMessages(_conversation.messages, messages)
           : messages;
-      final regularSessions = _conversation.sessions
-          .where((item) => !isPendingApprovalSessionId(item['id'] as String?))
-          .toList(growable: false);
-      final pendingSession = _conversation.sessions.firstWhere(
-        (item) => isPendingApprovalSessionId(item['id'] as String?),
-        orElse: () => pendingApprovalSession(_pendingProposals.length),
-      );
       setState(() {
         _conversation = ChatConversationState(
-          sessions: [
-            ...upsertChatSession(regularSessions, session),
-            pendingSession,
-          ],
+          sessions: upsertChatSession(_conversation.sessions, session),
           messages: visibleMessages,
           selectedSessionId: sessionId,
           messageCursor: lastChatMessageId(visibleMessages),
@@ -1295,7 +1171,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       });
       _invalidateChatReadModels(sessionId: sessionId);
       unawaited(_markVisibleSessionRead());
-      unawaited(_refreshPendingProposals());
       unawaited(_refreshQuickView());
       _scrollToBottom();
     } catch (error) {
@@ -1340,9 +1215,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (next == null || identical(previous, next) || !mounted) return;
       unawaited(_refreshSessionsForRealtimeRoom(next.roomId));
     });
-    final selectedIsPendingApproval = isPendingApprovalSessionId(
-      _conversation.selectedSessionId,
-    );
     final selectedSession = _conversation.sessions
         .cast<Map<String, dynamic>?>()
         .firstWhere(
@@ -1379,7 +1251,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               _SessionBar(
                 sessions: _conversation.sessions,
                 selectedSessionId: _conversation.selectedSessionId,
-                pendingApprovalSelected: selectedIsPendingApproval,
                 creating: _creating,
                 renaming: _renaming,
                 deleting: _deleting,
@@ -1392,15 +1263,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   }
                 },
               ),
-              if (!selectedIsPendingApproval)
-                _DesktopQuickActionBar(
-                  prompts: quickPrompts,
-                  cleanupBusy: _quickCleanupBusy,
-                  onQuickCleanup: () => unawaited(_runQuickCleanup()),
-                  onUsePrompt: _useQuickPrompt,
-                ),
-              if (!selectedIsPendingApproval &&
-                  (pendingActionCount > 0 || unreadCount > 0))
+              _DesktopQuickActionBar(
+                prompts: quickPrompts,
+                cleanupBusy: _quickCleanupBusy,
+                onQuickCleanup: () => unawaited(_runQuickCleanup()),
+                onUsePrompt: _useQuickPrompt,
+              ),
+              if (pendingActionCount > 0 || unreadCount > 0)
                 _DesktopQuickMeta(
                   pendingActionCount: pendingActionCount,
                   unreadCount: unreadCount,
@@ -1409,9 +1278,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               _DesktopChatComposer(
                 controller: input,
                 focusNode: _inputFocus,
-                enabled:
-                    _conversation.selectedSessionId != null &&
-                    !selectedIsPendingApproval,
+                enabled: _conversation.selectedSessionId != null,
                 sending: _sending,
                 onSend: () => unawaited(send()),
               ),
@@ -1447,21 +1314,6 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (_conversation.selectedSessionId == null) {
       return const Center(
         child: Text('대화가 없습니다.\n새 대화를 만들어 주세요.', textAlign: TextAlign.center),
-      );
-    }
-    if (isPendingApprovalSessionId(_conversation.selectedSessionId)) {
-      return _PendingApprovalRoom(
-        proposals: _pendingProposals,
-        onRefresh: () => unawaited(_refreshPendingProposals()),
-        onOpenProposal: (proposalId) async {
-          await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) =>
-                  ProposalPage(proposalId: proposalId, roomId: widget.roomId),
-            ),
-          );
-          if (!_disposed) unawaited(_refreshPendingProposals());
-        },
       );
     }
     if (_conversation.messages.isEmpty) {
@@ -1590,97 +1442,6 @@ class _ChatSessionTitleDialogState extends State<_ChatSessionTitleDialog> {
       ),
     ],
   );
-}
-
-class _PendingApprovalRoom extends StatelessWidget {
-  const _PendingApprovalRoom({
-    required this.proposals,
-    required this.onRefresh,
-    required this.onOpenProposal,
-  });
-
-  final List<Map<String, dynamic>> proposals;
-  final VoidCallback onRefresh;
-  final ValueChanged<String> onOpenProposal;
-
-  @override
-  Widget build(BuildContext context) {
-    if (proposals.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.inbox_outlined, size: 48),
-              const SizedBox(height: 12),
-              const Text(
-                '승인 대기 중인 제안이 없습니다.\nAI 대화에서 파일 정리를 요청하면 확인 카드가 여기에 모입니다.',
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: onRefresh,
-                icon: const Icon(Icons.refresh),
-                label: const Text('새로고침'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-    return RefreshIndicator(
-      onRefresh: () async => onRefresh(),
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            color: Theme.of(context).colorScheme.secondaryContainer,
-            child: const ListTile(
-              leading: Icon(Icons.pending_actions_outlined),
-              title: Text('승인 대기방'),
-              subtitle: Text('AI가 만든 확인 카드를 검토하고 승인 또는 거절하세요.'),
-            ),
-          ),
-          const SizedBox(height: 8),
-          for (final proposal in proposals)
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.rule_folder_outlined),
-                title: Text(
-                  _proposalTitle(proposal),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  _proposalSubtitle(proposal),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: proposal['id'] is String
-                    ? () => onOpenProposal(proposal['id'] as String)
-                    : null,
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  static String _proposalTitle(Map<String, dynamic> proposal) {
-    final summary = proposal['summary'];
-    if (summary is Map && summary['title'] is String) {
-      return summary['title'] as String;
-    }
-    return '파일 정리 제안';
-  }
-
-  static String _proposalSubtitle(Map<String, dynamic> proposal) {
-    final itemCount = proposal['itemCount'];
-    final status = proposal['status'] as String? ?? 'OPEN';
-    return itemCount is int ? '$status · $itemCount개 항목' : status;
-  }
 }
 
 class _DesktopChatHeader extends StatelessWidget {
@@ -2031,7 +1792,6 @@ class _SessionBar extends StatelessWidget {
   const _SessionBar({
     required this.sessions,
     required this.selectedSessionId,
-    required this.pendingApprovalSelected,
     required this.creating,
     required this.renaming,
     required this.deleting,
@@ -2043,7 +1803,6 @@ class _SessionBar extends StatelessWidget {
 
   final List<Map<String, dynamic>> sessions;
   final String? selectedSessionId;
-  final bool pendingApprovalSelected;
   final bool creating;
   final bool renaming;
   final bool deleting;
@@ -2115,10 +1874,7 @@ class _SessionBar extends StatelessWidget {
           IconButton(
             key: const ValueKey('chat-rename-session'),
             tooltip: '대화 제목 수정',
-            onPressed:
-                selectedSessionId == null || pendingApprovalSelected || renaming
-                ? null
-                : onRename,
+            onPressed: selectedSessionId == null || renaming ? null : onRename,
             icon: renaming
                 ? const SizedBox.square(
                     dimension: 20,
@@ -2130,10 +1886,7 @@ class _SessionBar extends StatelessWidget {
           IconButton(
             key: const ValueKey('chat-delete-session'),
             tooltip: '대화 삭제',
-            onPressed:
-                selectedSessionId == null || pendingApprovalSelected || deleting
-                ? null
-                : onDelete,
+            onPressed: selectedSessionId == null || deleting ? null : onDelete,
             icon: deleting
                 ? const SizedBox.square(
                     dimension: 20,

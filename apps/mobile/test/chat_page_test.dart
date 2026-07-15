@@ -188,6 +188,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('chat-session-picker')));
     await tester.pumpAndSettle();
+    expect(find.textContaining('승인 대기방'), findsNothing);
     await tester.tap(find.text('둘째 대화').last);
     await tester.pumpAndSettle();
 
@@ -708,7 +709,6 @@ class _FakeChatGateway implements ChatGateway {
 
   final List<Map<String, dynamic>> sessions;
   final Map<String, List<Map<String, dynamic>>> messagesBySession;
-  final List<Map<String, dynamic>> pendingProposals = const [];
   final Map<String, dynamic>? sendResult;
   final Completer<Map<String, dynamic>>? sendCompleter;
   final Map<String, dynamic>? quickView;
@@ -748,11 +748,6 @@ class _FakeChatGateway implements ChatGateway {
   Future<List<Map<String, dynamic>>> listSessions(String roomId) async {
     sessionLoads += 1;
     return [...sessions];
-  }
-
-  @override
-  Future<List<Map<String, dynamic>>> listPendingProposals(String roomId) async {
-    return [...pendingProposals];
   }
 
   @override
