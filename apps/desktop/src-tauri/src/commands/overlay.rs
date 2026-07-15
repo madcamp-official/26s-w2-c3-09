@@ -386,16 +386,6 @@ fn position_chat_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow) 
         });
     let align_y = mouse_pos.y + mouse_size.height as i32 - chat_h;
     let align_x = mouse_pos.x + (mouse_size.width as i32 - chat_w) / 2;
-    let left_candidate = (
-        RectI {
-            x: mouse_pos.x - bubble_w - gap,
-            y: align_y,
-            w: bubble_w,
-            h: bubble_h,
-        },
-        TailSide::Right,
-    );
-    /*
     let candidates = [
         RectI {
             x: mouse_pos.x - chat_w - gap,
@@ -421,7 +411,7 @@ fn position_chat_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow) 
             w: chat_w,
             h: chat_h,
         },
-    ]; */
+    ];
     let best = candidates
         .into_iter()
         .map(|candidate| clamp_rect(candidate, monitor_rect))
@@ -533,6 +523,15 @@ pub fn show_speech_bubble(app: tauri::AppHandle, text: String) -> Result<(), Str
     });
     let align_x = mouse_pos.x + (mouse_w - bubble_w) / 2;
     let align_y = mouse_pos.y + (mouse_h - bubble_h) / 2;
+    let left_candidate = (
+        RectI {
+            x: mouse_pos.x - bubble_w - gap,
+            y: align_y,
+            w: bubble_w,
+            h: bubble_h,
+        },
+        TailSide::Right,
+    );
     let candidates = [
         (
             RectI {
