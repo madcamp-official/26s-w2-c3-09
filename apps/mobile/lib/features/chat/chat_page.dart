@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mousekeeper_character_assets/character_assets.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
 import '../../core/sync/realtime_controller.dart';
+import '../../core/widgets/cheese_loading.dart';
 import '../proposals/proposal_page.dart';
 
 abstract interface class ChatGateway {
@@ -24,6 +26,8 @@ abstract interface class ChatGateway {
     int limit = chatMessagePageSize,
   });
   Future<Map<String, dynamic>> sendMessage(String sessionId, String content);
+  Future<Map<String, dynamic>> getQuickView(String roomId);
+  Future<Map<String, dynamic>> createQuickCleanup(String roomId);
   Future<Map<String, dynamic>> confirmCommandDraft(
     String draftId,
     String idempotencyKey,
@@ -39,6 +43,10 @@ abstract interface class ChatGateway {
 
 const chatMessagePageSize = 30;
 const pendingApprovalSessionId = '__mousekeeper_pending_approvals__';
+const _desktopChatBlue = Color(0xFFB7D7EA);
+const _desktopChatHeader = Color(0xFF9FC4DA);
+const _desktopChatYellow = Color(0xFFFEE500);
+const _desktopChatInk = Color(0xFF26313B);
 
 bool isPendingApprovalSessionId(String? value) =>
     value == pendingApprovalSessionId;
@@ -151,6 +159,14 @@ class ApiChatGateway implements ChatGateway {
       _api.post('/v1/chat-sessions/$sessionId/messages', {'content': content});
 
   @override
+  Future<Map<String, dynamic>> getQuickView(String roomId) =>
+      _api.get('/v1/rooms/$roomId/chat/quick-view');
+
+  @override
+  Future<Map<String, dynamic>> createQuickCleanup(String roomId) =>
+      _api.post('/v1/rooms/$roomId/chat/quick-cleanup', const {});
+
+  @override
   Future<Map<String, dynamic>> confirmCommandDraft(
     String draftId,
     String idempotencyKey,
@@ -189,6 +205,28 @@ String chatSessionTitle(Map<String, dynamic> session) {
   final preview = (session['messagePreview'] as String?)?.trim();
   if (preview != null && preview.isNotEmpty) return preview;
   return '새 대화';
+}
+
+List<Map<String, dynamic>> chatQuickPrompts(Map<String, dynamic>? quickView) {
+  final raw = quickView?['prompts'];
+  if (raw is! List) return const [];
+  return raw
+      .whereType<Map>()
+      .map(Map<String, dynamic>.from)
+      .where(
+        (prompt) =>
+            prompt['label'] is String &&
+            (prompt['label'] as String).trim().isNotEmpty &&
+            prompt['prompt'] is String &&
+            (prompt['prompt'] as String).trim().isNotEmpty,
+      )
+      .take(4)
+      .toList(growable: false);
+}
+
+int chatQuickCount(Map<String, dynamic>? quickView, String key) {
+  final value = quickView?[key];
+  return value is int && value > 0 ? value : 0;
 }
 
 String chatSendNotice(Map<String, dynamic> result) {
@@ -319,6 +357,17 @@ List<Map<String, dynamic>> replaceChatSession(
         session,
   ];
   return found && changed ? List.unmodifiable(next) : sessions;
+}
+
+List<Map<String, dynamic>> upsertChatSession(
+  List<Map<String, dynamic>> sessions,
+  Map<String, dynamic> updated,
+) {
+  final updatedId = updated['id'];
+  if (updatedId is! String) return sessions;
+  final replaced = replaceChatSession(sessions, updated);
+  if (sessions.any((session) => session['id'] == updatedId)) return replaced;
+  return List.unmodifiable([updated, ...sessions]);
 }
 
 List<Map<String, dynamic>> _replacePendingApprovalSession(
@@ -532,9 +581,15 @@ class ChatConversationState {
 }
 
 class ChatPage extends ConsumerStatefulWidget {
-  const ChatPage({super.key, required this.roomId, this.gateway});
+  const ChatPage({
+    super.key,
+    required this.roomId,
+    this.roomName,
+    this.gateway,
+  });
 
   final String roomId;
+  final String? roomName;
   final ChatGateway? gateway;
 
   @override
@@ -543,9 +598,11 @@ class ChatPage extends ConsumerStatefulWidget {
 
 class _ChatPageState extends ConsumerState<ChatPage> {
   final input = TextEditingController();
+  final _inputFocus = FocusNode();
   final _scrollController = ScrollController();
   ChatConversationState _conversation = const ChatConversationState.empty();
   List<Map<String, dynamic>> _pendingProposals = const [];
+  Map<String, dynamic>? _quickView;
   Object? _error;
   bool _loading = true;
   bool _sending = false;
@@ -553,6 +610,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool _creating = false;
   bool _renaming = false;
   bool _deleting = false;
+  bool _quickCleanupBusy = false;
   bool _disposed = false;
   final Set<String> _draftingIds = {};
   final Set<String> _realtimeMessageIdsInFlight = {};
@@ -614,6 +672,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _disposed = true;
     _loadVersion++;
     input.dispose();
+    _inputFocus.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -658,6 +717,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         );
         _loading = false;
       });
+      unawaited(_refreshQuickView());
       unawaited(_markVisibleSessionRead());
       _scrollToBottom();
     } catch (error) {
@@ -880,6 +940,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           unawaited(_refreshPendingProposals());
         }
       }
+      unawaited(_refreshQuickView());
     } catch (error) {
       if (!_disposed) {
         final failedMessages = removeChatMessageById(
@@ -1138,6 +1199,79 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  Future<void> _refreshQuickView() async {
+    try {
+      final quickView = await _gateway.getQuickView(widget.roomId);
+      if (_disposed) return;
+      setState(() => _quickView = quickView);
+    } catch (_) {
+      // Quick actions are an enhancement over durable sessions and messages. A temporary failure
+      // must not hide or replace the conversation that is already available.
+    }
+  }
+
+  Future<void> _runQuickCleanup() async {
+    if (_quickCleanupBusy) return;
+    setState(() => _quickCleanupBusy = true);
+    try {
+      final result = await _gateway.createQuickCleanup(widget.roomId);
+      if (_disposed) return;
+      final sessionRaw = result['session'];
+      if (sessionRaw is! Map) {
+        throw StateError('INVALID_RESPONSE: quick cleanup session');
+      }
+      final session = Map<String, dynamic>.from(sessionRaw);
+      final sessionId = session['id'];
+      if (sessionId is! String || sessionId.isEmpty) {
+        throw StateError('INVALID_RESPONSE: quick cleanup session id');
+      }
+      final messages = <Map<String, dynamic>>[];
+      for (final key in const ['message', 'assistant']) {
+        final raw = result[key];
+        if (raw is Map) messages.add(Map<String, dynamic>.from(raw));
+      }
+      final visibleMessages = sessionId == _conversation.selectedSessionId
+          ? mergeChatMessages(_conversation.messages, messages)
+          : messages;
+      final regularSessions = _conversation.sessions
+          .where((item) => !isPendingApprovalSessionId(item['id'] as String?))
+          .toList(growable: false);
+      final pendingSession = _conversation.sessions.firstWhere(
+        (item) => isPendingApprovalSessionId(item['id'] as String?),
+        orElse: () => pendingApprovalSession(_pendingProposals.length),
+      );
+      setState(() {
+        _conversation = ChatConversationState(
+          sessions: [
+            ...upsertChatSession(regularSessions, session),
+            pendingSession,
+          ],
+          messages: visibleMessages,
+          selectedSessionId: sessionId,
+          messageCursor: lastChatMessageId(visibleMessages),
+          hasMoreMessages: false,
+        );
+      });
+      _invalidateChatReadModels(sessionId: sessionId);
+      unawaited(_markVisibleSessionRead());
+      unawaited(_refreshPendingProposals());
+      unawaited(_refreshQuickView());
+      _scrollToBottom();
+    } catch (error) {
+      _showSnack('빠른 정리를 시작하지 못했습니다: ${chatErrorMessage(error)}');
+    } finally {
+      if (!_disposed) setState(() => _quickCleanupBusy = false);
+    }
+  }
+
+  void _useQuickPrompt(String prompt) {
+    input.value = TextEditingValue(
+      text: prompt,
+      selection: TextSelection.collapsed(offset: prompt.length),
+    );
+    _inputFocus.requestFocus();
+  }
+
   bool _stale(int version) => _disposed || version != _loadVersion;
 
   void _showSnack(String message) {
@@ -1168,70 +1302,89 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final selectedIsPendingApproval = isPendingApprovalSessionId(
       _conversation.selectedSessionId,
     );
+    final selectedSession = _conversation.sessions
+        .cast<Map<String, dynamic>?>()
+        .firstWhere(
+          (session) => session?['id'] == _conversation.selectedSessionId,
+          orElse: () => null,
+        );
+    final quickPrompts = chatQuickPrompts(_quickView);
+    final pendingActionCount = chatQuickCount(_quickView, 'pendingActionCount');
+    final unreadCount = chatQuickCount(_quickView, 'unreadCount');
     return Scaffold(
-      appBar: AppBar(title: const Text('집쥐인과 대화')),
-      body: Column(
-        children: [
-          _SessionBar(
-            sessions: _conversation.sessions,
-            selectedSessionId: _conversation.selectedSessionId,
-            pendingApprovalSelected: selectedIsPendingApproval,
-            creating: _creating,
-            renaming: _renaming,
-            deleting: _deleting,
-            onCreate: _createSession,
-            onRename: _renameSelectedSession,
-            onDelete: _deleteSelectedSession,
-            onSelected: (id) {
-              if (id != _conversation.selectedSessionId) {
-                unawaited(_selectSession(id));
-              }
-            },
-          ),
-          Expanded(child: _buildBody()),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      key: const ValueKey('chat-message-field'),
-                      controller: input,
-                      maxLength: 2000,
-                      enabled:
-                          _conversation.selectedSessionId != null &&
-                          !selectedIsPendingApproval,
-                      decoration: const InputDecoration(
-                        hintText: 'AI에게 파일 정리 요청을 말로 입력하세요',
-                        border: OutlineInputBorder(),
-                      ),
-                      onSubmitted: (_) => unawaited(send()),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    key: const ValueKey('chat-send-button'),
-                    tooltip: '보내기',
-                    onPressed:
-                        _sending ||
-                            selectedIsPendingApproval ||
-                            _conversation.selectedSessionId == null
-                        ? null
-                        : send,
-                    icon: const Icon(Icons.send),
-                  ),
-                ],
+      backgroundColor: _desktopChatBlue,
+      body: CheeseLoadingOverlay(
+        loading:
+            !_loading &&
+            (_sending ||
+                _loadingMore ||
+                _creating ||
+                _renaming ||
+                _deleting ||
+                _quickCleanupBusy ||
+                _draftingIds.isNotEmpty),
+        message: _sending ? '답을 만들고 있어요!' : '요청을 처리하는 중입니다',
+        child: SafeArea(
+          child: Column(
+            children: [
+              _DesktopChatHeader(
+                roomName: widget.roomName ?? '관리 폴더',
+                sessionTitle: selectedSession == null
+                    ? '서버 채팅 세션 연결 중'
+                    : chatSessionTitle(selectedSession),
+                connected: !_loading && _error == null,
+                onBack: () => Navigator.of(context).maybePop(),
               ),
-            ),
+              _SessionBar(
+                sessions: _conversation.sessions,
+                selectedSessionId: _conversation.selectedSessionId,
+                pendingApprovalSelected: selectedIsPendingApproval,
+                creating: _creating,
+                renaming: _renaming,
+                deleting: _deleting,
+                onCreate: _createSession,
+                onRename: _renameSelectedSession,
+                onDelete: _deleteSelectedSession,
+                onSelected: (id) {
+                  if (id != _conversation.selectedSessionId) {
+                    unawaited(_selectSession(id));
+                  }
+                },
+              ),
+              if (!selectedIsPendingApproval)
+                _DesktopQuickActionBar(
+                  prompts: quickPrompts,
+                  cleanupBusy: _quickCleanupBusy,
+                  onQuickCleanup: () => unawaited(_runQuickCleanup()),
+                  onUsePrompt: _useQuickPrompt,
+                ),
+              if (!selectedIsPendingApproval &&
+                  (pendingActionCount > 0 || unreadCount > 0))
+                _DesktopQuickMeta(
+                  pendingActionCount: pendingActionCount,
+                  unreadCount: unreadCount,
+                ),
+              Expanded(child: _buildBody()),
+              _DesktopChatComposer(
+                controller: input,
+                focusNode: _inputFocus,
+                enabled:
+                    _conversation.selectedSessionId != null &&
+                    !selectedIsPendingApproval,
+                sending: _sending,
+                onSend: () => unawaited(send()),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) {
+      return const CheeseLoadingView(message: '대화를 불러오는 중입니다');
+    }
     if (_error != null) {
       return Center(
         child: Column(
@@ -1271,11 +1424,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
     }
     if (_conversation.messages.isEmpty) {
-      return const Center(
-        child: Text(
-          '아직 메시지가 없습니다.\n파일 목록, 히스토리, 정리 요청을 말로 물어보세요.',
-          textAlign: TextAlign.center,
-        ),
+      return const _DesktopEmptyChat(
+        message: '이 방 기준으로 이야기할게요.\n파일 목록, 히스토리, 정리 요청을 말로 물어보세요.',
       );
     }
     return Column(
@@ -1283,7 +1433,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         Expanded(
           child: ListView.builder(
             controller: _scrollController,
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             itemCount:
                 _conversation.messages.length +
                 (_conversation.hasMoreMessages ? 1 : 0),
@@ -1299,7 +1449,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     icon: _loadingMore
                         ? const SizedBox.square(
                             dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: CheeseLoadingIndicator(size: 16),
                           )
                         : const Icon(Icons.expand_more),
                     label: const Text('다음 메시지 더 보기'),
@@ -1323,10 +1473,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         ),
         if (_sending)
           const Padding(
-            padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+            padding: EdgeInsets.fromLTRB(14, 4, 14, 8),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: Text('답을 만들고 있어요!', key: ValueKey('chat-answer-pending')),
+              child: Text(
+                '답을 만들고 있어요!',
+                key: ValueKey('chat-answer-pending'),
+                style: TextStyle(
+                  color: Color(0xFF294B60),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
           ),
       ],
@@ -1475,6 +1632,350 @@ class _PendingApprovalRoom extends StatelessWidget {
   }
 }
 
+class _DesktopChatHeader extends StatelessWidget {
+  const _DesktopChatHeader({
+    required this.roomName,
+    required this.sessionTitle,
+    required this.connected,
+    required this.onBack,
+  });
+
+  final String roomName;
+  final String sessionTitle;
+  final bool connected;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    color: _desktopChatHeader,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(8, 8, 14, 8),
+      child: Row(
+        children: [
+          IconButton(
+            key: const ValueKey('chat-back-button'),
+            onPressed: onBack,
+            tooltip: '뒤로 가기',
+            icon: const Icon(Icons.chevron_left, size: 30),
+            color: _desktopChatInk,
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  roomName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _desktopChatInk,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                Text(
+                  sessionTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: _desktopChatInk.withValues(alpha: 0.62),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            width: 12,
+            height: 12,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: connected
+                  ? const Color(0xFF19A45B)
+                  : const Color(0xFF7B8790),
+              boxShadow: connected
+                  ? const [BoxShadow(color: Color(0x3319A45B), spreadRadius: 4)]
+                  : null,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DesktopQuickActionBar extends StatelessWidget {
+  const _DesktopQuickActionBar({
+    required this.prompts,
+    required this.cleanupBusy,
+    required this.onQuickCleanup,
+    required this.onUsePrompt,
+  });
+
+  final List<Map<String, dynamic>> prompts;
+  final bool cleanupBusy;
+  final VoidCallback onQuickCleanup;
+  final ValueChanged<String> onUsePrompt;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    color: _desktopChatBlue,
+    child: SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+        children: [
+          _DesktopQuickButton(
+            key: const ValueKey('chat-quick-cleanup'),
+            label: '빠른 정리',
+            busy: cleanupBusy,
+            onPressed: cleanupBusy ? null : onQuickCleanup,
+          ),
+          for (final prompt in prompts) ...[
+            const SizedBox(width: 7),
+            _DesktopQuickButton(
+              label: prompt['label'] as String,
+              onPressed: () => onUsePrompt(prompt['prompt'] as String),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+}
+
+class _DesktopQuickButton extends StatelessWidget {
+  const _DesktopQuickButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.busy = false,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton(
+    onPressed: onPressed,
+    style: OutlinedButton.styleFrom(
+      minimumSize: const Size(0, 34),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      foregroundColor: _desktopChatInk,
+      backgroundColor: Colors.white.withValues(alpha: 0.92),
+      side: BorderSide(color: _desktopChatInk.withValues(alpha: 0.20)),
+      shape: const StadiumBorder(),
+      textStyle: const TextStyle(fontWeight: FontWeight.w700),
+    ),
+    child: busy
+        ? const SizedBox.square(
+            dimension: 15,
+            child: CheeseLoadingIndicator(size: 15),
+          )
+        : Text(label),
+  );
+}
+
+class _DesktopQuickMeta extends StatelessWidget {
+  const _DesktopQuickMeta({
+    required this.pendingActionCount,
+    required this.unreadCount,
+  });
+
+  final int pendingActionCount;
+  final int unreadCount;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    color: _desktopChatBlue,
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 5),
+      child: Row(
+        children: [
+          if (pendingActionCount > 0)
+            _DesktopMetaChip(label: '제안 $pendingActionCount'),
+          if (pendingActionCount > 0 && unreadCount > 0)
+            const SizedBox(width: 6),
+          if (unreadCount > 0) _DesktopMetaChip(label: '새 메시지 $unreadCount'),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DesktopMetaChip extends StatelessWidget {
+  const _DesktopMetaChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: _desktopChatInk.withValues(alpha: 0.10),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: _desktopChatInk.withValues(alpha: 0.72),
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    ),
+  );
+}
+
+class _DesktopChatComposer extends StatelessWidget {
+  const _DesktopChatComposer({
+    required this.controller,
+    required this.focusNode,
+    required this.enabled,
+    required this.sending,
+    required this.onSend,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool enabled;
+  final bool sending;
+  final VoidCallback onSend;
+
+  @override
+  Widget build(BuildContext context) => ColoredBox(
+    color: const Color(0xFFF7F7F7),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(10, 9, 10, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const ValueKey('chat-message-field'),
+              controller: controller,
+              focusNode: focusNode,
+              maxLength: 2000,
+              enabled: enabled,
+              textInputAction: TextInputAction.send,
+              decoration: InputDecoration(
+                hintText: enabled ? 'AI에게 파일 정리 요청을 입력하세요' : '대화를 선택하세요',
+                counterText: '',
+                isDense: true,
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(22),
+                  borderSide: const BorderSide(color: Color(0xFFD8DDE2)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(22),
+                  borderSide: const BorderSide(color: Color(0xFFD8DDE2)),
+                ),
+              ),
+              onSubmitted: (_) {
+                if (!sending && enabled) onSend();
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton.filled(
+            key: const ValueKey('chat-send-button'),
+            tooltip: '보내기',
+            onPressed: sending || !enabled ? null : onSend,
+            style: IconButton.styleFrom(
+              backgroundColor: _desktopChatYellow,
+              foregroundColor: const Color(0xFF2F2500),
+              disabledBackgroundColor: const Color(0xFFE3E3E3),
+            ),
+            icon: const Icon(Icons.send_rounded),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DesktopEmptyChat extends StatelessWidget {
+  const _DesktopEmptyChat({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.topLeft,
+    child: Padding(
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _MouseChatAvatar(),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'MouseKeeper',
+                  style: TextStyle(
+                    color: _desktopChatInk.withValues(alpha: 0.76),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                DecoratedBox(
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topRight: Radius.circular(15),
+                      bottomLeft: Radius.circular(15),
+                      bottomRight: Radius.circular(15),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    child: Text(message),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _MouseChatAvatar extends StatelessWidget {
+  const _MouseChatAvatar();
+
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(12),
+    child: ColoredBox(
+      color: const Color(0xFFFFF6D9),
+      child: Image.asset(
+        mousekeeperPairingIconAsset,
+        package: mousekeeperMascotPackage,
+        width: 34,
+        height: 34,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.none,
+      ),
+    ),
+  );
+}
+
 class _SessionBar extends StatelessWidget {
   const _SessionBar({
     required this.sessions,
@@ -1501,42 +2002,53 @@ class _SessionBar extends StatelessWidget {
   final ValueChanged<String> onSelected;
 
   @override
-  Widget build(BuildContext context) => Material(
-    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+  Widget build(BuildContext context) => ColoredBox(
+    color: _desktopChatHeader.withValues(alpha: 0.88),
     child: Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding: const EdgeInsets.fromLTRB(10, 5, 8, 7),
       child: Row(
         children: [
           Expanded(
-            child: InputDecorator(
-              decoration: const InputDecoration(
-                labelText: '대화 세션',
-                border: OutlineInputBorder(),
-                isDense: true,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: _desktopChatInk.withValues(alpha: 0.14),
+                ),
               ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  key: const ValueKey('chat-session-picker'),
-                  value: selectedSessionId,
-                  isExpanded: true,
-                  items: [
-                    for (final session in sessions)
-                      DropdownMenuItem<String>(
-                        value: session['id'] as String?,
-                        child: Text(
-                          chatSessionTitle(session),
-                          overflow: TextOverflow.ellipsis,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    key: const ValueKey('chat-session-picker'),
+                    value: selectedSessionId,
+                    isDense: true,
+                    isExpanded: true,
+                    icon: const Icon(Icons.expand_more),
+                    items: [
+                      for (final session in sessions)
+                        DropdownMenuItem<String>(
+                          value: session['id'] as String?,
+                          child: Text(
+                            chatSessionTitle(session),
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _desktopChatInk,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
-                      ),
-                  ],
-                  onChanged: (value) {
-                    if (value != null) onSelected(value);
-                  },
+                    ],
+                    onChanged: (value) {
+                      if (value != null) onSelected(value);
+                    },
+                  ),
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
           IconButton(
             key: const ValueKey('chat-create-session'),
             tooltip: '새 대화',
@@ -1544,9 +2056,10 @@ class _SessionBar extends StatelessWidget {
             icon: creating
                 ? const SizedBox.square(
                     dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CheeseLoadingIndicator(size: 20),
                   )
-                : const Icon(Icons.add_comment_outlined),
+                : const Icon(Icons.add_comment_outlined, size: 20),
+            color: _desktopChatInk,
           ),
           IconButton(
             key: const ValueKey('chat-rename-session'),
@@ -1558,9 +2071,10 @@ class _SessionBar extends StatelessWidget {
             icon: renaming
                 ? const SizedBox.square(
                     dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CheeseLoadingIndicator(size: 20),
                   )
-                : const Icon(Icons.edit_outlined),
+                : const Icon(Icons.edit_outlined, size: 20),
+            color: _desktopChatInk,
           ),
           IconButton(
             key: const ValueKey('chat-delete-session'),
@@ -1572,9 +2086,10 @@ class _SessionBar extends StatelessWidget {
             icon: deleting
                 ? const SizedBox.square(
                     dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CheeseLoadingIndicator(size: 20),
                   )
-                : const Icon(Icons.delete_outline),
+                : const Icon(Icons.delete_outline, size: 20),
+            color: _desktopChatInk,
           ),
         ],
       ),
@@ -1608,64 +2123,128 @@ class _ChatBubble extends StatelessWidget {
     final draftStatus = actionDraftStatusFromMessage(message);
     final draftBusy = draftId != null && busyDraftIds.contains(draftId);
     final keyPrefix = isRuleDraft ? 'chat-rule-draft' : 'chat-command-draft';
-    return Align(
-      alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Card(
-        color: isDraft
-            ? Theme.of(context).colorScheme.secondaryContainer
+    final bubble = DecoratedBox(
+      decoration: BoxDecoration(
+        color: fromUser
+            ? _desktopChatYellow
+            : isDraft
+            ? const Color(0xFFEAF5FF)
+            : Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(fromUser ? 15 : 3),
+          topRight: Radius.circular(fromUser ? 3 : 15),
+          bottomLeft: const Radius.circular(15),
+          bottomRight: const Radius.circular(15),
+        ),
+        border: isDraft
+            ? Border.all(color: const Color(0xFF7DAFC8), width: 1.2)
             : null,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: fromUser
-                ? CrossAxisAlignment.end
-                : CrossAxisAlignment.start,
-            children: [
-              if (isDraft)
-                Text('확인 카드', style: Theme.of(context).textTheme.labelMedium),
-              Text(message['content'] as String? ?? ''),
-              if (isDraft && draftId != null) ...[
-                const SizedBox(height: 8),
-                if (draftStatus == 'DRAFT')
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      FilledButton(
-                        key: ValueKey('$keyPrefix-confirm-$draftId'),
-                        onPressed: draftBusy
-                            ? null
-                            : () => isRuleDraft
-                                  ? onConfirmRuleDraft(draftId)
-                                  : onConfirmDraft(draftId),
-                        child: draftBusy
-                            ? const SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Text('승인'),
-                      ),
-                      const SizedBox(width: 8),
-                      TextButton(
-                        key: ValueKey('$keyPrefix-reject-$draftId'),
-                        onPressed: draftBusy
-                            ? null
-                            : () => isRuleDraft
-                                  ? onRejectRuleDraft(draftId)
-                                  : onRejectDraft(draftId),
-                        child: const Text('거절'),
-                      ),
-                    ],
-                  )
-                else
-                  Chip(
-                    key: ValueKey('$keyPrefix-status-$draftId'),
-                    label: Text(draftStatus),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        child: Column(
+          crossAxisAlignment: fromUser
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
+          children: [
+            if (isDraft)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 4),
+                child: Text(
+                  '확인 카드',
+                  style: TextStyle(
+                    color: Color(0xFF436577),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
                   ),
-              ],
+                ),
+              ),
+            Text(
+              message['content'] as String? ?? '',
+              style: const TextStyle(color: Color(0xFF2D2500), height: 1.35),
+            ),
+            if (isDraft && draftId != null) ...[
+              const SizedBox(height: 8),
+              if (draftStatus == 'DRAFT')
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    FilledButton(
+                      key: ValueKey('$keyPrefix-confirm-$draftId'),
+                      onPressed: draftBusy
+                          ? null
+                          : () => isRuleDraft
+                                ? onConfirmRuleDraft(draftId)
+                                : onConfirmDraft(draftId),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: const Color(0xFF436577),
+                        foregroundColor: Colors.white,
+                      ),
+                      child: draftBusy
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CheeseLoadingIndicator(size: 16),
+                            )
+                          : const Text('승인'),
+                    ),
+                    TextButton(
+                      key: ValueKey('$keyPrefix-reject-$draftId'),
+                      onPressed: draftBusy
+                          ? null
+                          : () => isRuleDraft
+                                ? onRejectRuleDraft(draftId)
+                                : onRejectDraft(draftId),
+                      child: const Text('거절'),
+                    ),
+                  ],
+                )
+              else
+                Chip(
+                  key: ValueKey('$keyPrefix-status-$draftId'),
+                  label: Text(draftStatus),
+                  visualDensity: VisualDensity.compact,
+                ),
             ],
+          ],
+        ),
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Align(
+        alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.sizeOf(context).width * 0.78,
           ),
+          child: fromUser
+              ? bubble
+              : Row(
+                  mainAxisSize: MainAxisSize.max,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const _MouseChatAvatar(),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'MouseKeeper',
+                            style: TextStyle(
+                              color: _desktopChatInk.withValues(alpha: 0.76),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          bubble,
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
         ),
       ),
     );

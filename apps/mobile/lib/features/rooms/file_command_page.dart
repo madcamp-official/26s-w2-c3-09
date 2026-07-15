@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/sync/mutation_queue.dart';
+import '../../core/widgets/cheese_loading.dart';
 
 typedef FileCommandSubmit = Future<bool> Function(Map<String, dynamic> command);
 
@@ -184,139 +185,145 @@ class _FileCommandPageState extends ConsumerState<FileCommandPage> {
     final hasRootId = widget.rootId.trim().isNotEmpty;
     return Scaffold(
       appBar: AppBar(title: const Text('File command')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Card(
-            color: Color(0xFFE3F2FD),
-            child: ListTile(
-              leading: Icon(Icons.verified_user_outlined),
-              title: Text('Approval-first file command'),
-              subtitle: Text(
-                'This only creates a server command. The desktop agent checks the managed root and creates a proposal before any file is changed.',
-              ),
-            ),
-          ),
-          if (!hasRootId) ...[
-            const SizedBox(height: 12),
-            Card(
-              color: Theme.of(context).colorScheme.errorContainer,
-              child: const ListTile(
-                leading: Icon(Icons.error_outline),
-                title: Text('Missing managed-root id'),
+      body: CheeseLoadingOverlay(
+        loading: _submitting,
+        message: '안전한 파일 작업 제안을 요청하는 중입니다',
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const Card(
+              color: Color(0xFFE3F2FD),
+              child: ListTile(
+                leading: Icon(Icons.verified_user_outlined),
+                title: Text('Approval-first file command'),
                 subtitle: Text(
-                  'Reconnect this folder from the desktop agent before sending file commands.',
+                  'This only creates a server command. The desktop agent checks the managed root and creates a proposal before any file is changed.',
                 ),
               ),
             ),
-          ],
-          const SizedBox(height: 16),
-          DropdownButtonFormField<ManualFileCommandIntent>(
-            key: const ValueKey('manual-file-command-intent'),
-            initialValue: _intent,
-            decoration: const InputDecoration(
-              labelText: 'Command',
-              border: OutlineInputBorder(),
-            ),
-            items: ManualFileCommandIntent.values
-                .map(
-                  (intent) => DropdownMenuItem(
-                    value: intent,
-                    child: Text(intent.label),
+            if (!hasRootId) ...[
+              const SizedBox(height: 12),
+              Card(
+                color: Theme.of(context).colorScheme.errorContainer,
+                child: const ListTile(
+                  leading: Icon(Icons.error_outline),
+                  title: Text('Missing managed-root id'),
+                  subtitle: Text(
+                    'Reconnect this folder from the desktop agent before sending file commands.',
                   ),
-                )
-                .toList(growable: false),
-            onChanged: _submitting
-                ? null
-                : (value) => setState(() => _intent = value ?? _intent),
-          ),
-          const SizedBox(height: 12),
-          if (_intent == ManualFileCommandIntent.rename) ...[
-            _pathField(
-              controller: _source,
-              label: 'Source path',
-              hint: 'reports/old.pdf',
-              maxLines: 1,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              key: const ValueKey('manual-file-command-new-name'),
-              controller: _newName,
-              enabled: !_submitting,
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            DropdownButtonFormField<ManualFileCommandIntent>(
+              key: const ValueKey('manual-file-command-intent'),
+              initialValue: _intent,
               decoration: const InputDecoration(
-                labelText: 'New name',
-                hintText: 'final.pdf',
+                labelText: 'Command',
                 border: OutlineInputBorder(),
               ),
-            ),
-          ] else if (_intent == ManualFileCommandIntent.move) ...[
-            _pathField(
-              controller: _source,
-              label: 'Source paths',
-              hint: 'reports/final.pdf\nreports/notes.txt',
-              maxLines: 5,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              key: const ValueKey('manual-file-command-destination'),
-              controller: _destination,
-              enabled: !_submitting,
-              decoration: const InputDecoration(
-                labelText: 'Destination directory',
-                hintText: 'Archive or blank for managed-root top',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ] else if (_intent == ManualFileCommandIntent.trash) ...[
-            _pathField(
-              controller: _source,
-              label: 'Paths to trash',
-              hint: 'tmp/noise.log\nold/draft.txt',
-              maxLines: 5,
-            ),
-          ] else ...[
-            DropdownButtonFormField<ManualCreateKind>(
-              initialValue: _createKind,
-              decoration: const InputDecoration(
-                labelText: 'Create kind',
-                border: OutlineInputBorder(),
-              ),
-              items: ManualCreateKind.values
+              items: ManualFileCommandIntent.values
                   .map(
-                    (kind) =>
-                        DropdownMenuItem(value: kind, child: Text(kind.label)),
+                    (intent) => DropdownMenuItem(
+                      value: intent,
+                      child: Text(intent.label),
+                    ),
                   )
                   .toList(growable: false),
               onChanged: _submitting
                   ? null
-                  : (value) =>
-                        setState(() => _createKind = value ?? _createKind),
+                  : (value) => setState(() => _intent = value ?? _intent),
             ),
             const SizedBox(height: 12),
-            TextFormField(
-              key: const ValueKey('manual-file-command-create-path'),
-              controller: _createPath,
-              enabled: !_submitting,
-              decoration: const InputDecoration(
-                labelText: 'Relative path to create',
-                hintText: 'notes/today.md',
-                border: OutlineInputBorder(),
+            if (_intent == ManualFileCommandIntent.rename) ...[
+              _pathField(
+                controller: _source,
+                label: 'Source path',
+                hint: 'reports/old.pdf',
+                maxLines: 1,
               ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('manual-file-command-new-name'),
+                controller: _newName,
+                enabled: !_submitting,
+                decoration: const InputDecoration(
+                  labelText: 'New name',
+                  hintText: 'final.pdf',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ] else if (_intent == ManualFileCommandIntent.move) ...[
+              _pathField(
+                controller: _source,
+                label: 'Source paths',
+                hint: 'reports/final.pdf\nreports/notes.txt',
+                maxLines: 5,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('manual-file-command-destination'),
+                controller: _destination,
+                enabled: !_submitting,
+                decoration: const InputDecoration(
+                  labelText: 'Destination directory',
+                  hintText: 'Archive or blank for managed-root top',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ] else if (_intent == ManualFileCommandIntent.trash) ...[
+              _pathField(
+                controller: _source,
+                label: 'Paths to trash',
+                hint: 'tmp/noise.log\nold/draft.txt',
+                maxLines: 5,
+              ),
+            ] else ...[
+              DropdownButtonFormField<ManualCreateKind>(
+                initialValue: _createKind,
+                decoration: const InputDecoration(
+                  labelText: 'Create kind',
+                  border: OutlineInputBorder(),
+                ),
+                items: ManualCreateKind.values
+                    .map(
+                      (kind) => DropdownMenuItem(
+                        value: kind,
+                        child: Text(kind.label),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: _submitting
+                    ? null
+                    : (value) =>
+                          setState(() => _createKind = value ?? _createKind),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                key: const ValueKey('manual-file-command-create-path'),
+                controller: _createPath,
+                enabled: !_submitting,
+                decoration: const InputDecoration(
+                  labelText: 'Relative path to create',
+                  hintText: 'notes/today.md',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              key: const ValueKey('manual-file-command-submit'),
+              onPressed: _submitting || !hasRootId ? null : _submit,
+              icon: _submitting
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CheeseLoadingIndicator(size: 18),
+                    )
+                  : const Icon(Icons.pending_actions_outlined),
+              label: const Text('Request proposal'),
             ),
           ],
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            key: const ValueKey('manual-file-command-submit'),
-            onPressed: _submitting || !hasRootId ? null : _submit,
-            icon: _submitting
-                ? const SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.pending_actions_outlined),
-            label: const Text('Request proposal'),
-          ),
-        ],
+        ),
       ),
     );
   }

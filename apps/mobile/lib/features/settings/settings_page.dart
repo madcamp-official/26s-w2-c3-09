@@ -2,14 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/notifications/push_notifications.dart';
+import '../../core/widgets/cheese_loading.dart';
 import '../auth/auth_controller.dart';
 import '../auth/connection_gate_controller.dart';
 
 const _ink = Color(0xFF3B2A24);
 const _paper = Color(0xFFFFFAF4);
 const _paperMuted = Color(0xFFF3E8DC);
-const _line = Color(0xFFB9A696);
 const _danger = Color(0xFFA83B35);
+const _pixelCanvas = Color(0xFFE7CFA9);
 
 class MouseKeeperSettingsPage extends ConsumerWidget {
   const MouseKeeperSettingsPage({super.key});
@@ -28,148 +29,160 @@ class MouseKeeperSettingsPage extends ConsumerWidget {
     final disconnectFailed = operation?.phase == DisconnectPhase.failed;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4E9DC),
+      backgroundColor: _pixelCanvas,
       appBar: AppBar(
+        backgroundColor: _ink,
+        foregroundColor: _paper,
         title: const Text(
           'MOUSEKEEPER 설정',
-          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -0.4),
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.4,
+          ),
         ),
       ),
-      body: gate.isLoading && data == null
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 32),
-              children: [
-                const _SettingsHeading(
-                  eyebrow: 'CONNECTION',
-                  title: '지금 연결된 공간',
-                  description: '모바일은 한 번에 한 대의 데스크탑과 연결됩니다.',
-                ),
-                const SizedBox(height: 14),
-                _PixelPanel(
-                  child: device == null
-                      ? const _EmptySettingsText('현재 연결된 데스크탑이 없습니다.')
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _SettingsInfoTile(
-                              icon: Icons.desktop_windows_outlined,
-                              title: _deviceName(device),
-                              subtitle: _presenceLabel(
-                                device['presence'] as String?,
-                              ),
-                              trailing: _PresenceDot(
-                                online: device['presence'] != 'OFFLINE',
-                              ),
-                            ),
-                            const Divider(height: 26),
-                            Text(
-                              '다른 PC를 연결하려면 먼저 현재 페어링을 끊어야 합니다.',
-                              style: Theme.of(context).textTheme.bodySmall
-                                  ?.copyWith(color: const Color(0xFF77675D)),
-                            ),
-                            const SizedBox(height: 12),
-                            OutlinedButton.icon(
-                              key: const ValueKey('disconnect-paired-desktop'),
-                              onPressed: isDisconnecting
-                                  ? null
-                                  : () => disconnectFailed
-                                        ? ref
-                                              .read(
-                                                connectionGateControllerProvider
-                                                    .notifier,
-                                              )
-                                              .retryDisconnect(
-                                                DisconnectKind.device,
-                                                deviceId!,
-                                              )
-                                        : _confirmDisconnect(
-                                            context,
-                                            ref,
-                                            deviceId!,
-                                            _deviceName(device),
-                                          ),
-                              icon: isDisconnecting
-                                  ? const SizedBox.square(
-                                      dimension: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : Icon(
-                                      disconnectFailed
-                                          ? Icons.refresh
-                                          : Icons.link_off,
-                                    ),
-                              label: Text(
-                                isDisconnecting
-                                    ? '페어링 끊는 중…'
-                                    : disconnectFailed
-                                    ? '페어링 끊기 다시 시도'
-                                    : '페어링 끊기',
-                              ),
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: _danger,
-                                side: const BorderSide(
-                                  color: _danger,
-                                  width: 1.5,
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 14,
-                                ),
-                              ),
-                            ),
-                            if (disconnectFailed) ...[
-                              const SizedBox(height: 8),
-                              Text(
-                                operation?.message ?? '연결 해제에 실패했습니다.',
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.bodySmall?.copyWith(color: _danger),
-                              ),
-                            ],
-                          ],
-                        ),
-                ),
-                const SizedBox(height: 24),
-                const _SettingsHeading(
-                  eyebrow: 'MANAGED FOLDERS',
-                  title: '연결된 관리 폴더',
-                  description: 'PC에서 등록한 폴더만 MouseKeeper가 안전하게 관리합니다.',
-                ),
-                const SizedBox(height: 14),
-                _PixelPanel(
-                  child: rooms.isEmpty
-                      ? const _EmptySettingsText('PC에서 관리 폴더를 등록하면 여기에 표시됩니다.')
-                      : Column(
-                          children: [
-                            for (
-                              var index = 0;
-                              index < rooms.length;
-                              index++
-                            ) ...[
-                              _SettingsInfoTile(
-                                icon: Icons.folder_outlined,
-                                title:
-                                    rooms[index]['name'] as String? ?? '관리 폴더',
-                                subtitle: _roomSubtitle(rooms[index]),
-                              ),
-                              if (index != rooms.length - 1)
-                                const Divider(height: 20),
-                            ],
-                          ],
-                        ),
-                ),
-                const SizedBox(height: 24),
-                _PixelPanel(
-                  child: TextButton.icon(
-                    onPressed: () => _signOut(context, ref),
-                    icon: const Icon(Icons.logout),
-                    label: const Text('로그아웃'),
+      body: CheeseLoadingOverlay(
+        loading: isDisconnecting,
+        message: '데스크탑 연결을 해제하는 중입니다',
+        child: gate.isLoading && data == null
+            ? const CheeseLoadingView(message: '연결 정보를 확인하는 중입니다')
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(18, 12, 18, 32),
+                children: [
+                  const _SettingsHeading(
+                    eyebrow: 'CONNECTION',
+                    title: '지금 연결된 공간',
+                    description: '모바일은 한 번에 한 대의 데스크탑과 연결됩니다.',
                   ),
-                ),
-              ],
-            ),
+                  const SizedBox(height: 14),
+                  _PixelPanel(
+                    child: device == null
+                        ? const _EmptySettingsText('현재 연결된 데스크탑이 없습니다.')
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _SettingsInfoTile(
+                                icon: Icons.desktop_windows_outlined,
+                                title: '연결된 데스크탑',
+                                subtitle:
+                                    '이름: ${_deviceName(device)}\n'
+                                    '${_presenceLabel(device['presence'] as String?)}',
+                                trailing: _PresenceDot(
+                                  online: device['presence'] != 'OFFLINE',
+                                ),
+                              ),
+                              const Divider(height: 26),
+                              Text(
+                                '다른 PC를 연결하려면 먼저 현재 페어링을 끊어야 합니다.',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(color: const Color(0xFF77675D)),
+                              ),
+                              const SizedBox(height: 12),
+                              OutlinedButton.icon(
+                                key: const ValueKey(
+                                  'disconnect-paired-desktop',
+                                ),
+                                onPressed: isDisconnecting
+                                    ? null
+                                    : () => disconnectFailed
+                                          ? ref
+                                                .read(
+                                                  connectionGateControllerProvider
+                                                      .notifier,
+                                                )
+                                                .retryDisconnect(
+                                                  DisconnectKind.device,
+                                                  deviceId!,
+                                                )
+                                          : _confirmDisconnect(
+                                              context,
+                                              ref,
+                                              deviceId!,
+                                              _deviceName(device),
+                                            ),
+                                icon: isDisconnecting
+                                    ? const SizedBox.square(
+                                        dimension: 18,
+                                        child: CheeseLoadingIndicator(size: 18),
+                                      )
+                                    : Icon(
+                                        disconnectFailed
+                                            ? Icons.refresh
+                                            : Icons.link_off,
+                                      ),
+                                label: Text(
+                                  isDisconnecting
+                                      ? '페어링 끊는 중…'
+                                      : disconnectFailed
+                                      ? '페어링 끊기 다시 시도'
+                                      : '페어링 끊기',
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: _danger,
+                                  side: const BorderSide(
+                                    color: _danger,
+                                    width: 1.5,
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 14,
+                                  ),
+                                ),
+                              ),
+                              if (disconnectFailed) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  operation?.message ?? '연결 해제에 실패했습니다.',
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(color: _danger),
+                                ),
+                              ],
+                            ],
+                          ),
+                  ),
+                  const SizedBox(height: 24),
+                  const _SettingsHeading(
+                    eyebrow: 'MANAGED FOLDERS',
+                    title: '연결된 관리 폴더',
+                    description: 'PC에서 등록한 폴더만 MouseKeeper가 안전하게 관리합니다.',
+                  ),
+                  const SizedBox(height: 14),
+                  _PixelPanel(
+                    child: rooms.isEmpty
+                        ? const _EmptySettingsText(
+                            'PC에서 관리 폴더를 등록하면 여기에 표시됩니다.',
+                          )
+                        : Column(
+                            children: [
+                              for (
+                                var index = 0;
+                                index < rooms.length;
+                                index++
+                              ) ...[
+                                _SettingsInfoTile(
+                                  icon: Icons.folder_outlined,
+                                  title:
+                                      rooms[index]['name'] as String? ??
+                                      '관리 폴더',
+                                  subtitle: _roomSubtitle(rooms[index]),
+                                ),
+                                if (index != rooms.length - 1)
+                                  const Divider(height: 20),
+                              ],
+                            ],
+                          ),
+                  ),
+                  const SizedBox(height: 24),
+                  _PixelPanel(
+                    child: TextButton.icon(
+                      onPressed: () => _signOut(context, ref),
+                      icon: const Icon(Icons.logout),
+                      label: const Text('로그아웃'),
+                    ),
+                  ),
+                ],
+              ),
+      ),
     );
   }
 
@@ -289,8 +302,8 @@ class _PixelPanel extends StatelessWidget {
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
       color: _paper,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: _line, width: 1.5),
+      borderRadius: BorderRadius.zero,
+      border: Border.all(color: _ink, width: 2),
       boxShadow: const [
         BoxShadow(color: Color(0x443B2A24), offset: Offset(4, 4)),
       ],
@@ -318,8 +331,8 @@ class _SettingsInfoTile extends StatelessWidget {
       DecoratedBox(
         decoration: BoxDecoration(
           color: _paperMuted,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _line),
+          borderRadius: BorderRadius.zero,
+          border: Border.all(color: _ink, width: 2),
         ),
         child: Padding(
           padding: const EdgeInsets.all(9),

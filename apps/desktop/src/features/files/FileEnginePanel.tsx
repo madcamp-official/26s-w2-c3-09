@@ -359,6 +359,7 @@ export function FileEnginePanel({
       const selected = await selectManagedRootDirectory();
       if (selected) {
         setPathInput(selected);
+        await registerRoot(selected);
       }
     } catch (caught) {
       setError(errorMessage(caught));
@@ -420,12 +421,12 @@ export function FileEnginePanel({
     }
   }
 
-  async function registerRoot() {
+  async function registerRoot(path = pathInput.trim()) {
     setError(null);
     setStatus("폴더 등록 중");
     let managed: ManagedRoot;
     try {
-      managed = await registerManagedRoot(pathInput.trim());
+      managed = await registerManagedRoot(path);
       const storedRoots = await listManagedRoots();
       setRoots(storedRoots);
       selectRoot(managed.root_id);
@@ -437,7 +438,13 @@ export function FileEnginePanel({
     const storedRoots = await listManagedRoots();
     setRoots(storedRoots);
     setRoomSyncStates(bindingStates(storedRoots));
-    setStatus("폴더 등록 완료 · 휴대폰과 동기화하세요!");
+    setStatus("폴더 등록 완료 · 휴대폰 동기화 중");
+    try {
+      await syncRootToMobile(managed, true);
+    } catch {
+      // syncRootToMobile exposes the explicit retryable error while preserving
+      // the successfully registered local safety boundary.
+    }
   }
 
   async function syncRootToMobile(root: ManagedRoot, announce: boolean) {
@@ -1159,9 +1166,9 @@ export function FileEnginePanel({
             placeholder={demoRootHint}
           />
           <button type="button" onClick={browseForRoot}>
-            폴더 찾기
+            폴더 선택 및 등록
           </button>
-          <button type="button" onClick={registerRoot} disabled={!pathInput.trim()}>
+          <button type="button" onClick={() => void registerRoot()} disabled={!pathInput.trim()}>
             등록
           </button>
         </div>

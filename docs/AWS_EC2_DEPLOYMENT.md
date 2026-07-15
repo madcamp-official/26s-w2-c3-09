@@ -20,7 +20,7 @@ Resolve-DnsName mousekeeper.madcamp-kaist.org -Server 8.8.8.8
 - PostgreSQL과 Valkey/Redis는 인터넷에 공개하지 않는다.
 - S3 bucket은 private 및 Block Public Access 상태를 유지한다.
 - EC2는 장기 Access Key 대신 IAM instance role로 S3에 접근한다.
-- P0 동안 `SMART_CACHE_ENABLED=false`를 유지한다.
+- Object storage와 IAM role 검증 뒤 `SMART_CACHE_ENABLED=true`로 운영하며, 이 값은 장애 대응용 kill switch로만 내린다.
 
 ## 1. EC2 준비
 

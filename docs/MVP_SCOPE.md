@@ -17,14 +17,14 @@
 
 ## 기능 플래그 뒤의 P1
 
-스마트 캐시는 `SMART_CACHE_ENABLED=false`가 기본이다. 사용자가 room별로 opt-in한 경우에만 후보 metadata를 받고, 서버가 `AVAILABLE + RESERVED` quota를 잠근 뒤 승인한 target만 업로드할 수 있다. 캐시 가능 여부와 원본 최신성은 별도 상태로 표시한다.
+스마트 캐시는 object storage가 구성된 운영 환경에서 자동 활성화된다. 서버가 room별 기본 정책을 자동 생성하고, `AVAILABLE + RESERVED` quota를 잠근 뒤 승인한 target만 업로드할 수 있다. 캐시 가능 여부와 원본 최신성은 별도 상태로 표시한다. `SMART_CACHE_ENABLED`는 장애 대응용 kill switch다.
 
 ## 의도적으로 하지 않는 것
 
 - 모바일 원격 영구 삭제, 승인 없는 파일 변경, 기존 파일 덮어쓰기
 - 서버 전체 파일 인덱스·절대 경로 수집
 - P0 transfer object의 장기 보관 또는 로컬 디스크 fallback
-- opt-in 없는 폴더 전체 동기화
+- 관리 폴더 전체 동기화
 - 외부 provider가 없을 때의 가짜 로그인·AI 답변·signed URL·성공 응답
 
 ## 외부 설정 경계

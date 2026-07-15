@@ -51,19 +51,18 @@ pub fn show_overlay_window(
     app: &tauri::AppHandle,
     runtime: &OverlayRuntime,
 ) -> Result<OverlayStatus, String> {
-    let house = match app.get_webview_window(HOUSE_OVERLAY_WINDOW_LABEL) {
-        Some(window) => window,
-        None => build_house_overlay_window(app)?,
-    };
-    window_show_without_focus(&house, "house overlay")?;
-
     let window = match app.get_webview_window(OVERLAY_WINDOW_LABEL) {
         Some(window) => window,
-        None => build_overlay_window(app)?,
+        None => build_overlay_window(app)
+            .map_err(|error| runtime.mark_not_ready(error).to_string())?,
     };
     window
         .show()
-        .map_err(|error| format!("WINDOW_MISSING: cannot show overlay: {error}"))?;
+        .map_err(|error| {
+            runtime
+                .mark_not_ready(format!("cannot show overlay: {error}"))
+                .to_string()
+    })?;
     let _ = window.set_focus();
     match app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
         Some(chat_window) => {
@@ -75,7 +74,24 @@ pub fn show_overlay_window(
             }
         }
     }
-    runtime.mark_visible().map_err(|error| error.to_string())
+    let status = runtime.mark_visible().map_err(|error| error.to_string())?;
+
+    // The house/quick-view surface is secondary. It should never prevent the mouse character from
+    // appearing, especially on startup or immediately after first pairing.
+    match app
+        .get_webview_window(HOUSE_OVERLAY_WINDOW_LABEL)
+        .map(Ok)
+        .unwrap_or_else(|| build_house_overlay_window(app))
+    {
+        Ok(house) => {
+            if let Err(error) = window_show_without_focus(&house, "house overlay") {
+                eprintln!("failed to show secondary house overlay: {error}");
+            }
+        }
+        Err(error) => eprintln!("failed to create secondary house overlay: {error}"),
+    }
+
+    Ok(status)
 }
 
 #[cfg(not(feature = "tauri-commands"))]

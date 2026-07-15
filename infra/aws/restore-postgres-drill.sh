@@ -13,6 +13,26 @@ if [[ "$#" -ne 1 ]]; then
   echo 'Usage: restore-postgres-drill.sh /var/backups/mousekeeper/<backup>.dump' >&2
   exit 1
 fi
+if [[ ! -r "${ENV_FILE}" ]]; then
+  echo 'UNCONFIGURED: /etc/mousekeeper/infra.env' >&2
+  exit 1
+fi
+
+set -a
+# shellcheck source=/dev/null
+source "${ENV_FILE}"
+set +a
+for required_variable in POSTGRES_USER POSTGRES_DB; do
+  if [[ -z "${!required_variable:-}" ]]; then
+    echo "UNCONFIGURED: ${required_variable}" >&2
+    exit 1
+  fi
+done
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-mousekeeper-production}"
+if ! [[ "${COMPOSE_PROJECT_NAME}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+  echo 'UNCONFIGURED: COMPOSE_PROJECT_NAME' >&2
+  exit 1
+fi
 
 backup_path="$(realpath -e -- "$1")"
 case "${backup_path}" in
@@ -24,26 +44,28 @@ case "${backup_path}" in
 esac
 
 drill_database="mousekeeper_restore_drill_$(date -u +%Y%m%d%H%M%S)_$$"
-compose=(docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
+compose=(docker compose --project-name "${COMPOSE_PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}")
 cleanup() {
-  "${compose[@]}" exec -T postgres dropdb --username=mousekeeper \
+  "${compose[@]}" exec -T postgres dropdb --username="${POSTGRES_USER}" \
+    --maintenance-db="${POSTGRES_DB}" \
     --if-exists --force "${drill_database}" >/dev/null
 }
 trap cleanup EXIT
 
 "${compose[@]}" exec -T postgres pg_restore --list \
   <"${backup_path}" >/dev/null
-"${compose[@]}" exec -T postgres createdb --username=mousekeeper \
+"${compose[@]}" exec -T postgres createdb --username="${POSTGRES_USER}" \
+  --maintenance-db="${POSTGRES_DB}" \
   "${drill_database}"
 "${compose[@]}" exec -T postgres pg_restore \
-  --username=mousekeeper \
+  --username="${POSTGRES_USER}" \
   --dbname="${drill_database}" \
   --exit-on-error \
   --no-owner \
   --no-privileges <"${backup_path}" >/dev/null
 
 schema_ok="$("${compose[@]}" exec -T postgres psql \
-  --username=mousekeeper \
+  --username="${POSTGRES_USER}" \
   --dbname="${drill_database}" \
   --tuples-only \
   --no-align \

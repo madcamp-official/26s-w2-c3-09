@@ -3,6 +3,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 import '../../core/network/api_client.dart';
 import '../../core/sync/mutation_queue.dart';
+import '../../core/widgets/cheese_loading.dart';
+
+const _pixelInk = Color(0xFF30251F);
+const _pixelPaper = Color(0xFFFFF4D6);
+const _pixelCanvas = Color(0xFFE7CFA9);
+final _pixelCardShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.zero,
+  side: const BorderSide(color: _pixelInk, width: 2),
+);
 
 class ProposalPage extends ConsumerStatefulWidget {
   const ProposalPage({
@@ -67,62 +76,71 @@ class _ProposalPageState extends ConsumerState<ProposalPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('제안 검토')),
-    body: FutureBuilder<Map<String, dynamic>>(
-      future: _proposal,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(
-            child: Text(
-              '제안을 불러오지 못했습니다.\n${snapshot.error}',
-              textAlign: TextAlign.center,
-            ),
-          );
-        }
-        final items = snapshot.data!['items'] as List<dynamic>? ?? const [];
-        final summary = Map<String, dynamic>.from(
-          snapshot.data!['summary'] as Map? ?? const {},
-        );
-        return Column(
-          children: [
-            if (ProposalSummaryCard.hasReadmePreview(summary))
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                child: ProposalSummaryCard(summary: summary),
+    backgroundColor: _pixelCanvas,
+    appBar: AppBar(
+      backgroundColor: _pixelInk,
+      foregroundColor: _pixelPaper,
+      title: const Text('제안 검토', style: TextStyle(fontWeight: FontWeight.w900)),
+    ),
+    body: CheeseLoadingOverlay(
+      loading: _submitting,
+      message: '선택한 결정을 저장하는 중입니다',
+      child: FutureBuilder<Map<String, dynamic>>(
+        future: _proposal,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const CheeseLoadingView(message: '제안을 불러오는 중입니다');
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                '제안을 불러오지 못했습니다.\n${snapshot.error}',
+                textAlign: TextAlign.center,
               ),
-            Expanded(child: ProposalItemsList(items: items)),
-            SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _submitting
-                            ? null
-                            : () => _decide('REJECT', items),
-                        child: const Text('거절'),
+            );
+          }
+          final items = snapshot.data!['items'] as List<dynamic>? ?? const [];
+          final summary = Map<String, dynamic>.from(
+            snapshot.data!['summary'] as Map? ?? const {},
+          );
+          return Column(
+            children: [
+              if (ProposalSummaryCard.hasReadmePreview(summary))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: ProposalSummaryCard(summary: summary),
+                ),
+              Expanded(child: ProposalItemsList(items: items)),
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _submitting
+                              ? null
+                              : () => _decide('REJECT', items),
+                          child: const Text('거절'),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: _submitting || items.isEmpty
-                            ? null
-                            : () => _decide('APPROVE', items),
-                        child: const Text('전체 승인'),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: _submitting || items.isEmpty
+                              ? null
+                              : () => _decide('APPROVE', items),
+                          child: const Text('전체 승인'),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
-        );
-      },
+            ],
+          );
+        },
+      ),
     ),
   );
 }
@@ -139,7 +157,10 @@ class ProposalSummaryCard extends StatelessWidget {
     final draft = summary['readmeDraft'] as String?;
     final diff = summary['readmeDiff'] as String?;
     return Card(
-      color: const Color(0xFFF5F5F5),
+      color: _pixelPaper,
+      shape: _pixelCardShape,
+      elevation: 5,
+      shadowColor: _pixelInk,
       child: ExpansionTile(
         initiallyExpanded: true,
         leading: const Icon(Icons.difference_outlined),
@@ -191,6 +212,10 @@ class ProposalItemsList extends StatelessWidget {
         final item = Map<String, dynamic>.from(items[index] as Map);
         final conflict = item['conflictState'] as String? ?? 'NONE';
         return Card(
+          color: _pixelPaper,
+          shape: _pixelCardShape,
+          elevation: 5,
+          shadowColor: _pixelInk,
           child: ListTile(
             title: Text(item['actionType'] as String? ?? '작업'),
             subtitle: Text(

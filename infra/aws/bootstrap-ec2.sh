@@ -6,6 +6,7 @@ REPOSITORY_URL="${MOUSEKEEPER_REPOSITORY_URL:-https://github.com/madcamp-officia
 BRANCH="${MOUSEKEEPER_BRANCH:-B}"
 APP_DIR=/opt/mousekeeper
 CONFIG_DIR=/etc/mousekeeper
+STATE_DIR=/var/lib/mousekeeper
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 NODE_VERSION=v24.18.0
 
@@ -48,7 +49,11 @@ corepack prepare pnpm@11.11.0 --activate
 
 systemctl enable --now docker nginx
 if ! id mousekeeper >/dev/null 2>&1; then
-  useradd --system --home-dir "${APP_DIR}" --shell /usr/sbin/nologin mousekeeper
+  useradd --system --home-dir "${STATE_DIR}" --shell /usr/sbin/nologin mousekeeper
+fi
+install -d -o mousekeeper -g mousekeeper -m 0750 "${STATE_DIR}"
+if [[ "$(getent passwd mousekeeper | cut -d: -f6)" != "${STATE_DIR}" ]]; then
+  usermod --home "${STATE_DIR}" mousekeeper
 fi
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then
@@ -78,6 +83,7 @@ if [[ ! -f "${CONFIG_DIR}/infra.env" || ! -f "${CONFIG_DIR}/server.env" ]]; then
   jwt_secret="$(openssl rand -hex 32)"
   umask 0027
   cat >"${CONFIG_DIR}/infra.env" <<EOF
+COMPOSE_PROJECT_NAME=mousekeeper-production
 POSTGRES_DB=mousekeeper
 POSTGRES_USER=mousekeeper
 POSTGRES_PASSWORD=${postgres_password}
@@ -96,7 +102,7 @@ FCM_ENABLED=false
 SENTRY_DSN=
 FILE_TRANSFER_MAX_BYTES=104857600
 FILE_TRANSFER_TTL_SECONDS=600
-SMART_CACHE_ENABLED=false
+SMART_CACHE_ENABLED=true
 SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES=524288000
 SMART_CACHE_DEFAULT_MAX_FILE_BYTES=52428800
 OBJECT_STORAGE_ENDPOINT=
@@ -109,9 +115,26 @@ EOF
   chmod 0640 "${CONFIG_DIR}/infra.env" "${CONFIG_DIR}/server.env"
 fi
 
-docker compose --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml" up -d
+set -a
+# shellcheck source=/dev/null
+source "${CONFIG_DIR}/infra.env"
+set +a
+for required_variable in POSTGRES_USER POSTGRES_DB; do
+  if [[ -z "${!required_variable:-}" ]]; then
+    echo "UNCONFIGURED: ${required_variable}" >&2
+    exit 1
+  fi
+done
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-mousekeeper-production}"
+if ! [[ "${COMPOSE_PROJECT_NAME}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+  echo 'UNCONFIGURED: COMPOSE_PROJECT_NAME' >&2
+  exit 1
+fi
+compose=(docker compose --project-name "${COMPOSE_PROJECT_NAME}" --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml")
+
+"${compose[@]}" up -d
 for _ in {1..30}; do
-  if docker compose --env-file "${CONFIG_DIR}/infra.env" -f "${SCRIPT_DIR}/compose.yaml" exec -T postgres pg_isready -U mousekeeper -d mousekeeper >/dev/null 2>&1; then
+  if "${compose[@]}" exec -T postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" >/dev/null 2>&1; then
     break
   fi
   sleep 2

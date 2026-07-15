@@ -4,6 +4,8 @@ import 'features/auth/auth_controller.dart';
 import 'features/auth/connection_gate_page.dart';
 import 'features/auth/login_page.dart';
 import 'core/sync/realtime_controller.dart';
+import 'core/theme/pixel_theme.dart';
+import 'core/widgets/cheese_loading.dart';
 
 final mousekeeperScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
@@ -32,7 +34,7 @@ class MouseKeeperApp extends ConsumerWidget {
             data: (user) =>
                 user == null ? const LoginPage() : const ConnectionGatePage(),
             loading: () => const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
+              body: CheeseLoadingView(message: '로그인 상태를 확인하는 중입니다'),
             ),
             error: (error, _) =>
                 Scaffold(body: Center(child: Text('인증 상태 오류: $error'))),
@@ -41,52 +43,7 @@ class MouseKeeperApp extends ConsumerWidget {
       title: 'MOUSEKEEPER',
       scaffoldMessengerKey: mousekeeperScaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF76543A),
-          brightness: Brightness.light,
-          surface: const Color(0xFFFFFAF4),
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF4E9DC),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFFF4E9DC),
-          foregroundColor: Color(0xFF3B2A24),
-          surfaceTintColor: Colors.transparent,
-          elevation: 0,
-        ),
-        cardTheme: CardThemeData(
-          color: const Color(0xFFFFFAF4),
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: const BorderSide(color: Color(0xFFB9A696)),
-          ),
-        ),
-        dialogTheme: DialogThemeData(
-          backgroundColor: const Color(0xFFFFFAF4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: const BorderSide(color: Color(0xFFB9A696)),
-          ),
-        ),
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            textStyle: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ),
-        outlinedButtonTheme: OutlinedButtonThemeData(
-          style: OutlinedButton.styleFrom(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            textStyle: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ),
-        useMaterial3: true,
-      ),
+      theme: PixelTheme.light,
       home: guardedRoot(),
       // Every externally supplied named route crosses the same authoritative
       // device gate before a nested main navigator can be created.

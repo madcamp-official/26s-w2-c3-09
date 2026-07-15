@@ -180,7 +180,7 @@ Recommended additive enums:
    - Never expose absolute local paths to server/mobile.
 
 3. Smart cache candidate/upload flow.
-   - Use opt-in policy.
+   - Use an automatically provisioned, quota-bound policy.
    - Validate reservation before upload.
    - Recheck source before completion.
    - Report completion through outbox for retry.

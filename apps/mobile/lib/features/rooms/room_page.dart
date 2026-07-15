@@ -6,11 +6,63 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/network/api_client.dart';
 import '../../core/sync/realtime_controller.dart';
+import '../../core/widgets/cheese_loading.dart';
 import '../../storage/display_cache.dart';
 import '../auth/connection_gate_controller.dart';
 import '../chat/chat_page.dart';
 import '../files/files_page.dart';
 import '../proposals/proposal_page.dart';
+
+const _pixelInk = Color(0xFF3A2A1F);
+const _pixelPaper = Color(0xFFFFE9B8);
+const _pixelGreen = Color(0xFF597A45);
+const _pixelRust = Color(0xFFB85C38);
+
+class _PixelCard extends StatelessWidget {
+  const _PixelCard({required this.child, this.color});
+  final Widget child;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: color ?? _pixelPaper,
+    elevation: 0,
+    margin: const EdgeInsets.only(right: 5, bottom: 5),
+    shape: const BeveledRectangleBorder(
+      side: BorderSide(color: _pixelInk, width: 2),
+      borderRadius: BorderRadius.all(Radius.circular(3)),
+    ),
+    child: DecoratedBox(
+      decoration: const BoxDecoration(
+        boxShadow: [BoxShadow(color: _pixelInk, offset: Offset(5, 5))],
+      ),
+      child: child,
+    ),
+  );
+}
+
+class _PixelMeter extends StatelessWidget {
+  const _PixelMeter({required this.value, required this.color});
+  final double value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: List.generate(10, (index) {
+      final filled = index < (value.clamp(0, 1) * 10).round();
+      return Expanded(
+        child: Container(
+          height: 14,
+          margin: EdgeInsets.only(right: index == 9 ? 0 : 2),
+          decoration: BoxDecoration(
+            color: filled ? color : const Color(0xFFD2B982),
+            border: Border.all(color: _pixelInk),
+          ),
+        ),
+      );
+    }),
+  );
+}
 
 class RoomContent {
   const RoomContent({
@@ -488,7 +540,11 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         .operation(DisconnectKind.room, roomId);
     final roomName = widget.room['name'] as String? ?? '관리 폴더';
     return Scaffold(
+      backgroundColor: const Color(0xFFD8C58F),
       appBar: AppBar(
+        backgroundColor: _pixelGreen,
+        foregroundColor: const Color(0xFFFFF4D1),
+        shape: const Border(bottom: BorderSide(color: _pixelInk, width: 3)),
         title: Text(roomName),
         actions: [
           IconButton(
@@ -518,118 +574,145 @@ class _RoomPageState extends ConsumerState<RoomPage> {
             icon: disconnect?.phase == DisconnectPhase.disconnecting
                 ? const SizedBox.square(
                     dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CheeseLoadingIndicator(size: 20),
                   )
                 : const Icon(Icons.link_off),
           ),
         ],
       ),
-      body: FutureBuilder<RoomContent>(
-        future: _content,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snapshot.hasError) {
-            return Center(
-              child: Text(
-                '관리 폴더 정보를 불러오지 못했습니다.\n${snapshot.error}',
-                textAlign: TextAlign.center,
+      body: CheeseLoadingOverlay(
+        loading: disconnect?.phase == DisconnectPhase.disconnecting,
+        message: '관리 폴더 연결을 해제하는 중입니다',
+        child: FutureBuilder<RoomContent>(
+          future: _content,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const CheeseLoadingView(message: '관리 폴더 정보를 불러오는 중입니다');
+            }
+            if (snapshot.hasError) {
+              return Center(
+                child: Text(
+                  '관리 폴더 정보를 불러오지 못했습니다.\n${snapshot.error}',
+                  textAlign: TextAlign.center,
+                ),
+              );
+            }
+            final content = snapshot.data!;
+            final history = _buildHistoryEntries(content, roomId);
+            final analyzing = content.commands.any(
+              (command) =>
+                  ['DELIVERED', 'ANALYZING'].contains(command['status']),
+            );
+            return CheeseLoadingOverlay(
+              loading: analyzing,
+              message: '데스크탑이 관리 폴더를 분석하는 중입니다',
+              child: RefreshIndicator(
+                onRefresh: () async {
+                  setState(_reload);
+                  await _content;
+                },
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                  children: [
+                    if (disconnect != null) ...[
+                      _RoomDisconnectCard(
+                        operation: disconnect,
+                        onRetry: () => ref
+                            .read(connectionGateControllerProvider.notifier)
+                            .retryDisconnect(DisconnectKind.room, roomId),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (content.isOffline) ...[
+                      const _PixelCard(
+                        color: Color(0xFFFFF3E0),
+                        child: ListTile(
+                          leading: Icon(Icons.cloud_off_outlined),
+                          title: Text('오프라인 상태'),
+                          subtitle: Text('마지막으로 동기화된 결과를 표시합니다.'),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    if (analyzing) ...[
+                      const _PixelCard(
+                        child: ListTile(
+                          leading: SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CheeseLoadingIndicator(size: 24),
+                          ),
+                          title: Text('PC가 관리 폴더를 분석 중입니다'),
+                          subtitle: Text('새 결과는 히스토리에 자동으로 반영됩니다.'),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    CleanlinessCard(snapshot: content.snapshot),
+                    const SizedBox(height: 16),
+                    _PixelCard(
+                      child: ListTile(
+                        leading: const Icon(Icons.chat_bubble_outline),
+                        title: const Text('파일 정리는 대화로 요청하세요'),
+                        subtitle: const Text(
+                          '수동 규칙/커맨드 선택은 숨겼습니다. AI 대화에서 실제 가능한 작업만 초안으로 제안합니다.',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: disconnect == null
+                            ? () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ChatPage(roomId: roomId),
+                                ),
+                              )
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: const BoxDecoration(
+                        color: _pixelGreen,
+                        border: Border.fromBorderSide(
+                          BorderSide(color: _pixelInk, width: 2),
+                        ),
+                      ),
+                      child: Text(
+                        '히스토리',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: const Color(0xFFFFF4D1),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _HistoryTimeline(
+                      entries: history,
+                      emptyMessage: content.isOffline
+                          ? '활동 기록은 온라인 상태에서 갱신됩니다.'
+                          : '아직 기록된 활동이 없습니다.',
+                      onOpenProposal: disconnect == null
+                          ? (proposalId) async {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ProposalPage(
+                                    proposalId: proposalId,
+                                    roomId: roomId,
+                                  ),
+                                ),
+                              );
+                              if (mounted) setState(_reload);
+                            }
+                          : null,
+                    ),
+                  ],
+                ),
               ),
             );
-          }
-          final content = snapshot.data!;
-          final history = _buildHistoryEntries(content, roomId);
-          final analyzing = content.commands.any(
-            (command) => ['DELIVERED', 'ANALYZING'].contains(command['status']),
-          );
-          return RefreshIndicator(
-            onRefresh: () async {
-              setState(_reload);
-              await _content;
-            },
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-              children: [
-                if (disconnect != null) ...[
-                  _RoomDisconnectCard(
-                    operation: disconnect,
-                    onRetry: () => ref
-                        .read(connectionGateControllerProvider.notifier)
-                        .retryDisconnect(DisconnectKind.room, roomId),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (content.isOffline) ...[
-                  const Card(
-                    color: Color(0xFFFFF3E0),
-                    child: ListTile(
-                      leading: Icon(Icons.cloud_off_outlined),
-                      title: Text('오프라인 상태'),
-                      subtitle: Text('마지막으로 동기화된 결과를 표시합니다.'),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (analyzing) ...[
-                  const Card(
-                    child: ListTile(
-                      leading: SizedBox(
-                        width: 24,
-                        height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 3),
-                      ),
-                      title: Text('PC가 관리 폴더를 분석 중입니다'),
-                      subtitle: Text('새 결과는 히스토리에 자동으로 반영됩니다.'),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                CleanlinessCard(snapshot: content.snapshot),
-                const SizedBox(height: 16),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.chat_bubble_outline),
-                    title: const Text('파일 정리는 대화로 요청하세요'),
-                    subtitle: const Text(
-                      '수동 규칙/커맨드 선택은 숨겼습니다. AI 대화에서 실제 가능한 작업만 초안으로 제안합니다.',
-                    ),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: disconnect == null
-                        ? () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => ChatPage(roomId: roomId),
-                            ),
-                          )
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text('히스토리', style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                _HistoryTimeline(
-                  entries: history,
-                  emptyMessage: content.isOffline
-                      ? '활동 기록은 온라인 상태에서 갱신됩니다.'
-                      : '아직 기록된 활동이 없습니다.',
-                  onOpenProposal: disconnect == null
-                      ? (proposalId) async {
-                          await Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => ProposalPage(
-                                proposalId: proposalId,
-                                roomId: roomId,
-                              ),
-                            ),
-                          );
-                          if (mounted) setState(_reload);
-                        }
-                      : null,
-                ),
-              ],
-            ),
-          );
-        },
+          },
+        ),
       ),
     );
   }
@@ -776,12 +859,12 @@ class _HistoryTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (entries.isEmpty) {
-      return Card(child: ListTile(title: Text(emptyMessage)));
+      return _PixelCard(child: ListTile(title: Text(emptyMessage)));
     }
     return Column(
       children: [
         for (final entry in entries)
-          Card(
+          _PixelCard(
             child: ListTile(
               leading: Icon(entry.icon),
               title: Text(entry.title),
@@ -806,13 +889,13 @@ class _RoomDisconnectCard extends StatelessWidget {
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) => Card(
+  Widget build(BuildContext context) => _PixelCard(
     color: operation.phase == DisconnectPhase.failed
         ? Theme.of(context).colorScheme.errorContainer
         : null,
     child: ListTile(
       leading: operation.phase == DisconnectPhase.disconnecting
-          ? const CircularProgressIndicator()
+          ? const CheeseLoadingIndicator(size: 28)
           : const Icon(Icons.error_outline),
       title: Text(
         operation.phase == DisconnectPhase.disconnecting
@@ -861,7 +944,7 @@ class CleanlinessCard extends StatelessWidget {
     final score = snapshot?['score'] as int?;
     final metrics = snapshot?['metrics'];
     if (score == null) {
-      return const Card(
+      return const _PixelCard(
         child: ListTile(
           leading: Icon(Icons.auto_graph_outlined),
           title: Text('청결도 계산 전'),
@@ -874,7 +957,7 @@ class CleanlinessCard extends StatelessWidget {
       snapshot?['calculatedAt'],
     );
     if (cleanlinessFormulaMismatch(snapshot)) {
-      return Card(
+      return _PixelCard(
         color: Theme.of(context).colorScheme.errorContainer,
         child: ListTile(
           leading: const Icon(Icons.system_update_alt),
@@ -894,16 +977,16 @@ class CleanlinessCard extends StatelessWidget {
         .map(Map<String, dynamic>.from)
         .toList(growable: false);
     final color = score >= 80
-        ? Colors.green
+        ? _pixelGreen
         : score >= 50
-        ? Colors.orange
-        : Colors.red;
+        ? const Color(0xFFC58B32)
+        : _pixelRust;
     final grade = score >= 80
         ? '깔끔해요'
         : score >= 50
         ? '정리 필요'
         : '많은 정리 필요';
-    return Card(
+    return _PixelCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -911,22 +994,23 @@ class CleanlinessCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                SizedBox(
+                Container(
                   width: 68,
                   height: 68,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      CircularProgressIndicator(
-                        value: score / 100,
-                        strokeWidth: 7,
-                        color: color,
-                      ),
-                      Text(
-                        '$score',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: color,
+                    border: Border.all(color: _pixelInk, width: 3),
+                    boxShadow: const [
+                      BoxShadow(color: _pixelInk, offset: Offset(4, 4)),
                     ],
+                  ),
+                  child: Text(
+                    '$score',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: const Color(0xFFFFF4D1),
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -950,6 +1034,8 @@ class CleanlinessCard extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 14),
+            _PixelMeter(value: score / 100, color: color),
             if (deductions.isNotEmpty) ...[
               const Divider(height: 24),
               Text('감점 사유', style: Theme.of(context).textTheme.titleSmall),

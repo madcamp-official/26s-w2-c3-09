@@ -112,6 +112,10 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
     userId = user.id;
     deviceId = device.id;
     roomId = room.id;
+    await expect(service.getPolicy(userId, roomId)).resolves.toMatchObject({
+      roomId,
+      enabled: true,
+    });
     await service.updatePolicy(userId, roomId, {
       enabled: true,
       quotaBytes: 100,
@@ -264,11 +268,15 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
         excludedPatterns: [],
       }),
     ).rejects.toMatchObject({ response: { code: 'REJECTED_POLICY' } });
-    await service.updatePolicy(userId, roomId, {
-      enabled: false,
-      quotaBytes: 100,
-      maxFileBytes: 100,
-      excludedPatterns: [],
+    await expect(
+      service.updatePolicy(userId, roomId, {
+        enabled: false,
+        quotaBytes: 100,
+        maxFileBytes: 100,
+        excludedPatterns: [],
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'SMART_CACHE_POLICY_AUTOMATIC' },
     });
     expect(
       (
@@ -277,13 +285,13 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
           .from(cachedFiles)
           .where(eq(cachedFiles.id, disableTarget.id))
       )[0]!.availabilityStatus,
-    ).toBe('INVALIDATED');
+    ).toBe('AVAILABLE');
     expect(
       await connection.db
         .select()
         .from(cacheDeletionJobs)
         .where(eq(cacheDeletionJobs.cachedFileId, disableTarget.id)),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(
       (
         await connection.db
@@ -296,7 +304,7 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
             ),
           )
       )[0]!.status,
-    ).toBe('CANCELLED');
+    ).toBe('RESERVED');
     expect(
       await connection.db
         .select()
@@ -307,7 +315,7 @@ describeDatabase('SmartCacheService PostgreSQL quota integration', () => {
             higherScore.approved[0]!.reservationId,
           ),
         ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
 
     await service.updatePolicy(userId, roomId, {
       enabled: true,

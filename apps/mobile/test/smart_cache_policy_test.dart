@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,36 +11,31 @@ import 'package:mousekeeper/core/files/smart_cache_decryption.dart';
 import 'package:mousekeeper/features/files/smart_cache_page.dart';
 
 void main() {
-  test('opt-in policy input converts MB and preserves explicit exclusions', () {
-    expect(
-      parseSmartCachePolicyInput(
-        quotaMegabytes: '500',
-        maxFileMegabytes: '50',
-        excludedPatterns: 'private/**\n*.tmp\n',
-        pinnedPatterns: 'important/**\n',
-        enabled: true,
+  testWidgets('automatic cache exposes no manual settings or remove action', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          smartCacheStatusProvider.overrideWith(
+            (ref, roomId) async => const SmartCachePageContent(
+              cache: {
+                'files': [],
+                'pendingCommandWarning': false,
+                'desktopOnline': true,
+              },
+            ),
+          ),
+        ],
+        child: const MaterialApp(home: SmartCachePage(roomId: 'room-1')),
       ),
-      {
-        'enabled': true,
-        'quotaBytes': 500 * 1024 * 1024,
-        'maxFileBytes': 50 * 1024 * 1024,
-        'excludedPatterns': ['private/**', '*.tmp'],
-        'pinnedPatterns': ['important/**'],
-      },
     );
-  });
+    await tester.pumpAndSettle();
 
-  test('file limit cannot exceed the room quota', () {
-    expect(
-      () => parseSmartCachePolicyInput(
-        quotaMegabytes: '10',
-        maxFileMegabytes: '20',
-        excludedPatterns: '',
-        pinnedPatterns: '',
-        enabled: true,
-      ),
-      throwsFormatException,
-    );
+    expect(find.text('스마트 캐시 사용'), findsNothing);
+    expect(find.text('용량·제외 범위 설정'), findsNothing);
+    expect(find.text('캐시 제거'), findsNothing);
+    expect(find.text('오프라인 파일'), findsOneWidget);
   });
 
   test(
@@ -60,35 +56,25 @@ void main() {
   );
 
   test(
-    'smart-cache read providers request policy and file projections',
+    'smart-cache read provider requests only the automatic file projection',
     () async {
       final paths = <String>[];
       final container = ProviderContainer(
         overrides: [
           smartCacheGetProvider.overrideWithValue((path) async {
             paths.add(path);
-            if (path.endsWith('/smart-cache-policy')) {
-              return {'enabled': true};
-            }
             return {'files': const []};
           }),
         ],
       );
       addTearDown(container.dispose);
 
-      final policy = await container.read(
-        smartCachePolicyProvider('room-1').future,
-      );
       final files = await container.read(
         smartCacheFilesProvider('room-1').future,
       );
 
-      expect(policy, {'enabled': true});
       expect(files, {'files': const []});
-      expect(paths, [
-        '/v1/rooms/room-1/smart-cache-policy',
-        '/v1/rooms/room-1/smart-cache/files',
-      ]);
+      expect(paths, ['/v1/rooms/room-1/smart-cache/files']);
     },
   );
 

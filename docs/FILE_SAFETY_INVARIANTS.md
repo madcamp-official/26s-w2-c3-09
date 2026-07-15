@@ -24,8 +24,8 @@
 - signed URL은 session/reservation 남은 수명보다 오래 발급하지 않는다.
 - 서버는 object HEAD의 크기를 확인하고, 모바일은 SHA-256이 일치한 뒤에만 완료 파일로 원자적으로 전환한다.
 - 완료 ACK·취소·실패·만료는 durable deletion job으로 이어지며 worker 재시작 뒤에도 복구된다.
-- P1은 명시적 opt-in과 quota reservation 뒤에만 업로드한다. `AVAILABLE`과 freshness를 별도로 저장하고 오프라인에서는 `UNVERIFIED_OFFLINE`을 숨기지 않는다.
-- cache disable, device revoke, 오래된 버전 교체는 object 삭제 tombstone을 남긴다.
+- P1은 자동 활성화되더라도 quota reservation 뒤에만 업로드한다. `AVAILABLE`과 freshness를 별도로 저장하고 오프라인에서는 `UNVERIFIED_OFFLINE`을 숨기지 않는다.
+- room 삭제, device revoke, 오래된 버전 교체는 object 삭제 tombstone을 남긴다.
 
 ## 실패 처리
 
