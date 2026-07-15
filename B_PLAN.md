@@ -9,7 +9,7 @@
 - Android ↔ Server ↔ Desktop P0 핵심 흐름을 실제 환경에서 시연한다.
 - Firebase 인증·FCM, private object storage, AWS EC2 배포를 실제 설정으로 검증한다.
 - P0 파일 탐색·다운로드·checksum·TTL 삭제를 완료한다.
-- P1 스마트 캐시의 opt-in·quota·암호화·freshness·삭제 보장을 완료한다.
+- P1 스마트 캐시의 자동 활성화·quota·암호화·freshness·삭제 보장을 완료한다.
 - signed Android AAB와 반복 가능한 E2E·발표 문서를 완성한다.
 - fake provider, dummy data, 성공을 가장하는 fallback을 추가하지 않는다.
 
@@ -256,12 +256,12 @@ Firebase
 
 ### 6단계 — P1 스마트 캐시 실제 object 흐름
 
-#### 6.1 Opt-in policy
+#### 6.1 Automatic policy
 
-- 사용자가 명시적 확인 checkbox를 선택해야 policy를 활성화한다.
-- 전체 폴더 동기화가 아니라 승인된 일부 원본이 저장됨을 설명한다.
-- room quota, 최대 파일 크기, 제외 pattern, 삭제 정책을 표시한다.
-- 기본값 `SMART_CACHE_ENABLED=false`를 유지한다.
+- 서버가 room별 기본 policy를 자동 생성하고 활성화한다.
+- 전체 폴더 동기화가 아니라 usage 후보 중 승인된 일부 원본만 저장한다.
+- room quota, 최대 파일 크기, 제외 pattern과 삭제 정책은 서버 정책으로 적용한다.
+- 운영에서는 `SMART_CACHE_ENABLED=true`를 사용하고 장애 대응 시에만 kill switch로 내린다.
 
 #### 6.2 후보와 quota
 
@@ -296,7 +296,7 @@ Firebase
 
 #### 완료 조건
 
-- opt-in 이후 서버가 승인한 파일만 암호화 업로드된다.
+- 자동 정책에서도 서버가 승인한 파일만 암호화 업로드된다.
 - PC offline에서 cache 다운로드가 가능하며 freshness가 정확히 표시된다.
 - disable 또는 revoke 뒤 관련 object가 실제 storage에서 삭제된다.
 
@@ -348,7 +348,7 @@ Firebase
 7. 사용자·room 간 권한 격리
 8. P0 파일 browse·download·checksum·ACK/TTL 삭제
 9. source change·size limit·checksum mismatch
-10. P1 opt-in·quota·reservation·암호화 upload
+10. P1 자동 policy·quota·reservation·암호화 upload
 11. P1 offline cache·`STALE`·`UNVERIFIED_OFFLINE`
 12. P1 disable·room 삭제·device revoke object 삭제
 
@@ -397,5 +397,5 @@ Firebase
 - 사용자/공간: 한 사용자, 한 room을 발표 기본값으로 사용하되 데이터 모델은 여러 room을 유지한다.
 - 파일: managed root 안의 20MB 이하 단일 파일
 - P0 필수: command 승인·실행·undo, offline queue, 온라인 파일 가져오기, checksum, TTL 삭제
-- P1 추가: 명시적 opt-in, quota reservation, 암호화 cache, freshness, revoke/disable 삭제
+- P1 추가: 자동 policy, quota reservation, 암호화 cache, freshness, revoke/room 삭제
 - P0 release candidate를 먼저 완료한 뒤 P1을 통합한다.

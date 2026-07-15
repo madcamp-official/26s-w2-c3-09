@@ -40,7 +40,7 @@ services:
       - key: FILE_TRANSFER_TTL_SECONDS
         value: "600"
       - key: SMART_CACHE_ENABLED
-        value: "false"
+        value: "true"
       - key: SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES
         value: "524288000"
       - key: SMART_CACHE_DEFAULT_MAX_FILE_BYTES

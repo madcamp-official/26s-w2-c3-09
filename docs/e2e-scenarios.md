@@ -145,11 +145,11 @@ Pass evidence:
 - Background refresh failure does not replace a usable cached screen with a
   full error page.
 
-## Scenario 6 — smart-cache opt-in lifecycle
+## Scenario 6 — automatic smart-cache lifecycle
 
-Goal: prove smart-cache remains explicit, encrypted, quota-bound, and stale-aware.
+Goal: prove automatic smart-cache remains encrypted, quota-bound, and stale-aware.
 
-1. Enable smart-cache for one room.
+1. Start with configured object storage and confirm the first room policy read automatically provisions an enabled policy.
 2. Produce local usage events and run desktop smart-cache candidate processing.
 3. Confirm server quota reservation approves only policy-compliant candidates.
 4. Confirm desktop encrypts before signed PUT.
@@ -158,11 +158,11 @@ Goal: prove smart-cache remains explicit, encrypted, quota-bound, and stale-awar
 6. Confirm mobile lists available cache metadata.
 7. Modify the source file on desktop and confirm `smart-cache.updated` marks the
    affected item stale without Home summary reload.
-8. Disable smart-cache and confirm object deletion jobs retry until complete.
+8. Remove the room and confirm object deletion jobs retry until complete.
 
 Pass evidence:
 
-- Feature remains opt-in.
+- Feature activates without a user-facing toggle and still obeys the server quota.
 - Mobile plaintext handoff verifies the encrypted object only after a real
   synced key is available; without key sync it remains
   `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`.

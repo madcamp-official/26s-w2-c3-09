@@ -747,7 +747,7 @@ export const smartCachePolicies = pgTable("smart_cache_policies", {
   roomId: uuid("room_id")
     .primaryKey()
     .references(() => rooms.id),
-  enabled: boolean("enabled").notNull().default(false),
+  enabled: boolean("enabled").notNull().default(true),
   quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull(),
   maxFileBytes: bigint("max_file_bytes", { mode: "number" }).notNull(),
   excludedPatterns: jsonb("excluded_patterns").notNull().default([]),

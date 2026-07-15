@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
@@ -73,6 +74,29 @@ export class SmartCacheService {
   }
   async getPolicy(userId: string, roomId: string) {
     await this.room(userId, roomId);
+    const env = loadEnvironment();
+    if (!env.SMART_CACHE_ENABLED) {
+      return this.defaultPolicy(roomId, false);
+    }
+    this.storage.assertConfigured();
+    return this.ensureAutomaticPolicy(roomId);
+  }
+
+  private defaultPolicy(roomId: string, enabled: boolean) {
+    const env = loadEnvironment();
+    return {
+      roomId,
+      enabled,
+      quotaBytes: env.SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES,
+      maxFileBytes: env.SMART_CACHE_DEFAULT_MAX_FILE_BYTES,
+      excludedPatterns: [],
+      pinnedPatterns: [],
+    };
+  }
+
+  private async ensureAutomaticPolicy(roomId: string) {
+    this.enabled();
+    this.storage.assertConfigured();
     const policy = (
       await this.db
         .select()
@@ -80,29 +104,39 @@ export class SmartCacheService {
         .where(eq(smartCachePolicies.roomId, roomId))
         .limit(1)
     )[0];
-    const env = loadEnvironment();
+    if (policy?.enabled) return policy;
+    if (policy) {
+      return (
+        await this.db
+          .update(smartCachePolicies)
+          .set({ enabled: true, updatedAt: new Date() })
+          .where(eq(smartCachePolicies.roomId, roomId))
+          .returning()
+      )[0];
+    }
     return (
-      policy ?? {
-        roomId,
-        enabled: false,
-        quotaBytes: env.SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES,
-        maxFileBytes: env.SMART_CACHE_DEFAULT_MAX_FILE_BYTES,
-        excludedPatterns: [],
-        pinnedPatterns: [],
-      }
-    );
+      await this.db
+        .insert(smartCachePolicies)
+        .values(this.defaultPolicy(roomId, true))
+        .onConflictDoUpdate({
+          target: smartCachePolicies.roomId,
+          set: { enabled: true, updatedAt: new Date() },
+        })
+        .returning()
+    )[0];
   }
   async updatePolicy(
     userId: string,
     roomId: string,
     body: z.input<typeof updateSmartCachePolicySchema>,
   ) {
-    const policyPatch = { ...body, pinnedPatterns: body.pinnedPatterns ?? [] };
     const room = await this.room(userId, roomId);
-    if (policyPatch.enabled) {
-      this.enabled();
-      this.storage.assertConfigured();
+    if (!body.enabled) {
+      throw new BadRequestException({ code: 'SMART_CACHE_POLICY_AUTOMATIC' });
     }
+    this.enabled();
+    this.storage.assertConfigured();
+    const policyPatch = { ...body, pinnedPatterns: body.pinnedPatterns ?? [] };
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${roomId}))`);
       await this.lockActiveRoom(tx, userId, room.desktopDeviceId, roomId);
@@ -147,52 +181,6 @@ export class SmartCacheService {
           })
           .returning()
       )[0];
-      if (!policyPatch.enabled) {
-        const files = await tx
-          .select()
-          .from(cachedFiles)
-          .where(
-            and(
-              eq(cachedFiles.roomId, roomId),
-              eq(cachedFiles.availabilityStatus, 'AVAILABLE'),
-            ),
-          );
-        for (const file of files) {
-          await tx
-            .update(cachedFiles)
-            .set({
-              availabilityStatus: 'INVALIDATED',
-              freshnessStatus: 'STALE',
-            })
-            .where(eq(cachedFiles.id, file.id));
-          await tx
-            .insert(cacheDeletionJobs)
-            .values({ cachedFileId: file.id, objectKey: file.objectKey })
-            .onConflictDoNothing();
-        }
-        const reservations = await tx
-          .select()
-          .from(cacheUploadReservations)
-          .where(
-            and(
-              eq(cacheUploadReservations.roomId, roomId),
-              eq(cacheUploadReservations.status, 'RESERVED'),
-            ),
-          );
-        for (const reservation of reservations) {
-          await tx
-            .update(cacheUploadReservations)
-            .set({ status: 'CANCELLED' })
-            .where(eq(cacheUploadReservations.id, reservation.id));
-          await tx
-            .insert(cacheReservationDeletionJobs)
-            .values({
-              reservationId: reservation.id,
-              objectKey: reservation.objectKey,
-            })
-            .onConflictDoNothing();
-        }
-      }
       await this.sync.append(tx, {
         userId,
         deviceId: room.desktopDeviceId,
@@ -254,6 +242,7 @@ export class SmartCacheService {
     const room = await this.room(userId, body.roomId);
     if (room.desktopDeviceId !== deviceId)
       throw new ForbiddenException({ code: 'FORBIDDEN' });
+    await this.ensureAutomaticPolicy(body.roomId);
     const requestHash = createHash('sha256')
       .update(canonicalJson(body))
       .digest('hex');

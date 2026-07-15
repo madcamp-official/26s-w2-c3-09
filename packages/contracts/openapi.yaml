@@ -843,7 +843,7 @@ paths:
           application/json:
             { schema: { $ref: "#/components/schemas/UpdateSmartCachePolicy" } }
       responses:
-        "200": { description: Updated opt-in cache policy }
+        "200": { description: Updated automatic cache quota policy }
         "503": { description: Smart cache is not configured when enabling }
   /v1/rooms/{roomId}/cached-files:
     parameters:

@@ -93,7 +93,6 @@ void main() {
                 isDownloading: false,
                 progress: null,
                 onDownload: () {},
-                onRemove: () {},
               ),
             ],
           ),

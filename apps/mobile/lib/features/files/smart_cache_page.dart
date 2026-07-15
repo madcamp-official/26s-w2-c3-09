@@ -5,45 +5,6 @@ import '../../core/files/smart_cache_decryption.dart';
 import '../../core/network/api_client.dart';
 import '../../storage/display_cache.dart';
 
-Map<String, dynamic> parseSmartCachePolicyInput({
-  required String quotaMegabytes,
-  required String maxFileMegabytes,
-  required String excludedPatterns,
-  required String pinnedPatterns,
-  required bool enabled,
-}) {
-  const megabyte = 1024 * 1024;
-  final quota = int.tryParse(quotaMegabytes);
-  final maxFile = int.tryParse(maxFileMegabytes);
-  if (quota == null || quota <= 0 || maxFile == null || maxFile <= 0) {
-    throw const FormatException('용량은 1 이상의 정수여야 합니다.');
-  }
-  if (maxFile > quota) {
-    throw const FormatException('파일 한도는 방 한도보다 클 수 없습니다.');
-  }
-  final excluded = _parseSmartCachePatterns(excludedPatterns);
-  final pinned = _parseSmartCachePatterns(pinnedPatterns);
-  if (excluded.length > 100 ||
-      pinned.length > 100 ||
-      excluded.any((pattern) => pattern.length > 255) ||
-      pinned.any((pattern) => pattern.length > 255)) {
-    throw const FormatException('패턴은 종류별 최대 100개, 각 255자까지입니다.');
-  }
-  return {
-    'enabled': enabled,
-    'quotaBytes': quota * megabyte,
-    'maxFileBytes': maxFile * megabyte,
-    'excludedPatterns': excluded,
-    'pinnedPatterns': pinned,
-  };
-}
-
-List<String> _parseSmartCachePatterns(String value) => value
-    .split('\n')
-    .map((line) => line.trim())
-    .where((line) => line.isNotEmpty)
-    .toList();
-
 String smartCacheAccessEventPath(String cachedFileId) =>
     '/v1/cached-files/$cachedFileId/access-events';
 
@@ -105,13 +66,8 @@ bool isSmartCacheOfflineFallbackError(Object error) {
 }
 
 class SmartCachePageContent {
-  const SmartCachePageContent({
-    required this.cache,
-    this.policy,
-    this.offlineFallbackError,
-  });
+  const SmartCachePageContent({required this.cache, this.offlineFallbackError});
 
-  final Map<String, dynamic>? policy;
   final Map<String, dynamic> cache;
   final Object? offlineFallbackError;
 
@@ -130,13 +86,6 @@ final smartCacheDecryptionKeyStoreProvider =
       (ref) => const UnconfiguredSmartCacheDecryptionKeyStore(),
     );
 
-final smartCachePolicyProvider = FutureProvider.autoDispose
-    .family<Map<String, dynamic>, String>(
-      (ref, roomId) => ref.watch(smartCacheGetProvider)(
-        '/v1/rooms/$roomId/smart-cache-policy',
-      ),
-    );
-
 final smartCacheFilesProvider = FutureProvider.autoDispose
     .family<Map<String, dynamic>, String>(
       (ref, roomId) =>
@@ -147,14 +96,10 @@ final smartCacheStatusProvider = FutureProvider.autoDispose
     .family<SmartCachePageContent, String>((ref, roomId) async {
       final displayCache = ref.watch(displayCacheProvider);
       try {
-        final results = await Future.wait([
-          ref.watch(smartCachePolicyProvider(roomId).future),
-          ref.watch(smartCacheFilesProvider(roomId).future),
-        ]);
-        final cache = results[1];
+        final cache = await ref.watch(smartCacheFilesProvider(roomId).future);
         final files = smartCacheFilesFromPayload(cache);
         await displayCache.replaceSmartCacheFiles(roomId, files);
-        return SmartCachePageContent(policy: results[0], cache: cache);
+        return SmartCachePageContent(cache: cache);
       } catch (error) {
         if (!isSmartCacheOfflineFallbackError(error)) rethrow;
         final localFiles = await displayCache.smartCacheFiles(roomId);
@@ -186,195 +131,6 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
   void reload() {
     ref.invalidate(smartCacheStatusProvider(widget.roomId));
     content = ref.read(smartCacheStatusProvider(widget.roomId).future);
-  }
-
-  Future<void> setEnabled(Map<String, dynamic> policy, bool enabled) async {
-    if (enabled) {
-      await configurePolicy(policy, enableAfterSave: true);
-      return;
-    }
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('스마트 캐시 끄기'),
-        content: const Text('진행 중인 업로드를 취소하고 이 방의 서버 캐시 object 삭제를 예약합니다.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('유지'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('끄기'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    await savePolicy(policy, enabled: false);
-  }
-
-  Future<void> savePolicy(
-    Map<String, dynamic> policy, {
-    required bool enabled,
-  }) async {
-    try {
-      await ref
-          .read(apiClientProvider)
-          .patch('/v1/rooms/${widget.roomId}/smart-cache-policy', {
-            'enabled': enabled,
-            'quotaBytes': policy['quotaBytes'],
-            'maxFileBytes': policy['maxFileBytes'],
-            'excludedPatterns': policy['excludedPatterns'] ?? [],
-            'pinnedPatterns': policy['pinnedPatterns'] ?? [],
-          });
-      setState(reload);
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('스마트 캐시 설정 실패: $error')));
-      }
-    }
-  }
-
-  Future<void> configurePolicy(
-    Map<String, dynamic> policy, {
-    bool? enableAfterSave,
-  }) async {
-    const megabyte = 1024 * 1024;
-    final quota = TextEditingController(
-      text: '${((policy['quotaBytes'] as num) / megabyte).round()}',
-    );
-    final maxFile = TextEditingController(
-      text: '${((policy['maxFileBytes'] as num) / megabyte).round()}',
-    );
-    final excluded = TextEditingController(
-      text: (policy['excludedPatterns'] as List<dynamic>? ?? const []).join(
-        '\n',
-      ),
-    );
-    final pinned = TextEditingController(
-      text: (policy['pinnedPatterns'] as List<dynamic>? ?? const []).join('\n'),
-    );
-    final formKey = GlobalKey<FormState>();
-    var consent = enableAfterSave != true || policy['enabled'] == true;
-    final result = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('스마트 캐시 범위 설정'),
-          content: SizedBox(
-            width: 480,
-            child: Form(
-              key: formKey,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      '전체 폴더를 동기화하지 않습니다. PC가 제출한 후보 중 quota 안에서 서버가 승인한 파일 원본만 private object storage에 보관합니다.',
-                    ),
-                    const SizedBox(height: 16),
-                    TextFormField(
-                      controller: quota,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: '방 전체 한도 (MB)',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: _positiveInteger,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: maxFile,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: '파일 하나의 최대 크기 (MB)',
-                        border: OutlineInputBorder(),
-                      ),
-                      validator: _positiveInteger,
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: excluded,
-                      minLines: 3,
-                      maxLines: 6,
-                      decoration: const InputDecoration(
-                        labelText: '제외 패턴 (한 줄에 하나)',
-                        hintText: 'private/**\n*.tmp',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: pinned,
-                      minLines: 3,
-                      maxLines: 6,
-                      decoration: const InputDecoration(
-                        labelText: '고정 패턴 (한 줄에 하나)',
-                        hintText: 'important/**\n*.presentation.pdf',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    if (enableAfterSave == true && policy['enabled'] != true)
-                      CheckboxListTile(
-                        contentPadding: EdgeInsets.zero,
-                        value: consent,
-                        onChanged: (value) =>
-                            setDialogState(() => consent = value == true),
-                        title: const Text('서버 보관 범위와 삭제 정책을 확인했습니다.'),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              onPressed: !consent
-                  ? null
-                  : () {
-                      if (!formKey.currentState!.validate()) return;
-                      try {
-                        Navigator.pop(
-                          context,
-                          parseSmartCachePolicyInput(
-                            quotaMegabytes: quota.text,
-                            maxFileMegabytes: maxFile.text,
-                            excludedPatterns: excluded.text,
-                            pinnedPatterns: pinned.text,
-                            enabled:
-                                enableAfterSave ?? (policy['enabled'] == true),
-                          ),
-                        );
-                      } on FormatException catch (error) {
-                        ScaffoldMessenger.of(
-                          context,
-                        ).showSnackBar(SnackBar(content: Text(error.message)));
-                      }
-                    },
-              child: const Text('저장'),
-            ),
-          ],
-        ),
-      ),
-    );
-    quota.dispose();
-    maxFile.dispose();
-    excluded.dispose();
-    pinned.dispose();
-    if (result == null) return;
-    await savePolicy(result, enabled: result['enabled'] == true);
-  }
-
-  static String? _positiveInteger(String? value) {
-    final parsed = int.tryParse(value ?? '');
-    return parsed == null || parsed <= 0 ? '1 이상의 정수를 입력하세요' : null;
   }
 
   Future<void> download(Map<String, dynamic> file) async {
@@ -447,24 +203,9 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
     }
   }
 
-  Future<void> remove(Map<String, dynamic> file) async {
-    try {
-      await ref
-          .read(apiClientProvider)
-          .delete('/v1/cached-files/${file['id']}');
-      if (mounted) setState(reload);
-    } catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('캐시 제거 실패: $error')));
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('오프라인 스마트 캐시')),
+    appBar: AppBar(title: const Text('오프라인 파일')),
     body: FutureBuilder<SmartCachePageContent>(
       future: content,
       builder: (context, snapshot) {
@@ -480,7 +221,6 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
           );
         }
         final data = snapshot.data!;
-        final policy = data.policy;
         final cache = data.cache;
         final files = smartCacheFilesFromPayload(cache);
         return ListView(
@@ -490,25 +230,6 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
               SmartCacheOfflineFallbackWarning(
                 error: data.offlineFallbackError,
               ),
-            if (policy != null) ...[
-              SwitchListTile(
-                title: const Text('스마트 캐시 사용'),
-                subtitle: Text('방 용량 한도: ${policy['quotaBytes']} bytes'),
-                value: policy['enabled'] == true,
-                onChanged: (value) => setEnabled(policy, value),
-              ),
-              ListTile(
-                leading: const Icon(Icons.tune),
-                title: const Text('용량·제외 범위 설정'),
-                subtitle: Text(
-                  '파일 한도: ${policy['maxFileBytes']} bytes · '
-                  '제외 패턴 ${(policy['excludedPatterns'] as List<dynamic>? ?? const []).length}개 · '
-                  '고정 패턴 ${(policy['pinnedPatterns'] as List<dynamic>? ?? const []).length}개',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => configurePolicy(policy),
-              ),
-            ],
             if (cache['pendingCommandWarning'] == true)
               const PendingCommandWarning(),
             if (cache['desktopOnline'] == false)
@@ -524,7 +245,6 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
                   isDownloading: isDownloading,
                   progress: downloadProgress,
                   onDownload: () => download(file),
-                  onRemove: () => remove(file),
                 );
               }),
           ],
@@ -587,13 +307,11 @@ class CachedFileTile extends StatelessWidget {
     required this.isDownloading,
     required this.progress,
     required this.onDownload,
-    required this.onRemove,
   });
   final Map<String, dynamic> file;
   final bool isDownloading;
   final double? progress;
   final VoidCallback onDownload;
-  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -608,16 +326,10 @@ class CachedFileTile extends StatelessWidget {
         '캐시 시각: ${file['cachedAt']}\n'
         '원본 마지막 확인: ${file['lastVerifiedAt']}',
       ),
-      trailing: PopupMenuButton<String>(
-        enabled: !isDownloading,
-        onSelected: (value) {
-          if (value == 'download') onDownload();
-          if (value == 'remove') onRemove();
-        },
-        itemBuilder: (_) => const [
-          PopupMenuItem(value: 'download', child: Text('다운로드')),
-          PopupMenuItem(value: 'remove', child: Text('캐시 제거')),
-        ],
+      trailing: IconButton(
+        tooltip: '다운로드',
+        onPressed: isDownloading ? null : onDownload,
+        icon: const Icon(Icons.download_outlined),
       ),
     ),
   );
