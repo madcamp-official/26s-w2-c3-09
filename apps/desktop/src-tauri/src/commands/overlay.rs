@@ -28,10 +28,15 @@ const CHAT_OVERLAY_HEIGHT: i32 = 360;
 const SPEECH_BUBBLE_WIDTH: i32 = 300;
 #[cfg(feature = "tauri-commands")]
 const SPEECH_BUBBLE_HEIGHT: i32 = 130;
-// Small: the mascot's own window has several px of transparent padding around its sprite (the
-// sprite is bottom/right-anchored within a larger window), so this reads as the true visual gap.
+// Negative: measured against the actual mouse artwork, not just its bounding boxes. The mascot's
+// 112x140 window has ~8px of transparent padding around its 96x118 drag-surface box, and inside
+// that box `object-fit: contain` plus the source sprite's own margin (mouse_idle_preview.gif is
+// 1400x1800 but the drawn mouse only spans roughly x:[229,1211]) adds ~17px more empty space
+// before the drawn pixels start — about 25px of total invisible padding on the left/right side.
+// Safe to sit this deep in it: the bubble window is click-through
+// (`set_ignore_cursor_events`), so it can never block dragging the mascot.
 #[cfg(feature = "tauri-commands")]
-const SPEECH_BUBBLE_GAP: i32 = 2;
+const SPEECH_BUBBLE_GAP: i32 = -24;
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]

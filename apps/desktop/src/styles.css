@@ -1498,10 +1498,8 @@ body.house-overlay-body .house-mess-layers.mess-level-4 img {
   opacity: 0.58;
 }
 
-/* The mess prop layer is a focal prop, so keep it crisp and readable
-   but do not let white antialiasing halos dominate the house art. */
 body.house-overlay-body .house-mess-props img {
-  opacity: 0.82;
+  opacity: 1;
   filter: none;
   mix-blend-mode: normal !important;
 }
