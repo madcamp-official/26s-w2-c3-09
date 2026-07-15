@@ -12,6 +12,57 @@ import '../chat/chat_page.dart';
 import '../files/files_page.dart';
 import '../proposals/proposal_page.dart';
 
+const _pixelInk = Color(0xFF3A2A1F);
+const _pixelPaper = Color(0xFFFFE9B8);
+const _pixelGreen = Color(0xFF597A45);
+const _pixelRust = Color(0xFFB85C38);
+
+class _PixelCard extends StatelessWidget {
+  const _PixelCard({required this.child, this.color});
+  final Widget child;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    color: color ?? _pixelPaper,
+    elevation: 0,
+    margin: const EdgeInsets.only(right: 5, bottom: 5),
+    shape: const BeveledRectangleBorder(
+      side: BorderSide(color: _pixelInk, width: 2),
+      borderRadius: BorderRadius.all(Radius.circular(3)),
+    ),
+    child: DecoratedBox(
+      decoration: const BoxDecoration(
+        boxShadow: [BoxShadow(color: _pixelInk, offset: Offset(5, 5))],
+      ),
+      child: child,
+    ),
+  );
+}
+
+class _PixelMeter extends StatelessWidget {
+  const _PixelMeter({required this.value, required this.color});
+  final double value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: List.generate(10, (index) {
+      final filled = index < (value.clamp(0, 1) * 10).round();
+      return Expanded(
+        child: Container(
+          height: 14,
+          margin: EdgeInsets.only(right: index == 9 ? 0 : 2),
+          decoration: BoxDecoration(
+            color: filled ? color : const Color(0xFFD2B982),
+            border: Border.all(color: _pixelInk),
+          ),
+        ),
+      );
+    }),
+  );
+}
+
 class RoomContent {
   const RoomContent({
     required this.commands,
@@ -488,7 +539,11 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         .operation(DisconnectKind.room, roomId);
     final roomName = widget.room['name'] as String? ?? '관리 폴더';
     return Scaffold(
+      backgroundColor: const Color(0xFFD8C58F),
       appBar: AppBar(
+        backgroundColor: _pixelGreen,
+        foregroundColor: const Color(0xFFFFF4D1),
+        shape: const Border(bottom: BorderSide(color: _pixelInk, width: 3)),
         title: Text(roomName),
         actions: [
           IconButton(
@@ -561,7 +616,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                   const SizedBox(height: 12),
                 ],
                 if (content.isOffline) ...[
-                  const Card(
+                  const _PixelCard(
                     color: Color(0xFFFFF3E0),
                     child: ListTile(
                       leading: Icon(Icons.cloud_off_outlined),
@@ -572,7 +627,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                   const SizedBox(height: 12),
                 ],
                 if (analyzing) ...[
-                  const Card(
+                  const _PixelCard(
                     child: ListTile(
                       leading: SizedBox(
                         width: 24,
@@ -587,7 +642,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                 ],
                 CleanlinessCard(snapshot: content.snapshot),
                 const SizedBox(height: 16),
-                Card(
+                _PixelCard(
                   child: ListTile(
                     leading: const Icon(Icons.chat_bubble_outline),
                     title: const Text('파일 정리는 대화로 요청하세요'),
@@ -605,7 +660,25 @@ class _RoomPageState extends ConsumerState<RoomPage> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                Text('히스토리', style: Theme.of(context).textTheme.titleLarge),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: const BoxDecoration(
+                    color: _pixelGreen,
+                    border: Border.fromBorderSide(
+                      BorderSide(color: _pixelInk, width: 2),
+                    ),
+                  ),
+                  child: Text(
+                    '히스토리',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: const Color(0xFFFFF4D1),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 8),
                 _HistoryTimeline(
                   entries: history,
@@ -776,12 +849,12 @@ class _HistoryTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (entries.isEmpty) {
-      return Card(child: ListTile(title: Text(emptyMessage)));
+      return _PixelCard(child: ListTile(title: Text(emptyMessage)));
     }
     return Column(
       children: [
         for (final entry in entries)
-          Card(
+          _PixelCard(
             child: ListTile(
               leading: Icon(entry.icon),
               title: Text(entry.title),
@@ -806,7 +879,7 @@ class _RoomDisconnectCard extends StatelessWidget {
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) => Card(
+  Widget build(BuildContext context) => _PixelCard(
     color: operation.phase == DisconnectPhase.failed
         ? Theme.of(context).colorScheme.errorContainer
         : null,
@@ -861,7 +934,7 @@ class CleanlinessCard extends StatelessWidget {
     final score = snapshot?['score'] as int?;
     final metrics = snapshot?['metrics'];
     if (score == null) {
-      return const Card(
+      return const _PixelCard(
         child: ListTile(
           leading: Icon(Icons.auto_graph_outlined),
           title: Text('청결도 계산 전'),
@@ -874,7 +947,7 @@ class CleanlinessCard extends StatelessWidget {
       snapshot?['calculatedAt'],
     );
     if (cleanlinessFormulaMismatch(snapshot)) {
-      return Card(
+      return _PixelCard(
         color: Theme.of(context).colorScheme.errorContainer,
         child: ListTile(
           leading: const Icon(Icons.system_update_alt),
@@ -894,16 +967,16 @@ class CleanlinessCard extends StatelessWidget {
         .map(Map<String, dynamic>.from)
         .toList(growable: false);
     final color = score >= 80
-        ? Colors.green
+        ? _pixelGreen
         : score >= 50
-        ? Colors.orange
-        : Colors.red;
+        ? const Color(0xFFC58B32)
+        : _pixelRust;
     final grade = score >= 80
         ? '깔끔해요'
         : score >= 50
         ? '정리 필요'
         : '많은 정리 필요';
-    return Card(
+    return _PixelCard(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -911,22 +984,23 @@ class CleanlinessCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                SizedBox(
+                Container(
                   width: 68,
                   height: 68,
-                  child: Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      CircularProgressIndicator(
-                        value: score / 100,
-                        strokeWidth: 7,
-                        color: color,
-                      ),
-                      Text(
-                        '$score',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: color,
+                    border: Border.all(color: _pixelInk, width: 3),
+                    boxShadow: const [
+                      BoxShadow(color: _pixelInk, offset: Offset(4, 4)),
                     ],
+                  ),
+                  child: Text(
+                    '$score',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: const Color(0xFFFFF4D1),
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -950,6 +1024,8 @@ class CleanlinessCard extends StatelessWidget {
                 ),
               ],
             ),
+            const SizedBox(height: 14),
+            _PixelMeter(value: score / 100, color: color),
             if (deductions.isNotEmpty) ...[
               const Divider(height: 24),
               Text('감점 사유', style: Theme.of(context).textTheme.titleSmall),
