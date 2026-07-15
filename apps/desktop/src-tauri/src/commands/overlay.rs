@@ -386,6 +386,16 @@ fn position_chat_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow) 
         });
     let align_y = mouse_pos.y + mouse_size.height as i32 - chat_h;
     let align_x = mouse_pos.x + (mouse_size.width as i32 - chat_w) / 2;
+    let left_candidate = (
+        RectI {
+            x: mouse_pos.x - bubble_w - gap,
+            y: align_y,
+            w: bubble_w,
+            h: bubble_h,
+        },
+        TailSide::Right,
+    );
+    /*
     let candidates = [
         RectI {
             x: mouse_pos.x - chat_w - gap,
@@ -411,7 +421,7 @@ fn position_chat_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow) 
             w: chat_w,
             h: chat_h,
         },
-    ];
+    ]; */
     let best = candidates
         .into_iter()
         .map(|candidate| clamp_rect(candidate, monitor_rect))
@@ -567,13 +577,14 @@ pub fn show_speech_bubble(app: tauri::AppHandle, text: String) -> Result<(), Str
         w: bubble_w,
         h: bubble_h,
     };
-    // `min_by_key` keeps the first minimum on ties, so with equal (usually zero) overlap the
-    // mouse's-left candidate above wins by default; only a monitor-edge clamp changes the winner.
-    let (best_rect, tail_side) = candidates
-        .into_iter()
-        .map(|(candidate, side)| (clamp_rect(candidate, monitor_rect), side))
-        .min_by_key(|(candidate, _)| overlap_area(*candidate, mouse_rect))
-        .unwrap_or((default_rect, TailSide::Right));
+    // The bubble artwork itself must remain to the mouse's left. Clamp only its vertical
+    // position; clamping x could move the visible bubble to the other side near an edge.
+    let (left_rect, tail_side) = left_candidate;
+    let best_rect = if let Some(monitor) = monitor_rect {
+        RectI { y: left_rect.y.clamp(monitor.y, monitor.y + (monitor.h - left_rect.h).max(0)), ..left_rect }
+    } else {
+        left_rect
+    };
 
     let _ = window.set_position(tauri::PhysicalPosition::new(best_rect.x, best_rect.y));
     window
