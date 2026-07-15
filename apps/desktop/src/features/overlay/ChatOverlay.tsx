@@ -89,8 +89,6 @@ type PersistedChatActionState = {
   submittedRuleDraftIds: string[];
 };
 
-const CHAT_ACTION_STATE_STORAGE_KEY = "mousekeeper.chatOverlay.actionState.v1";
-
 const fallbackQuickPrompts = [
   {
     id: "find-reports",
@@ -134,49 +132,12 @@ function setFromArray(values: readonly string[] | undefined) {
 }
 
 function readPersistedChatActionState(): PersistedChatActionState {
-  if (typeof window === "undefined") return emptyChatActionState;
-  try {
-    const raw = window.localStorage.getItem(CHAT_ACTION_STATE_STORAGE_KEY);
-    if (!raw) return emptyChatActionState;
-    const parsed = JSON.parse(raw) as Partial<PersistedChatActionState>;
-    return {
-      approvedDraftIds: arrayField(parsed.approvedDraftIds),
-      approvedRuleDraftIds: arrayField(parsed.approvedRuleDraftIds),
-      dismissedLocalProposalKeys: arrayField(parsed.dismissedLocalProposalKeys),
-      proposalReceivedAtByKey: numberRecordField(parsed.proposalReceivedAtByKey),
-      rejectedRuleDraftIds: arrayField(parsed.rejectedRuleDraftIds),
-      skippedDraftIds: arrayField(parsed.skippedDraftIds),
-      skippedLocalProposalKeys: arrayField(parsed.skippedLocalProposalKeys),
-      skippedProposalIds: arrayField(parsed.skippedProposalIds),
-      submittedDraftIds: arrayField(parsed.submittedDraftIds),
-      submittedLocalProposalKeys: arrayField(parsed.submittedLocalProposalKeys),
-      submittedProposalIds: arrayField(parsed.submittedProposalIds),
-      submittedRuleDraftIds: arrayField(parsed.submittedRuleDraftIds)
-    };
-  } catch (cause) {
-    console.warn("Failed to read persisted chat action state", cause);
-    return emptyChatActionState;
-  }
+  return emptyChatActionState;
 }
 
-function writePersistedChatActionState(state: PersistedChatActionState) {
-  try {
-    window.localStorage.setItem(CHAT_ACTION_STATE_STORAGE_KEY, JSON.stringify(state));
-  } catch (cause) {
-    console.warn("Failed to persist chat action state", cause);
-  }
-}
-
-function arrayField(value: unknown) {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
-}
-
-function numberRecordField(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]))
-  );
+function writePersistedChatActionState(_state: PersistedChatActionState) {
+  // Chat action status is server-authoritative; local sets are only in-window
+  // pending indicators and must not survive reloads or cross-device updates.
 }
 
 /**

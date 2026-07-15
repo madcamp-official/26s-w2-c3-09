@@ -38,6 +38,7 @@ import {
   type AiQueryResult,
   type AiRuleDraftResult,
 } from '../ai/ai.provider';
+import { buildRoomContext } from '../ai/room-context';
 import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
 import { FileBrowseService } from '../file-access/file-browse.service';
@@ -999,6 +1000,7 @@ export class ChatService {
         id: message.id,
         content: message.content,
       },
+      room: await buildRoomContext(this.db, session.roomId),
     });
     if (ai.status === 'READY' && ai.kind === 'NO_ACTION') {
       const assistant = await this.createAiTextAssistantMessage(

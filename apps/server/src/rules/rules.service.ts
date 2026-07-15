@@ -12,7 +12,11 @@ import {
 import { rooms, ruleDrafts, rules, type Database } from '@mousekeeper/database';
 import { and, asc, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { AI_PROVIDER, type AiProvider } from '../ai/ai.provider';
+import {
+  AI_PROVIDER,
+  type AiProvider,
+} from '../ai/ai.provider';
+import { buildRoomContext } from '../ai/room-context';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
 
@@ -101,6 +105,7 @@ export class RulesService {
       userId,
       roomId,
       instruction: body.instruction,
+      room: await buildRoomContext(this.db, roomId),
     });
     if (translated.status !== 'READY') return translated;
 

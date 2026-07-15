@@ -205,6 +205,49 @@ describe('OpenAiResponsesProvider', () => {
     });
   });
 
+  it('passes bounded room context to chat classification', async () => {
+    const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
+      okOutput({
+        kind: 'NO_ACTION',
+        reasonCode: '',
+        reply: 'I can use the room rule context.',
+        intent: 'NONE',
+        argumentsJson: '{}',
+        confirmationSummary: '',
+      }),
+    );
+
+    await providerWith(fetcher).classifyAndRespond({
+      userId: 'user-1',
+      roomId: 'room-1',
+      sessionId: 'session-1',
+      sourceMessage: { id: 'message-1', content: 'make another pdf rule' },
+      room: {
+        roomName: 'Downloads',
+        rootAlias: 'Downloads',
+        existingRules: [
+          { name: 'PDF archive', destinationTemplate: 'Archive/PDF' },
+        ],
+      },
+    });
+
+    const init = fetcher.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string) as {
+      input: string;
+      instructions: string;
+    };
+    expect(JSON.parse(body.input)).toMatchObject({
+      roomContext: {
+        roomName: 'Downloads',
+        rootAlias: 'Downloads',
+        existingRules: [
+          { name: 'PDF archive', destinationTemplate: 'Archive/PDF' },
+        ],
+      },
+    });
+    expect(body.instructions).toContain('NOT a live filesystem listing');
+  });
+
   it('classifies file lookups into validated query requests', async () => {
     const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
       okOutput({
@@ -288,6 +331,53 @@ describe('OpenAiResponsesProvider', () => {
         ambiguities: [],
       },
     });
+  });
+
+  it('passes bounded room context to direct rule translation', async () => {
+    const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
+      okOutput({
+        kind: 'RULE_DRAFT',
+        reasonCode: '',
+        reply: '',
+        name: 'PDF archive',
+        definitionJson: JSON.stringify({
+          match: 'ALL',
+          conditions: [{ field: 'extension', operator: 'IN', value: ['.pdf'] }],
+          action: { type: 'MOVE', destinationTemplate: 'Archive/PDF' },
+        }),
+        explanation: 'Move PDF files into Archive/PDF.',
+        ambiguities: [],
+      }),
+    );
+
+    await providerWith(fetcher).translateRule({
+      userId: 'user-1',
+      roomId: 'room-1',
+      instruction: 'move pdfs to archive',
+      room: {
+        roomName: 'Downloads',
+        rootAlias: 'Downloads',
+        existingRules: [
+          { name: 'Existing PDFs', destinationTemplate: 'Archive/PDF' },
+        ],
+      },
+    });
+
+    const init = fetcher.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string) as {
+      input: string;
+      instructions: string;
+    };
+    expect(JSON.parse(body.input)).toMatchObject({
+      roomContext: {
+        roomName: 'Downloads',
+        rootAlias: 'Downloads',
+        existingRules: [
+          { name: 'Existing PDFs', destinationTemplate: 'Archive/PDF' },
+        ],
+      },
+    });
+    expect(body.instructions).toContain('not a live filesystem listing');
   });
 
   it('returns UNCONFIGURED for missing or rejected provider credentials', async () => {
