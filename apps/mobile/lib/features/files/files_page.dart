@@ -8,6 +8,10 @@ import '../../core/network/api_client.dart';
 import '../../core/sync/realtime_controller.dart';
 import '../auth/connection_gate_controller.dart';
 
+const _pixelInk = Color(0xFF30251F);
+const _pixelPaper = Color(0xFFFFF4D6);
+const _pixelCanvas = Color(0xFFE7CFA9);
+
 // Shared v1.4 contract names the current-directory scope explicitly.
 const fileSearchScopeDirectory = 'CURRENT_DIRECTORY';
 const fileSearchScopeManagedRoot = 'MANAGED_ROOT';
@@ -1009,7 +1013,15 @@ class _FilesPageState extends ConsumerState<FilesPage> {
       });
     }
     return Scaffold(
-      appBar: AppBar(title: Text('${widget.roomName ?? '연결된 폴더'} 파일')),
+      backgroundColor: _pixelCanvas,
+      appBar: AppBar(
+        backgroundColor: _pixelInk,
+        foregroundColor: _pixelPaper,
+        title: Text(
+          '${widget.roomName ?? '연결된 폴더'} 파일',
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
+      ),
       body: Column(
         children: [
           if (_busy) LinearProgressIndicator(value: _downloadProgress),
@@ -1049,7 +1061,12 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                               },
                               icon: const Icon(Icons.clear),
                             ),
-                      border: const OutlineInputBorder(),
+                      filled: true,
+                      fillColor: _pixelPaper,
+                      border: const OutlineInputBorder(
+                        borderRadius: BorderRadius.zero,
+                        borderSide: BorderSide(color: _pixelInk, width: 2),
+                      ),
                     ),
                   ),
                 ),
@@ -1061,7 +1078,12 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     initialValue: _searchScope,
                     decoration: const InputDecoration(
                       labelText: '검색 범위',
-                      border: OutlineInputBorder(),
+                      filled: true,
+                      fillColor: _pixelPaper,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.zero,
+                        borderSide: BorderSide(color: _pixelInk, width: 2),
+                      ),
                     ),
                     items: const [
                       DropdownMenuItem(
@@ -1190,6 +1212,10 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           ..._directoryState.entries.map((entry) {
             final isFile = entry['type'] == 'FILE';
             return ListTile(
+              tileColor: _pixelPaper,
+              shape: const Border(
+                bottom: BorderSide(color: _pixelInk, width: 1),
+              ),
               leading: Icon(
                 isFile
                     ? Icons.insert_drive_file_outlined

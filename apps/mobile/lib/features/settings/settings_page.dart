@@ -8,8 +8,8 @@ import '../auth/connection_gate_controller.dart';
 const _ink = Color(0xFF3B2A24);
 const _paper = Color(0xFFFFFAF4);
 const _paperMuted = Color(0xFFF3E8DC);
-const _line = Color(0xFFB9A696);
 const _danger = Color(0xFFA83B35);
+const _pixelCanvas = Color(0xFFE7CFA9);
 
 class MouseKeeperSettingsPage extends ConsumerWidget {
   const MouseKeeperSettingsPage({super.key});
@@ -28,8 +28,10 @@ class MouseKeeperSettingsPage extends ConsumerWidget {
     final disconnectFailed = operation?.phase == DisconnectPhase.failed;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4E9DC),
+      backgroundColor: _pixelCanvas,
       appBar: AppBar(
+        backgroundColor: _ink,
+        foregroundColor: _paper,
         title: const Text(
           'MOUSEKEEPER 설정',
           style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -0.4),
@@ -289,8 +291,8 @@ class _PixelPanel extends StatelessWidget {
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
       color: _paper,
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(color: _line, width: 1.5),
+      borderRadius: BorderRadius.zero,
+      border: Border.all(color: _ink, width: 2),
       boxShadow: const [
         BoxShadow(color: Color(0x443B2A24), offset: Offset(4, 4)),
       ],
@@ -318,8 +320,8 @@ class _SettingsInfoTile extends StatelessWidget {
       DecoratedBox(
         decoration: BoxDecoration(
           color: _paperMuted,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: _line),
+          borderRadius: BorderRadius.zero,
+          border: Border.all(color: _ink, width: 2),
         ),
         child: Padding(
           padding: const EdgeInsets.all(9),

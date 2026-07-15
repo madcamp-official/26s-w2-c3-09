@@ -4,6 +4,14 @@ import 'package:uuid/uuid.dart';
 import '../../core/network/api_client.dart';
 import '../../core/sync/mutation_queue.dart';
 
+const _pixelInk = Color(0xFF30251F);
+const _pixelPaper = Color(0xFFFFF4D6);
+const _pixelCanvas = Color(0xFFE7CFA9);
+final _pixelCardShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.zero,
+  side: const BorderSide(color: _pixelInk, width: 2),
+);
+
 class ProposalPage extends ConsumerStatefulWidget {
   const ProposalPage({
     super.key,
@@ -67,7 +75,12 @@ class _ProposalPageState extends ConsumerState<ProposalPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('제안 검토')),
+    backgroundColor: _pixelCanvas,
+    appBar: AppBar(
+      backgroundColor: _pixelInk,
+      foregroundColor: _pixelPaper,
+      title: const Text('제안 검토', style: TextStyle(fontWeight: FontWeight.w900)),
+    ),
     body: FutureBuilder<Map<String, dynamic>>(
       future: _proposal,
       builder: (context, snapshot) {
@@ -139,7 +152,10 @@ class ProposalSummaryCard extends StatelessWidget {
     final draft = summary['readmeDraft'] as String?;
     final diff = summary['readmeDiff'] as String?;
     return Card(
-      color: const Color(0xFFF5F5F5),
+      color: _pixelPaper,
+      shape: _pixelCardShape,
+      elevation: 5,
+      shadowColor: _pixelInk,
       child: ExpansionTile(
         initiallyExpanded: true,
         leading: const Icon(Icons.difference_outlined),
@@ -191,6 +207,10 @@ class ProposalItemsList extends StatelessWidget {
         final item = Map<String, dynamic>.from(items[index] as Map);
         final conflict = item['conflictState'] as String? ?? 'NONE';
         return Card(
+          color: _pixelPaper,
+          shape: _pixelCardShape,
+          elevation: 5,
+          shadowColor: _pixelInk,
           child: ListTile(
             title: Text(item['actionType'] as String? ?? '작업'),
             subtitle: Text(

@@ -3,6 +3,14 @@ import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import 'mousekeeper_motion.dart';
 
+const _pixelInk = Color(0xFF30251F);
+const _pixelPaper = Color(0xFFFFF4D6);
+const _pixelCanvas = Color(0xFFE7CFA9);
+final _pixelCardShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.zero,
+  side: const BorderSide(color: _pixelInk, width: 2),
+);
+
 /// Read-only MVP character information. Persisted legacy appearance and room
 /// theme fields are deliberately ignored so affinity cannot mutate visuals.
 class CharacterSettingsPage extends StatelessWidget {
@@ -12,7 +20,15 @@ class CharacterSettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('MOUSEKEEPER 캐릭터')),
+    backgroundColor: _pixelCanvas,
+    appBar: AppBar(
+      backgroundColor: _pixelInk,
+      foregroundColor: _pixelPaper,
+      title: const Text(
+        'MOUSEKEEPER 캐릭터',
+        style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1),
+      ),
+    ),
     body: ListView(
       padding: const EdgeInsets.all(24),
       children: [
@@ -23,7 +39,11 @@ class CharacterSettingsPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 24),
-        const Card(
+        Card(
+          color: _pixelPaper,
+          shape: _pixelCardShape,
+          elevation: 5,
+          shadowColor: _pixelInk,
           child: ListTile(
             leading: Icon(Icons.lock_outline),
             title: Text('기본 외형과 기본 방 테마 사용 중'),
@@ -31,6 +51,10 @@ class CharacterSettingsPage extends StatelessWidget {
           ),
         ),
         Card(
+          color: _pixelPaper,
+          shape: _pixelCardShape,
+          elevation: 5,
+          shadowColor: _pixelInk,
           child: ListTile(
             leading: const Icon(Icons.favorite_outline),
             title: Text('호감도 ${initialCharacter['affinityTotal'] ?? 0}'),
@@ -38,8 +62,11 @@ class CharacterSettingsPage extends StatelessWidget {
           ),
         ),
         if (initialCharacter['riveAssetStatus'] == 'UNCONFIGURED')
-          const Card(
+          Card(
             color: Color(0xFFFFF3E0),
+            shape: _pixelCardShape,
+            elevation: 5,
+            shadowColor: _pixelInk,
             child: ListTile(
               leading: Icon(Icons.animation_outlined),
               title: Text('Rive 애니메이션 미설정'),

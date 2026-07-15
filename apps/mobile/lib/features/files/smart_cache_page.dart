@@ -5,6 +5,14 @@ import '../../core/files/smart_cache_decryption.dart';
 import '../../core/network/api_client.dart';
 import '../../storage/display_cache.dart';
 
+const _pixelInk = Color(0xFF30251F);
+const _pixelPaper = Color(0xFFFFF4D6);
+const _pixelCanvas = Color(0xFFE7CFA9);
+final _pixelCardShape = RoundedRectangleBorder(
+  borderRadius: BorderRadius.zero,
+  side: const BorderSide(color: _pixelInk, width: 2),
+);
+
 String smartCacheAccessEventPath(String cachedFileId) =>
     '/v1/cached-files/$cachedFileId/access-events';
 
@@ -205,7 +213,15 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('오프라인 파일')),
+    backgroundColor: _pixelCanvas,
+    appBar: AppBar(
+      backgroundColor: _pixelInk,
+      foregroundColor: _pixelPaper,
+      title: const Text(
+        '오프라인 파일',
+        style: TextStyle(fontWeight: FontWeight.w900),
+      ),
+    ),
     body: FutureBuilder<SmartCachePageContent>(
       future: content,
       builder: (context, snapshot) {
@@ -258,8 +274,11 @@ class PendingCommandWarning extends StatelessWidget {
   const PendingCommandWarning({super.key});
 
   @override
-  Widget build(BuildContext context) => const Card(
+  Widget build(BuildContext context) => Card(
     color: Colors.amberAccent,
+    shape: _pixelCardShape,
+    elevation: 5,
+    shadowColor: _pixelInk,
     child: ListTile(
       leading: Icon(Icons.warning_amber),
       title: Text('명령 처리 후 파일 위치나 목록이 변경될 수 있습니다.'),
@@ -275,6 +294,9 @@ class SmartCacheOfflineFallbackWarning extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Card(
     color: const Color(0xFFFFF3E0),
+    shape: _pixelCardShape,
+    elevation: 5,
+    shadowColor: _pixelInk,
     child: ListTile(
       leading: const Icon(Icons.cloud_off_outlined),
       title: const Text('Offline smart-cache metadata'),
@@ -290,8 +312,11 @@ class DesktopOfflineCacheWarning extends StatelessWidget {
   const DesktopOfflineCacheWarning({super.key});
 
   @override
-  Widget build(BuildContext context) => const Card(
+  Widget build(BuildContext context) => Card(
     color: Color(0xFFFFF3E0),
+    shape: _pixelCardShape,
+    elevation: 5,
+    shadowColor: _pixelInk,
     child: ListTile(
       leading: Icon(Icons.computer_outlined),
       title: Text('PC 에이전트와 연결되지 않음'),
@@ -315,6 +340,10 @@ class CachedFileTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Card(
+    color: _pixelPaper,
+    shape: _pixelCardShape,
+    elevation: 5,
+    shadowColor: _pixelInk,
     child: ListTile(
       leading: isDownloading
           ? CircularProgressIndicator(value: progress)
