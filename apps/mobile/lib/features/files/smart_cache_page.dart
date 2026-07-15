@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dio/dio.dart';
 import '../../core/files/smart_cache_decryption.dart';
 import '../../core/network/api_client.dart';
+import '../../core/widgets/cheese_loading.dart';
 import '../../storage/display_cache.dart';
 
 const _pixelInk = Color(0xFF30251F);
@@ -222,50 +223,55 @@ class _SmartCachePageState extends ConsumerState<SmartCachePage> {
         style: TextStyle(fontWeight: FontWeight.w900),
       ),
     ),
-    body: FutureBuilder<SmartCachePageContent>(
-      future: content,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(
-            child: Text(
-              '스마트 캐시를 불러오지 못했습니다.\n${snapshot.error}',
-              textAlign: TextAlign.center,
-            ),
-          );
-        }
-        final data = snapshot.data!;
-        final cache = data.cache;
-        final files = smartCacheFilesFromPayload(cache);
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (data.isOfflineFallback)
-              SmartCacheOfflineFallbackWarning(
-                error: data.offlineFallbackError,
+    body: CheeseLoadingOverlay(
+      loading: downloadingId != null,
+      progress: downloadProgress,
+      message: '캐시 파일을 안전하게 저장하는 중입니다',
+      child: FutureBuilder<SmartCachePageContent>(
+        future: content,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const CheeseLoadingView(message: '오프라인 파일을 확인하는 중입니다');
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                '스마트 캐시를 불러오지 못했습니다.\n${snapshot.error}',
+                textAlign: TextAlign.center,
               ),
-            if (cache['pendingCommandWarning'] == true)
-              const PendingCommandWarning(),
-            if (cache['desktopOnline'] == false)
-              const DesktopOfflineCacheWarning(),
-            const Divider(),
-            if (files.isEmpty)
-              const ListTile(title: Text('오프라인에서 사용할 수 있는 캐시 파일이 없습니다'))
-            else
-              ...files.map((file) {
-                final isDownloading = downloadingId == file['id'];
-                return CachedFileTile(
-                  file: file,
-                  isDownloading: isDownloading,
-                  progress: downloadProgress,
-                  onDownload: () => download(file),
-                );
-              }),
-          ],
-        );
-      },
+            );
+          }
+          final data = snapshot.data!;
+          final cache = data.cache;
+          final files = smartCacheFilesFromPayload(cache);
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (data.isOfflineFallback)
+                SmartCacheOfflineFallbackWarning(
+                  error: data.offlineFallbackError,
+                ),
+              if (cache['pendingCommandWarning'] == true)
+                const PendingCommandWarning(),
+              if (cache['desktopOnline'] == false)
+                const DesktopOfflineCacheWarning(),
+              const Divider(),
+              if (files.isEmpty)
+                const ListTile(title: Text('오프라인에서 사용할 수 있는 캐시 파일이 없습니다'))
+              else
+                ...files.map((file) {
+                  final isDownloading = downloadingId == file['id'];
+                  return CachedFileTile(
+                    file: file,
+                    isDownloading: isDownloading,
+                    progress: downloadProgress,
+                    onDownload: () => download(file),
+                  );
+                }),
+            ],
+          );
+        },
+      ),
     ),
   );
 }
@@ -346,7 +352,7 @@ class CachedFileTile extends StatelessWidget {
     shadowColor: _pixelInk,
     child: ListTile(
       leading: isDownloading
-          ? CircularProgressIndicator(value: progress)
+          ? CheeseLoadingIndicator(progress: progress, size: 28)
           : const Icon(Icons.offline_pin),
       title: Text(file['sourceRelativePath'] as String),
       subtitle: Text(

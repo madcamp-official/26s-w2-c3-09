@@ -3,10 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
-import 'package:mousekeeper_character_assets/character_assets.dart';
-
 import '../home/home_page.dart';
 import '../../core/theme/pixel_theme.dart';
+import '../../core/widgets/cheese_loading.dart';
 import 'auth_controller.dart';
 import 'connection_gate_controller.dart';
 import 'pairing_page.dart';
@@ -71,42 +70,45 @@ class PairingGateLoadingPage extends StatelessWidget {
     final disableAnimations =
         MediaQuery.maybeOf(context)?.disableAnimations ?? false;
     return Scaffold(
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: PixelPanel(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const PixelLabel('SYNC CHECK', color: PixelColors.sage),
-                const SizedBox(height: 20),
-                PixelFillMouse(
-                  progress: stage.progress,
-                  animate: !disableAnimations,
-                ),
-                const SizedBox(height: 20),
-                Text(stage.message, textAlign: TextAlign.center),
-                const SizedBox(height: 8),
-                Text(
-                  '${(stage.progress * 100).round()}%',
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
-                if (showLongWaitMessage) ...[
-                  const SizedBox(height: 16),
-                  const Text(
-                    '연결 확인이 예상보다 오래 걸리고 있어요.',
-                    textAlign: TextAlign.center,
+      body: ColoredBox(
+        color: Colors.black.withValues(alpha: 0.38),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(28),
+            child: PixelPanel(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const PixelLabel('SYNC CHECK', color: PixelColors.sage),
+                  const SizedBox(height: 20),
+                  PixelFillMouse(
+                    progress: stage.progress,
+                    animate: !disableAnimations,
                   ),
-                ],
-                if (onRetry != null) ...[
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: onRetry,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('다시 확인'),
+                  const SizedBox(height: 20),
+                  Text(stage.message, textAlign: TextAlign.center),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${(stage.progress * 100).round()}%',
+                    style: Theme.of(context).textTheme.labelMedium,
                   ),
+                  if (showLongWaitMessage) ...[
+                    const SizedBox(height: 16),
+                    const Text(
+                      '연결 확인이 예상보다 오래 걸리고 있어요.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                  if (onRetry != null) ...[
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('다시 확인'),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -201,53 +203,16 @@ class PixelFillMouse extends StatelessWidget {
   Widget build(BuildContext context) {
     final clamped = progress.clamp(0, 1).toDouble();
     if (!animate) {
-      return _PixelFillMouseFrame(progress: clamped, size: size);
+      return CheeseLoadingIndicator(progress: clamped, size: size * 0.58);
     }
     return TweenAnimationBuilder<double>(
       duration: const Duration(milliseconds: 700),
       curve: Curves.easeOutCubic,
       tween: Tween<double>(begin: 0, end: clamped),
-      builder: (context, value, _) =>
-          _PixelFillMouseFrame(progress: value, size: size),
+      builder: (_, value, _) =>
+          CheeseLoadingIndicator(progress: value, size: size * 0.58),
     );
   }
-}
-
-class _PixelFillMouseFrame extends StatelessWidget {
-  const _PixelFillMouseFrame({required this.progress, required this.size});
-
-  final double progress;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) => Semantics(
-    label: 'MouseKeeper loading ${(progress * 100).round()} percent',
-    child: SizedBox.square(
-      dimension: size,
-      child: Stack(
-        alignment: Alignment.bottomCenter,
-        children: [
-          Opacity(opacity: 0.20, child: _mouseImage()),
-          ClipRect(
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              heightFactor: progress,
-              child: _mouseImage(),
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-
-  Widget _mouseImage() => Image.asset(
-    mousekeeperStandAsset,
-    package: mousekeeperMascotPackage,
-    width: size,
-    height: size,
-    fit: BoxFit.contain,
-    filterQuality: FilterQuality.none,
-  );
 }
 
 class PairingGateErrorPage extends StatelessWidget {

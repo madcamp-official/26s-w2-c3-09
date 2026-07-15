@@ -5,6 +5,7 @@ import 'features/auth/connection_gate_page.dart';
 import 'features/auth/login_page.dart';
 import 'core/sync/realtime_controller.dart';
 import 'core/theme/pixel_theme.dart';
+import 'core/widgets/cheese_loading.dart';
 
 final mousekeeperScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 
@@ -33,7 +34,7 @@ class MouseKeeperApp extends ConsumerWidget {
             data: (user) =>
                 user == null ? const LoginPage() : const ConnectionGatePage(),
             loading: () => const Scaffold(
-              body: Center(child: CircularProgressIndicator()),
+              body: CheeseLoadingView(message: '로그인 상태를 확인하는 중입니다'),
             ),
             error: (error, _) =>
                 Scaffold(body: Center(child: Text('인증 상태 오류: $error'))),

@@ -7,6 +7,7 @@ import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../../core/notifications/push_notifications.dart';
 import '../../core/sync/realtime_controller.dart';
+import '../../core/widgets/cheese_loading.dart';
 import '../auth/connection_gate_controller.dart';
 import '../chat/chat_page.dart';
 import '../files/files_page.dart';
@@ -14,7 +15,7 @@ import '../settings/settings_page.dart';
 import 'home_controller.dart';
 
 const maxManagedFolderCount = 5;
-const _mouseMoveDuration = Duration(milliseconds: 720);
+const _mouseMoveDuration = Duration(milliseconds: 1440);
 const _mouseMoveCurve = Curves.easeInOutCubic;
 const _mouseDisplaySize = 263.0;
 const _mouseFixedYAlignment = 0.22;
@@ -177,7 +178,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         loading: () => const _HomeStage(
           backgroundAsset: null,
           mouseAlignment: Offset.zero,
-          child: Center(child: CircularProgressIndicator()),
+          child: CheeseLoadingView(message: '관리 폴더를 불러오는 중입니다'),
         ),
         error: (error, _) => _HomeStage(
           backgroundAsset: null,
@@ -714,7 +715,7 @@ class _MouseSpeechBubble extends StatelessWidget {
               ),
             ),
             _SpeechBubbleStage.missingFolder => Text(
-              '파일을 연결해 주세요!',
+              '폴더를 연결해 주세요!',
               key: const ValueKey('missing-folder-bubble-message'),
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 color: const Color(0xFF294B60),
@@ -856,7 +857,7 @@ class PushNotificationStatusCard extends StatelessWidget {
       child: ListTile(
         leading: SizedBox.square(
           dimension: 20,
-          child: CircularProgressIndicator(strokeWidth: 2),
+          child: CheeseLoadingIndicator(size: 20),
         ),
         title: Text('알림 연결 중'),
       ),

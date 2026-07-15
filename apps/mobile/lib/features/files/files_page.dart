@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/files/verified_download.dart';
 import '../../core/network/api_client.dart';
 import '../../core/sync/realtime_controller.dart';
+import '../../core/widgets/cheese_loading.dart';
 import '../auth/connection_gate_controller.dart';
 
 const _pixelInk = Color(0xFF30251F);
@@ -1022,167 +1023,178 @@ class _FilesPageState extends ConsumerState<FilesPage> {
           style: const TextStyle(fontWeight: FontWeight.w900),
         ),
       ),
-      body: Column(
-        children: [
-          if (_busy) LinearProgressIndicator(value: _downloadProgress),
-          if (_activeTransferId != null && _downloadProgress == null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Transfer status: ${_activeTransferStatus ?? 'REQUESTED'}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextField(
-                    key: const ValueKey('file-search-field'),
-                    controller: _searchController,
-                    onChanged: _onSearchChanged,
-                    textInputAction: TextInputAction.search,
-                    decoration: InputDecoration(
-                      labelText: '파일·폴더 이름 검색',
-                      hintText: '2자 이상 입력',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _searchQuery.isEmpty
-                          ? null
-                          : IconButton(
-                              tooltip: '검색 지우기',
-                              onPressed: () {
-                                _searchController.clear();
-                                _onSearchChanged('');
-                              },
-                              icon: const Icon(Icons.clear),
-                            ),
-                      filled: true,
-                      fillColor: _pixelPaper,
-                      border: const OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                        borderSide: BorderSide(color: _pixelInk, width: 2),
-                      ),
-                    ),
+      body: CheeseLoadingOverlay(
+        loading: _busy,
+        progress: _downloadProgress,
+        message: _transferLoading
+            ? '파일을 안전하게 가져오는 중입니다'
+            : '데스크탑의 폴더 응답을 기다리는 중입니다',
+        child: Column(
+          children: [
+            if (_busy) LinearProgressIndicator(value: _downloadProgress),
+            if (_activeTransferId != null && _downloadProgress == null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Transfer status: ${_activeTransferStatus ?? 'REQUESTED'}',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 142,
-                  child: DropdownButtonFormField<String>(
-                    key: const ValueKey('file-search-scope'),
-                    initialValue: _searchScope,
-                    decoration: const InputDecoration(
-                      labelText: '검색 범위',
-                      filled: true,
-                      fillColor: _pixelPaper,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.zero,
-                        borderSide: BorderSide(color: _pixelInk, width: 2),
-                      ),
-                    ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: fileSearchScopeDirectory,
-                        child: Text('현재 폴더'),
-                      ),
-                      DropdownMenuItem(
-                        value: fileSearchScopeManagedRoot,
-                        child: Text('전체 폴더'),
-                      ),
-                    ],
-                    onChanged: _browseLoading ? null : _changeSearchScope,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (_searchQuery.isNotEmpty && !_searchActive)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  fileSearchQueryLength(_searchQuery) < fileSearchQueryMinLength
-                      ? '검색어를 2자 이상 입력해 주세요.'
-                      : '검색어를 100자 이하로 입력해 주세요.',
-                ),
               ),
-            ),
-          FileBreadcrumb(
-            relativeDirectory: _relativeDirectory,
-            enabled: !_busy,
-            onSelected: _openBreadcrumb,
-          ),
-          if (_directoryState.generation != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '목록 버전: ${_directoryState.generation}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            ),
-          if (_directoryState.isStale)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.sync_problem_outlined, size: 16),
-                  const SizedBox(width: 6),
-                  const Expanded(
-                    child: Text('파일 목록이 바뀌었을 수 있어요. 필요하면 새로고침하세요.'),
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('file-search-field'),
+                      controller: _searchController,
+                      onChanged: _onSearchChanged,
+                      textInputAction: TextInputAction.search,
+                      decoration: InputDecoration(
+                        labelText: '파일·폴더 이름 검색',
+                        hintText: '2자 이상 입력',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: '검색 지우기',
+                                onPressed: () {
+                                  _searchController.clear();
+                                  _onSearchChanged('');
+                                },
+                                icon: const Icon(Icons.clear),
+                              ),
+                        filled: true,
+                        fillColor: _pixelPaper,
+                        border: const OutlineInputBorder(
+                          borderRadius: BorderRadius.zero,
+                          borderSide: BorderSide(color: _pixelInk, width: 2),
+                        ),
+                      ),
+                    ),
                   ),
-                  TextButton(
-                    onPressed: _busy ? null : () => _browse(),
-                    child: const Text('새로고침'),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 142,
+                    child: DropdownButtonFormField<String>(
+                      key: const ValueKey('file-search-scope'),
+                      initialValue: _searchScope,
+                      decoration: const InputDecoration(
+                        labelText: '검색 범위',
+                        filled: true,
+                        fillColor: _pixelPaper,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.zero,
+                          borderSide: BorderSide(color: _pixelInk, width: 2),
+                        ),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: fileSearchScopeDirectory,
+                          child: Text('현재 폴더'),
+                        ),
+                        DropdownMenuItem(
+                          value: fileSearchScopeManagedRoot,
+                          child: Text('전체 폴더'),
+                        ),
+                      ],
+                      onChanged: _browseLoading ? null : _changeSearchScope,
+                    ),
                   ),
                 ],
               ),
             ),
-          if (_error != null)
-            MaterialBanner(
-              content: Text(fileOperationErrorMessage(_error!)),
-              leading: const Icon(Icons.cloud_off_outlined),
-              actions: [
-                TextButton(
-                  onPressed: _busy
-                      ? null
-                      : fileOperationErrorCode(_error!) == 'ROOM_REMOVED'
-                      ? () => Navigator.of(
-                          context,
-                        ).popUntil((route) => route.isFirst)
-                      : () => _browse(),
+            if (_searchQuery.isNotEmpty && !_searchActive)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
+                child: Align(
+                  alignment: Alignment.centerLeft,
                   child: Text(
-                    fileOperationErrorCode(_error!) == 'ROOM_REMOVED'
-                        ? '닫기'
-                        : '다시 시도',
+                    fileSearchQueryLength(_searchQuery) <
+                            fileSearchQueryMinLength
+                        ? '검색어를 2자 이상 입력해 주세요.'
+                        : '검색어를 100자 이하로 입력해 주세요.',
                   ),
                 ),
-              ],
-            ),
-          if (_activeTransferId != null)
-            ListTile(
-              leading: const Icon(Icons.downloading_outlined),
-              title: const Text('파일을 안전하게 가져오는 중'),
-              subtitle: Text(
-                _downloadProgress == null
-                    ? 'PC 응답 또는 업로드 대기 중'
-                    : '${(_downloadProgress! * 100).round()}% 다운로드됨',
               ),
-              trailing: TextButton(
-                onPressed: _transferCancelled ? null : _cancelTransfer,
-                child: const Text('취소'),
-              ),
+            FileBreadcrumb(
+              relativeDirectory: _relativeDirectory,
+              enabled: !_busy,
+              onSelected: _openBreadcrumb,
             ),
-          Expanded(child: _content()),
-        ],
+            if (_directoryState.generation != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '목록 버전: ${_directoryState.generation}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ),
+            if (_directoryState.isStale)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: Row(
+                  children: [
+                    const Icon(Icons.sync_problem_outlined, size: 16),
+                    const SizedBox(width: 6),
+                    const Expanded(
+                      child: Text('파일 목록이 바뀌었을 수 있어요. 필요하면 새로고침하세요.'),
+                    ),
+                    TextButton(
+                      onPressed: _busy ? null : () => _browse(),
+                      child: const Text('새로고침'),
+                    ),
+                  ],
+                ),
+              ),
+            if (_error != null)
+              MaterialBanner(
+                content: Text(fileOperationErrorMessage(_error!)),
+                leading: const Icon(Icons.cloud_off_outlined),
+                actions: [
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : fileOperationErrorCode(_error!) == 'ROOM_REMOVED'
+                        ? () => Navigator.of(
+                            context,
+                          ).popUntil((route) => route.isFirst)
+                        : () => _browse(),
+                    child: Text(
+                      fileOperationErrorCode(_error!) == 'ROOM_REMOVED'
+                          ? '닫기'
+                          : '다시 시도',
+                    ),
+                  ),
+                ],
+              ),
+            if (_activeTransferId != null)
+              ListTile(
+                leading: const Icon(Icons.downloading_outlined),
+                title: const Text('파일을 안전하게 가져오는 중'),
+                subtitle: Text(
+                  _downloadProgress == null
+                      ? 'PC 응답 또는 업로드 대기 중'
+                      : '${(_downloadProgress! * 100).round()}% 다운로드됨',
+                ),
+                trailing: TextButton(
+                  onPressed: _transferCancelled ? null : _cancelTransfer,
+                  child: const Text('취소'),
+                ),
+              ),
+            Expanded(child: _content()),
+          ],
+        ),
       ),
     );
   }

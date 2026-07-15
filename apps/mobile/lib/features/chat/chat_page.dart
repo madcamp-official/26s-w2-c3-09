@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
 import '../../core/sync/realtime_controller.dart';
+import '../../core/widgets/cheese_loading.dart';
 import '../proposals/proposal_page.dart';
 
 abstract interface class ChatGateway {
@@ -1312,64 +1313,78 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final unreadCount = chatQuickCount(_quickView, 'unreadCount');
     return Scaffold(
       backgroundColor: _desktopChatBlue,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _DesktopChatHeader(
-              roomName: widget.roomName ?? '관리 폴더',
-              sessionTitle: selectedSession == null
-                  ? '서버 채팅 세션 연결 중'
-                  : chatSessionTitle(selectedSession),
-              connected: !_loading && _error == null,
-              onBack: () => Navigator.of(context).maybePop(),
-            ),
-            _SessionBar(
-              sessions: _conversation.sessions,
-              selectedSessionId: _conversation.selectedSessionId,
-              pendingApprovalSelected: selectedIsPendingApproval,
-              creating: _creating,
-              renaming: _renaming,
-              deleting: _deleting,
-              onCreate: _createSession,
-              onRename: _renameSelectedSession,
-              onDelete: _deleteSelectedSession,
-              onSelected: (id) {
-                if (id != _conversation.selectedSessionId) {
-                  unawaited(_selectSession(id));
-                }
-              },
-            ),
-            if (!selectedIsPendingApproval)
-              _DesktopQuickActionBar(
-                prompts: quickPrompts,
-                cleanupBusy: _quickCleanupBusy,
-                onQuickCleanup: () => unawaited(_runQuickCleanup()),
-                onUsePrompt: _useQuickPrompt,
+      body: CheeseLoadingOverlay(
+        loading:
+            !_loading &&
+            (_sending ||
+                _loadingMore ||
+                _creating ||
+                _renaming ||
+                _deleting ||
+                _quickCleanupBusy ||
+                _draftingIds.isNotEmpty),
+        message: _sending ? '답을 만들고 있어요!' : '요청을 처리하는 중입니다',
+        child: SafeArea(
+          child: Column(
+            children: [
+              _DesktopChatHeader(
+                roomName: widget.roomName ?? '관리 폴더',
+                sessionTitle: selectedSession == null
+                    ? '서버 채팅 세션 연결 중'
+                    : chatSessionTitle(selectedSession),
+                connected: !_loading && _error == null,
+                onBack: () => Navigator.of(context).maybePop(),
               ),
-            if (!selectedIsPendingApproval &&
-                (pendingActionCount > 0 || unreadCount > 0))
-              _DesktopQuickMeta(
-                pendingActionCount: pendingActionCount,
-                unreadCount: unreadCount,
+              _SessionBar(
+                sessions: _conversation.sessions,
+                selectedSessionId: _conversation.selectedSessionId,
+                pendingApprovalSelected: selectedIsPendingApproval,
+                creating: _creating,
+                renaming: _renaming,
+                deleting: _deleting,
+                onCreate: _createSession,
+                onRename: _renameSelectedSession,
+                onDelete: _deleteSelectedSession,
+                onSelected: (id) {
+                  if (id != _conversation.selectedSessionId) {
+                    unawaited(_selectSession(id));
+                  }
+                },
               ),
-            Expanded(child: _buildBody()),
-            _DesktopChatComposer(
-              controller: input,
-              focusNode: _inputFocus,
-              enabled:
-                  _conversation.selectedSessionId != null &&
-                  !selectedIsPendingApproval,
-              sending: _sending,
-              onSend: () => unawaited(send()),
-            ),
-          ],
+              if (!selectedIsPendingApproval)
+                _DesktopQuickActionBar(
+                  prompts: quickPrompts,
+                  cleanupBusy: _quickCleanupBusy,
+                  onQuickCleanup: () => unawaited(_runQuickCleanup()),
+                  onUsePrompt: _useQuickPrompt,
+                ),
+              if (!selectedIsPendingApproval &&
+                  (pendingActionCount > 0 || unreadCount > 0))
+                _DesktopQuickMeta(
+                  pendingActionCount: pendingActionCount,
+                  unreadCount: unreadCount,
+                ),
+              Expanded(child: _buildBody()),
+              _DesktopChatComposer(
+                controller: input,
+                focusNode: _inputFocus,
+                enabled:
+                    _conversation.selectedSessionId != null &&
+                    !selectedIsPendingApproval,
+                sending: _sending,
+                onSend: () => unawaited(send()),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) {
+      return const CheeseLoadingView(message: '대화를 불러오는 중입니다');
+    }
     if (_error != null) {
       return Center(
         child: Column(
@@ -1434,7 +1449,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     icon: _loadingMore
                         ? const SizedBox.square(
                             dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: CheeseLoadingIndicator(size: 16),
                           )
                         : const Icon(Icons.expand_more),
                     label: const Text('다음 메시지 더 보기'),
@@ -1757,7 +1772,7 @@ class _DesktopQuickButton extends StatelessWidget {
     child: busy
         ? const SizedBox.square(
             dimension: 15,
-            child: CircularProgressIndicator(strokeWidth: 2),
+            child: CheeseLoadingIndicator(size: 15),
           )
         : Text(label),
   );
@@ -2041,7 +2056,7 @@ class _SessionBar extends StatelessWidget {
             icon: creating
                 ? const SizedBox.square(
                     dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CheeseLoadingIndicator(size: 20),
                   )
                 : const Icon(Icons.add_comment_outlined, size: 20),
             color: _desktopChatInk,
@@ -2056,7 +2071,7 @@ class _SessionBar extends StatelessWidget {
             icon: renaming
                 ? const SizedBox.square(
                     dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CheeseLoadingIndicator(size: 20),
                   )
                 : const Icon(Icons.edit_outlined, size: 20),
             color: _desktopChatInk,
@@ -2071,7 +2086,7 @@ class _SessionBar extends StatelessWidget {
             icon: deleting
                 ? const SizedBox.square(
                     dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
+                    child: CheeseLoadingIndicator(size: 20),
                   )
                 : const Icon(Icons.delete_outline, size: 20),
             color: _desktopChatInk,
@@ -2169,10 +2184,7 @@ class _ChatBubble extends StatelessWidget {
                       child: draftBusy
                           ? const SizedBox.square(
                               dimension: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
+                              child: CheeseLoadingIndicator(size: 16),
                             )
                           : const Text('승인'),
                     ),

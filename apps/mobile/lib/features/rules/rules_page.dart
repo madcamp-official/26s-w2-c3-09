@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/network/api_client.dart';
+import '../../core/widgets/cheese_loading.dart';
 
 const _pixelInk = Color(0xFF30251F);
 const _pixelPaper = Color(0xFFFFF4D6);
@@ -802,7 +803,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
           icon: _refreshing
               ? const SizedBox.square(
                   dimension: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: CheeseLoadingIndicator(size: 20),
                 )
               : const Icon(Icons.refresh),
         ),
@@ -813,11 +814,19 @@ class _RulesPageState extends ConsumerState<RulesPage> {
       icon: const Icon(Icons.add),
       label: const Text('규칙 추가'),
     ),
-    body: _buildBody(),
+    body: CheeseLoadingOverlay(
+      loading:
+          !_loading &&
+          (_refreshing || _drafting || _updatingRuleIds.isNotEmpty),
+      message: _drafting ? 'AI가 규칙 초안을 만드는 중입니다' : '규칙을 반영하는 중입니다',
+      child: _buildBody(),
+    ),
   );
 
   Widget _buildBody() {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) {
+      return const CheeseLoadingView(message: '정리 규칙을 불러오는 중입니다');
+    }
     if (_error != null) {
       return Center(
         child: Column(
@@ -924,7 +933,7 @@ class _RulesPageState extends ConsumerState<RulesPage> {
                 icon: _drafting
                     ? const SizedBox.square(
                         dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: CheeseLoadingIndicator(size: 16),
                       )
                     : const Icon(Icons.auto_awesome),
                 label: const Text('Draft with AI'),
