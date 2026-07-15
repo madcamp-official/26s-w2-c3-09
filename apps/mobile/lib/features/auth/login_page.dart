@@ -31,9 +31,14 @@ class LoginPage extends ConsumerWidget {
                       height: 180,
                     ),
                     const SizedBox(height: 16),
-                    Text(
-                      'MOUSEKEEPER',
-                      style: Theme.of(context).textTheme.headlineMedium,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        'MOUSEKEEPER',
+                        maxLines: 1,
+                        softWrap: false,
+                        style: Theme.of(context).textTheme.headlineMedium,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     const Text('PC의 폴더를 안전하게 돌보는 집쥐인'),

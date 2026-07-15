@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/notifications/push_notifications.dart';
+import '../../core/theme/pixel_theme.dart';
 import '../../core/widgets/cheese_loading.dart';
 import '../auth/auth_controller.dart';
 import '../auth/connection_gate_controller.dart';
@@ -33,12 +34,18 @@ class MouseKeeperSettingsPage extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: _ink,
         foregroundColor: _paper,
-        title: const Text(
-          'MOUSEKEEPER 설정',
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -0.4,
+        title: const FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'MOUSEKEEPER 설정',
+            maxLines: 1,
+            softWrap: false,
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+              letterSpacing: -0.4,
+            ),
           ),
         ),
       ),
@@ -195,10 +202,22 @@ class MouseKeeperSettingsPage extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('PC 페어링을 끊을까요?'),
+        title: const Text(
+          'PC 페어링을 끊을까요?',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontFamily: mouseKeeperFontFamily,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         content: Text(
           '$deviceName 연결과 관리 폴더 표시가 해제됩니다. '
           'PC의 원본 폴더와 파일은 삭제되지 않습니다.',
+          style: const TextStyle(
+            fontFamily: mouseKeeperFontFamily,
+            fontWeight: FontWeight.w400,
+          ),
         ),
         actions: [
           TextButton(
@@ -270,7 +289,7 @@ class _SettingsHeading extends StatelessWidget {
         eyebrow,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
           color: const Color(0xFF9A6249),
-          fontWeight: FontWeight.w900,
+          fontWeight: FontWeight.w700,
           letterSpacing: 1.2,
         ),
       ),
@@ -279,13 +298,18 @@ class _SettingsHeading extends StatelessWidget {
         title,
         style: Theme.of(
           context,
-        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
+        ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
       const SizedBox(height: 4),
       Text(
         description,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
           color: const Color(0xFF77675D),
+          fontWeight: FontWeight.w400,
           height: 1.4,
         ),
       ),
@@ -344,13 +368,21 @@ class _SettingsInfoTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
             const SizedBox(height: 2),
             Text(
               subtitle,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: const Color(0xFF77675D)),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: const Color(0xFF77675D),
+                fontWeight: FontWeight.w400,
+              ),
             ),
           ],
         ),
@@ -388,9 +420,12 @@ class _EmptySettingsText extends StatelessWidget {
     padding: const EdgeInsets.symmetric(vertical: 8),
     child: Text(
       text,
-      style: Theme.of(
-        context,
-      ).textTheme.bodyMedium?.copyWith(color: const Color(0xFF77675D)),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+        color: const Color(0xFF77675D),
+        fontWeight: FontWeight.w400,
+      ),
     ),
   );
 }

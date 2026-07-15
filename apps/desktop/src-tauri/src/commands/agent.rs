@@ -359,9 +359,7 @@ async fn approve_agent_command_draft_and_execute_impl(
         process_commands(runtime, roots, outbox, vec![command.clone()]).await?
     };
     if !ensure_chat_command_submitted(&command_report, &command.command_id)? {
-        return Err(
-            "NO_PROPOSAL_ITEMS: already clean; no proposal items were found".to_string(),
-        );
+        return Err("NO_PROPOSAL_ITEMS: already clean; no proposal items were found".to_string());
     }
     let proposal_outbox_report = crate::outbox_processor::flush_outbox(runtime, outbox).await?;
     let proposal = proposal_for_command(runtime, room_id, command.command_id.clone()).await?;
@@ -421,9 +419,7 @@ async fn confirm_agent_rule_draft_impl(
         .await
         .map_err(|error| error.to_string())?;
     if confirmation.rule.room_id != room_id {
-        return Err(
-            "RULE_ROOM_MISMATCH: confirmed rule belongs to a different room".to_string(),
-        );
+        return Err("RULE_ROOM_MISMATCH: confirmed rule belongs to a different room".to_string());
     }
     apply_server_rule_to_local_root(roots, &confirmation.rule)?;
     Ok(confirmation)
@@ -598,8 +594,7 @@ fn ensure_chat_command_submitted(
         .ok_or_else(|| {
             "COMMAND_PROCESSING_MISSING: confirmed command was not processed".to_string()
         })?;
-    if result.status == CommandProcessingStatus::SubmittedProposal
-    {
+    if result.status == CommandProcessingStatus::SubmittedProposal {
         return Ok(true);
     }
     if result.status == CommandProcessingStatus::NoProposal {
@@ -1007,7 +1002,10 @@ pub async fn apply_rule_created_event(
         .list_rules(room_id.to_string())
         .await
         .map_err(|error| error.to_string())?;
-    let Some(rule) = rules.into_iter().find(|candidate| candidate.rule_id == rule_id) else {
+    let Some(rule) = rules
+        .into_iter()
+        .find(|candidate| candidate.rule_id == rule_id)
+    else {
         return Ok(false);
     };
     apply_server_rule_to_local_root(roots, &rule)?;

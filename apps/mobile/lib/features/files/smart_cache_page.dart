@@ -354,12 +354,18 @@ class CachedFileTile extends StatelessWidget {
       leading: isDownloading
           ? CheeseLoadingIndicator(progress: progress, size: 28)
           : const Icon(Icons.offline_pin),
-      title: Text(file['sourceRelativePath'] as String),
+      title: Text(
+        file['sourceRelativePath'] as String,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
       subtitle: Text(
         '${_availabilityLabel(file['availabilityStatus'] as String?)} · '
         '${_freshnessLabel(file['freshnessStatus'] as String?)}\n'
         '캐시 시각: ${file['cachedAt']}\n'
         '원본 마지막 확인: ${file['lastVerifiedAt']}',
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
       ),
       trailing: IconButton(
         tooltip: '다운로드',

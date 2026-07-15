@@ -1647,8 +1647,16 @@ class _PendingApprovalRoom extends StatelessWidget {
             Card(
               child: ListTile(
                 leading: const Icon(Icons.rule_folder_outlined),
-                title: Text(_proposalTitle(proposal)),
-                subtitle: Text(_proposalSubtitle(proposal)),
+                title: Text(
+                  _proposalTitle(proposal),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  _proposalSubtitle(proposal),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: proposal['id'] is String
                     ? () => onOpenProposal(proposal['id'] as String)

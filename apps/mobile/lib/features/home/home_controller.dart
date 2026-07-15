@@ -197,6 +197,38 @@ HomeData? reduceHomeDataForRealtimeUpdate({
         return current;
       }
       return current.copyWith(devices: devices, rooms: rooms);
+    case RealtimeHomeUpdateKind.roomCreated:
+      final roomId = update.roomId;
+      final room = update.room;
+      if (roomId == null || room == null || !activeRoomIds.contains(roomId)) {
+        return current;
+      }
+      final nextRoom = <String, dynamic>{
+        'pendingProposalCount': 0,
+        'latestExecutionStatus': null,
+        'cleanlinessScore': null,
+        'cleanlinessFormulaVersion': null,
+        'cleanlinessCalculatedAt': null,
+        ...room,
+      };
+      var changed = false;
+      var replaced = false;
+      final rooms = current.rooms
+          .map((existing) {
+            if (existing['id'] != roomId) return existing;
+            replaced = true;
+            final merged = {...existing, ...nextRoom};
+            changed = changed || !_mapShallowEquals(existing, merged);
+            return merged;
+          })
+          .toList(growable: true);
+      if (!replaced) {
+        rooms.add(nextRoom);
+        changed = true;
+      }
+      return changed
+          ? current.copyWith(rooms: rooms.toList(growable: false))
+          : current;
     case RealtimeHomeUpdateKind.roomRemoved:
       final roomId = update.roomId;
       if (roomId == null) return current;
@@ -420,6 +452,9 @@ class HomeController extends AsyncNotifier<HomeData> {
         await reload(preserveCurrentOnError: true);
       }
       return;
+    }
+    if (update.kind == RealtimeHomeUpdateKind.roomCreated) {
+      await ref.read(connectionGateControllerProvider.notifier).reconcile();
     }
     final gate = ref.read(connectionGateControllerProvider).asData?.value;
     final patched = reduceHomeDataForRealtimeUpdate(

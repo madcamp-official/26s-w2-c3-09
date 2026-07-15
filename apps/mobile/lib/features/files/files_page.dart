@@ -1020,7 +1020,9 @@ class _FilesPageState extends ConsumerState<FilesPage> {
         foregroundColor: _pixelPaper,
         title: Text(
           '${widget.roomName ?? '연결된 폴더'} 파일',
-          style: const TextStyle(fontWeight: FontWeight.w900),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w700),
         ),
       ),
       body: CheeseLoadingOverlay(
@@ -1214,7 +1216,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
     if (_directoryState.isEmpty) {
       return Center(
-        child: Text(_searchActive ? '검색 결과가 없습니다.' : '이 폴더에 표시할 파일이 없습니다.'),
+        child: Text(_searchActive ? '검색 결과가 없습니다.' : '폴더가 비어 있습니다.'),
       );
     }
     return RefreshIndicator(
@@ -1233,11 +1235,17 @@ class _FilesPageState extends ConsumerState<FilesPage> {
                     ? Icons.insert_drive_file_outlined
                     : Icons.folder_outlined,
               ),
-              title: Text(entry['name'] as String),
+              title: Text(
+                entry['name'] as String,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               subtitle: Text(
                 '${_searchActive ? '${entry['relativePath']}\n' : ''}'
                 '${formatFileSize(entry['sizeBytes'])} · '
                 '${formatFileModifiedAt(entry['modifiedAt'])}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
               trailing: isFile
                   ? IconButton(

@@ -527,6 +527,15 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
       } else {
         await reconcile();
       }
+      return;
+    }
+    if (event.eventType == 'room.created') {
+      final room = event.room;
+      if (room != null) {
+        await _upsertRoom(room);
+      } else {
+        await reconcile();
+      }
     }
   }
 
@@ -552,6 +561,33 @@ class ConnectionGateController extends AsyncNotifier<ConnectionGateData> {
         devices: devices,
         operations: nextOperations,
       );
+      await _replaceAuthoritativeCache(next);
+      state = AsyncData(next);
+    });
+  }
+
+  Future<void> _upsertRoom(Map<String, dynamic> room) async {
+    if (!isActiveConnectionItem(room)) return;
+    final roomId = room['id'];
+    final desktopDeviceId = room['desktopDeviceId'];
+    if (roomId is! String || desktopDeviceId is! String) return;
+    _stateRevision++;
+    await _serializeMutation(() async {
+      final current = state.asData?.value;
+      if (current == null ||
+          !current.devices.any((device) => device['id'] == desktopDeviceId)) {
+        return;
+      }
+      final sanitizedRoom = Map<String, dynamic>.from(room);
+      final rooms = <Map<String, dynamic>>[
+        for (final item in current.rooms)
+          if (item['id'] != roomId) item,
+        sanitizedRoom,
+      ];
+      final nextOperations = Map<String, DisconnectOperation>.from(
+        current.operations,
+      )..remove(_operationKey(DisconnectKind.room, roomId));
+      final next = current.copyWith(rooms: rooms, operations: nextOperations);
       await _replaceAuthoritativeCache(next);
       state = AsyncData(next);
     });

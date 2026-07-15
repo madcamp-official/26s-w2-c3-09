@@ -545,7 +545,7 @@ class _RoomPageState extends ConsumerState<RoomPage> {
         backgroundColor: _pixelGreen,
         foregroundColor: const Color(0xFFFFF4D1),
         shape: const Border(bottom: BorderSide(color: _pixelInk, width: 3)),
-        title: Text(roomName),
+        title: Text(roomName, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             tooltip: '파일 목록',
@@ -867,8 +867,16 @@ class _HistoryTimeline extends StatelessWidget {
           _PixelCard(
             child: ListTile(
               leading: Icon(entry.icon),
-              title: Text(entry.title),
-              subtitle: Text(entry.subtitle),
+              title: Text(
+                entry.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                entry.subtitle,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
               trailing: entry.proposalId != null
                   ? const Icon(Icons.chevron_right)
                   : null,

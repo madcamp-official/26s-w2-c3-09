@@ -889,8 +889,16 @@ class _RulesPageState extends ConsumerState<RulesPage> {
               ),
               value: rule['enabled'] == true,
               onChanged: updating ? null : (value) => _setEnabled(rule, value),
-              title: Text(rule['name'] as String? ?? '규칙'),
-              subtitle: Text('${_summary(rule)} · 버전 ${rule['version']}'),
+              title: Text(
+                rule['name'] as String? ?? '규칙',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                '${_summary(rule)} · 버전 ${rule['version']}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           );
         },

@@ -63,6 +63,7 @@ pub fn show_overlay_window(
             .to_string()
     })?;
     let _ = window.set_focus();
+    // Keep chat ready for the character tap without allowing it to steal focus at startup.
     match app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
         Some(chat_window) => {
             let _ = chat_window.hide();

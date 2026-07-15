@@ -14,6 +14,7 @@ import {
   characterStateSchema,
   devicePairedEventPayloadSchema,
   deviceRevokedEventPayloadSchema,
+  roomCreatedEventPayloadSchema,
   roomRemovedEventPayloadSchema,
   MOUSEKEEPER_CLEANLINESS_FORMULA_VERSION,
   chatMessagesQuerySchema,
@@ -710,6 +711,34 @@ describe("v1.4 connection and browse contracts", () => {
       roomRemovedEventPayloadSchema.parse({ roomId, status: "REMOVED" }),
     ).toEqual({ roomId, status: "REMOVED" });
     expect(
+      roomCreatedEventPayloadSchema.parse({
+        roomId,
+        status: "ACTIVE",
+        room: {
+          id: roomId,
+          desktopDeviceId: deviceId,
+          name: "Reports",
+          rootAlias: "reports",
+          status: "ACTIVE",
+          createdAt: timestamp,
+        },
+      }).room.name,
+    ).toBe("Reports");
+    expect(
+      roomCreatedEventPayloadSchema.safeParse({
+        roomId,
+        status: "ACTIVE",
+        room: {
+          id: deviceId,
+          desktopDeviceId: deviceId,
+          name: "Wrong room",
+          rootAlias: "wrong",
+          status: "ACTIVE",
+          createdAt: timestamp,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
       deviceRevokedEventPayloadSchema.safeParse({
         deviceId,
         status: "ACTIVE",
@@ -1093,7 +1122,8 @@ describe("chat session contracts", () => {
       createdAt: "2026-07-13T01:00:00.000Z",
       updatedAt: "2026-07-13T01:02:03.000Z",
       deletedAt: null,
-      messagePreview: "PC가 관리 루트를 분석해서 정리 제안을 만들도록 요청합니다.",
+      messagePreview:
+        "PC가 관리 루트를 분석해서 정리 제안을 만들도록 요청합니다.",
       unreadCount: 1,
       pendingActionCount: 1,
       lastReadMessageId: null,
@@ -1142,9 +1172,7 @@ describe("chat session contracts", () => {
     };
 
     expect(quickCleanupSchema.parse({})).toEqual({});
-    expect(quickCleanupSchema.safeParse({ mode: "force" }).success).toBe(
-      false,
-    );
+    expect(quickCleanupSchema.safeParse({ mode: "force" }).success).toBe(false);
     expect(quickCleanupResponseSchema.parse(response)).toEqual(response);
   });
 

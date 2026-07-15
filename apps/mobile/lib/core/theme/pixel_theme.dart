@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+const mouseKeeperFontFamily = 'Galmuri11';
+
 abstract final class PixelColors {
   static const ink = Color(0xFF2D211C);
   static const paper = Color(0xFFFFF8E8);
@@ -28,18 +30,19 @@ abstract final class PixelTheme {
       useMaterial3: true,
       colorScheme: scheme,
       scaffoldBackgroundColor: PixelColors.canvas,
-      fontFamily: 'Galmuri11',
+      fontFamily: mouseKeeperFontFamily,
       textTheme: const TextTheme(
-        displaySmall: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1),
+        displaySmall: TextStyle(fontWeight: FontWeight.w700, letterSpacing: 1),
         headlineMedium: TextStyle(
-          fontWeight: FontWeight.w900,
+          fontWeight: FontWeight.w700,
           letterSpacing: .5,
         ),
-        titleLarge: TextStyle(fontWeight: FontWeight.w900),
-        titleMedium: TextStyle(fontWeight: FontWeight.w800),
-        bodyLarge: TextStyle(fontWeight: FontWeight.w600, height: 1.4),
-        bodyMedium: TextStyle(fontWeight: FontWeight.w600, height: 1.4),
-        labelLarge: TextStyle(fontWeight: FontWeight.w900, letterSpacing: .5),
+        titleLarge: TextStyle(fontWeight: FontWeight.w700),
+        titleMedium: TextStyle(fontWeight: FontWeight.w700),
+        bodyLarge: TextStyle(fontWeight: FontWeight.w400, height: 1.4),
+        bodyMedium: TextStyle(fontWeight: FontWeight.w400, height: 1.4),
+        bodySmall: TextStyle(fontWeight: FontWeight.w400, height: 1.4),
+        labelLarge: TextStyle(fontWeight: FontWeight.w700, letterSpacing: .5),
       ).apply(bodyColor: PixelColors.ink, displayColor: PixelColors.ink),
       appBarTheme: const AppBarTheme(
         backgroundColor: PixelColors.canvas,
@@ -48,8 +51,8 @@ abstract final class PixelTheme {
         elevation: 0,
         titleTextStyle: TextStyle(
           color: PixelColors.ink,
-          fontFamily: 'Galmuri11',
-          fontWeight: FontWeight.w900,
+          fontFamily: mouseKeeperFontFamily,
+          fontWeight: FontWeight.w700,
           fontSize: 20,
           letterSpacing: 1,
         ),
@@ -63,6 +66,19 @@ abstract final class PixelTheme {
       dialogTheme: const DialogThemeData(
         backgroundColor: PixelColors.paper,
         shape: square,
+        titleTextStyle: TextStyle(
+          color: PixelColors.ink,
+          fontFamily: mouseKeeperFontFamily,
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+        ),
+        contentTextStyle: TextStyle(
+          color: PixelColors.ink,
+          fontFamily: mouseKeeperFontFamily,
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+          height: 1.4,
+        ),
       ),
       inputDecorationTheme: const InputDecorationTheme(
         filled: true,
@@ -85,8 +101,8 @@ abstract final class PixelTheme {
           minimumSize: const Size(48, 52),
           shape: square,
           textStyle: const TextStyle(
-            fontFamily: 'Galmuri11',
-            fontWeight: FontWeight.w900,
+            fontFamily: mouseKeeperFontFamily,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),
@@ -97,8 +113,8 @@ abstract final class PixelTheme {
           side: const BorderSide(color: PixelColors.ink, width: 2),
           shape: square,
           textStyle: const TextStyle(
-            fontFamily: 'Galmuri11',
-            fontWeight: FontWeight.w900,
+            fontFamily: mouseKeeperFontFamily,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),
@@ -110,7 +126,7 @@ abstract final class PixelTheme {
         backgroundColor: PixelColors.ink,
         contentTextStyle: TextStyle(
           color: PixelColors.paper,
-          fontFamily: 'Galmuri11',
+          fontFamily: mouseKeeperFontFamily,
         ),
         shape: square,
         behavior: SnackBarBehavior.floating,

@@ -1157,23 +1157,20 @@ export function FileEnginePanel({
       {showRooms ? (
       <>
       <section className="panel root-register-panel">
-        <label htmlFor="root-path">root 폴더 경로</label>
+        <label htmlFor="root-path">선택한 root 폴더</label>
         <div className="input-row">
           <input
             id="root-path"
             value={pathInput}
-            onChange={(event) => setPathInput(event.target.value)}
+            readOnly
             placeholder={demoRootHint}
           />
           <button type="button" onClick={browseForRoot}>
             폴더 선택 및 등록
           </button>
-          <button type="button" onClick={() => void registerRoot()} disabled={!pathInput.trim()}>
-            등록
-          </button>
         </div>
         <p className="path-text">
-          방으로 사용할 root 폴더를 등록하고, 아래 목록에서 작업할 방을 선택합니다.
+          폴더를 선택하면 방으로 자동 등록됩니다. 아래 목록에서 작업할 방을 선택하세요.
         </p>
       </section>
 

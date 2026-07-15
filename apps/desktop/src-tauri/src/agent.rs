@@ -1013,7 +1013,11 @@ impl AgentRuntime {
         idempotency_key: String,
     ) -> Result<AgentRuleDraftConfirmation, AgentError> {
         validate_opaque_value("rule draft id", &draft_id, 200)?;
-        validate_opaque_value("rule draft confirmation idempotency key", &idempotency_key, 128)?;
+        validate_opaque_value(
+            "rule draft confirmation idempotency key",
+            &idempotency_key,
+            128,
+        )?;
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
             .send_json::<RuleDraftConfirmationResponse>(
@@ -2904,7 +2908,10 @@ fn validate_rule_draft_summary(
 ) -> Result<AgentRuleDraftSummary, AgentError> {
     if response.id.trim().is_empty()
         || response.status.trim().is_empty()
-        || response.rule_id.as_ref().is_some_and(|id| id.trim().is_empty())
+        || response
+            .rule_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
     {
         return Err(invalid_response_error(
             "rule draft summary failed response validation",

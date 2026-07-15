@@ -1764,7 +1764,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fails_contract_commands_that_are_not_wired_yet() {
+    async fn unwired_contract_commands_fail_without_faking_server_status_sync() {
         let runtime = AgentRuntime::default();
         let roots = ManagedRootStore::default();
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1820,11 +1820,16 @@ mod tests {
             .results
             .iter()
             .all(|result| result.status == CommandProcessingStatus::Failed));
+        // The unconfigured runtime cannot claim these commands on the server. Queuing a terminal
+        // status anyway would falsely imply that the server accepted the transition.
         let batch = outbox.pending_batch(10).expect("pending status rows");
-        assert_eq!(batch.len(), 3);
-        assert!(batch
+        assert!(batch.is_empty());
+        assert!(report
+            .results
             .iter()
-            .all(|item| item.kind == "command_status" && item.payload_json.contains("FAILED")));
+            .all(|result| result.message.as_deref().is_some_and(|message| {
+                message.contains("failed to claim command for failure reporting")
+            })));
     }
 
     #[test]
