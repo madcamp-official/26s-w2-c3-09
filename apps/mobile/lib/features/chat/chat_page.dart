@@ -588,6 +588,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   final Set<String> _draftingIds = {};
   final Set<String> _realtimeMessageIdsInFlight = {};
   bool _realtimeSessionRefreshInFlight = false;
+  Timer? _realtimeFallbackTimer;
   int _loadVersion = 0;
 
   ChatGateway get _gateway => widget.gateway ?? ref.read(chatGatewayProvider);
@@ -631,16 +632,44 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   void initState() {
     super.initState();
     unawaited(_loadInitial());
+    // Socket events are a latency optimization. Keep the open conversation
+    // live even when the app resumes from background or a websocket event was
+    // lost while reconnecting.
+    _realtimeFallbackTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      unawaited(_refreshVisibleConversationFromServer());
+    });
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _realtimeFallbackTimer?.cancel();
     _loadVersion++;
     input.dispose();
     _inputFocus.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshVisibleConversationFromServer() async {
+    final sessionId = _conversation.selectedSessionId;
+    if (_disposed || sessionId == null || _loading || _sending) return;
+    try {
+      final messages = await _gateway.listMessages(sessionId);
+      if (_disposed || sessionId != _conversation.selectedSessionId) return;
+      final merged = mergeChatMessages(_conversation.messages, messages);
+      if (identical(merged, _conversation.messages)) return;
+      setState(() {
+        _conversation = _conversation.copyWith(
+          messages: merged,
+          messageCursor: lastChatMessageId(merged),
+          clearMessageCursor: merged.isEmpty,
+          hasMoreMessages: messages.length == chatMessagePageSize,
+        );
+      });
+    } catch (_) {
+      // Realtime and the next periodic pass remain available as fallback.
+    }
   }
 
   Future<void> _loadInitial() async {

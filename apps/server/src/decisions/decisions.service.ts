@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { createDecisionSchema } from '@mousekeeper/contracts';
 import {
@@ -23,12 +24,14 @@ import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
 import { AffinityService } from '../affinity/affinity.service';
 import { canonicalJson } from '../common/canonical-json';
+import { ChatService } from '../chat/chat.service';
 @Injectable()
 export class DecisionsService {
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly sync: SyncService,
     private readonly affinity: AffinityService,
+    @Optional() private readonly chat?: ChatService,
   ) {}
   async create(
     userId: string,
@@ -169,6 +172,22 @@ export class DecisionsService {
           pendingProposalCount,
         }),
       });
+      if (owned.proposal.sessionId && this.chat) {
+        await this.chat.postSystemMessageIn(tx, {
+          userId,
+          roomId: owned.room.id,
+          sessionId: owned.proposal.sessionId,
+          messageType: 'DECISION',
+          content: approved ? 'Proposal approved.' : 'Proposal rejected.',
+          structuredPayload: {
+            decisionId: decision.id,
+            proposalId,
+            status: finalProposalStatus,
+            decisionType: decision.decisionType,
+          },
+          commandId: owned.proposal.commandId,
+        });
+      }
       await tx.insert(auditEvents).values({
         userId,
         deviceId: owned.room.desktopDeviceId,
