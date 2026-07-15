@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "character-overlay",
   "description": "Character and chat overlay permissions without file management or autostart controls",
-  "windows": ["character-overlay", "chat-overlay"],
+  "windows": ["character-overlay", "chat-overlay", "speech-bubble-overlay"],
   "permissions": [
     "core:default",
     "core:window:allow-outer-position",
