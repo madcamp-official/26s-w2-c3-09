@@ -1216,7 +1216,7 @@ class _FilesPageState extends ConsumerState<FilesPage> {
     }
     if (_directoryState.isEmpty) {
       return Center(
-        child: Text(_searchActive ? '검색 결과가 없습니다.' : '이 폴더에 표시할 파일이 없습니다.'),
+        child: Text(_searchActive ? '검색 결과가 없습니다.' : '폴더가 비어 있습니다.'),
       );
     }
     return RefreshIndicator(

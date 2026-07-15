@@ -7,11 +7,15 @@ import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../../core/notifications/push_notifications.dart';
 import '../../core/sync/realtime_controller.dart';
-import '../../core/theme/pixel_theme.dart';
 import '../../core/widgets/cheese_loading.dart';
 import '../auth/connection_gate_controller.dart';
 import '../chat/chat_page.dart';
+import '../feeding/feeding_interaction.dart';
+import '../files/files_page.dart';
+import '../games/mini_game_hub_page.dart';
+import '../navigation/home_bottom_navigation.dart';
 import '../settings/settings_page.dart';
+import '../wardrobe/mouse_wardrobe_page.dart';
 import 'home_controller.dart';
 
 const maxManagedFolderCount = 5;
@@ -118,9 +122,13 @@ class HomePage extends ConsumerStatefulWidget {
 
 class _HomePageState extends ConsumerState<HomePage> {
   late final HomeAuthoritativeReconcileLoop _reconcileLoop;
+  late final FeedingController _feedingController;
   final _random = math.Random();
+  final _stageKey = GlobalKey();
+  final _mouseKey = GlobalKey();
   Offset _mouseAlignment = const Offset(-0.08, _mouseFixedYAlignment);
   String? _selectedRoomId;
+  HomeMenuAction? _selectedMenu;
   bool _mouseWalking = false;
   bool _mouseMovingRight = false;
   Timer? _walkTimer;
@@ -129,6 +137,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void initState() {
     super.initState();
+    _feedingController = FeedingController()..addListener(_onFeedingChanged);
     unawaited(ref.read(realtimeRevisionProvider.notifier).connect());
     _reconcileLoop = HomeAuthoritativeReconcileLoop(
       reconcile: () =>
@@ -142,6 +151,9 @@ class _HomePageState extends ConsumerState<HomePage> {
     _walkTimer?.cancel();
     _randomWalkTimer?.cancel();
     _reconcileLoop.dispose();
+    _feedingController
+      ..removeListener(_onFeedingChanged)
+      ..dispose();
     ref.read(realtimeRevisionProvider.notifier).disconnect();
     super.dispose();
   }
@@ -217,9 +229,14 @@ class _HomePageState extends ConsumerState<HomePage> {
           return _HomeStage(
             backgroundAsset: backgroundAsset,
             mouseAlignment: _mouseAlignment,
-            onTapStage: _handleStageTap,
+            onTapStage:
+                _feedingController.state.isActive ||
+                    _feedingController.state.isFeeding
+                ? null
+                : _handleStageTap,
             child: LayoutBuilder(
               builder: (context, constraints) => Stack(
+                key: _stageKey,
                 children: [
                   if (data.isOffline ||
                       data.outboxPending > 0 ||
@@ -245,10 +262,6 @@ class _HomePageState extends ConsumerState<HomePage> {
                         ],
                       ),
                     ),
-                  Align(
-                    alignment: const Alignment(0, 0.90),
-                    child: _DummyBottomMenu(),
-                  ),
                   if (devices.isEmpty && rooms.isEmpty)
                     const Positioned(
                       left: 18,
@@ -258,11 +271,30 @@ class _HomePageState extends ConsumerState<HomePage> {
                     ),
                   Positioned.fill(
                     child: _MousePlayground(
+                      mouseKey: _mouseKey,
                       mouseAlignment: _mouseAlignment,
                       mouseAsset: _mouseAsset,
                       mouseWalking: _mouseWalking,
                       mouseMovingRight: _mouseMovingRight,
+                      isFeeding: _feedingController.state.isFeeding,
                       onMouseTap: () => _handleMouseTap(selectedRoom),
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: FeedingGestureLayer(
+                      state: _feedingController.state,
+                      mouseCollider: _mouseRectInStage,
+                      onPointer: _handleFeedingPointer,
+                    ),
+                  ),
+                  Positioned(
+                    left: 24,
+                    right: 24,
+                    bottom: constraints.maxHeight * 0.05,
+                    child: HomeBottomNavigation(
+                      selected: _selectedMenu,
+                      onSelected: (action) =>
+                          unawaited(_handleMenuAction(action, selectedRoom)),
                     ),
                   ),
                 ],
@@ -319,7 +351,9 @@ class _HomePageState extends ConsumerState<HomePage> {
     final delay = Duration(seconds: 4 + _random.nextInt(5));
     _randomWalkTimer = Timer(delay, () {
       if (!mounted) return;
-      if (!_mouseWalking) {
+      if (!_mouseWalking &&
+          !_feedingController.state.isActive &&
+          !_feedingController.state.isFeeding) {
         _startMouseWalk(_nextRandomMouseTarget());
       }
       _scheduleRandomWalk();
@@ -357,6 +391,90 @@ class _HomePageState extends ConsumerState<HomePage> {
         ),
       ),
     );
+  }
+
+  Future<void> _handleMenuAction(
+    HomeMenuAction action,
+    Map<String, dynamic>? selectedRoom,
+  ) async {
+    if (action == HomeMenuAction.feeding) {
+      _walkTimer?.cancel();
+      setState(() {
+        _mouseWalking = false;
+        _selectedMenu = _feedingController.state.isActive ? null : action;
+      });
+      if (_feedingController.state.isActive) {
+        _feedingController.cancel();
+      } else {
+        _feedingController.activate();
+      }
+      return;
+    }
+
+    if (_feedingController.state.isActive) _feedingController.cancel();
+    setState(() => _selectedMenu = action);
+    switch (action) {
+      case HomeMenuAction.files:
+        if (selectedRoom == null) {
+          _showMissingFolderMessage();
+        } else {
+          await Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              fullscreenDialog: true,
+              builder: (_) => FilesPage(
+                roomId: selectedRoom['id'] as String,
+                roomName: selectedRoom['name'] as String? ?? '관리 폴더',
+              ),
+            ),
+          );
+        }
+      case HomeMenuAction.games:
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const MiniGameHubPage()),
+        );
+      case HomeMenuAction.wardrobe:
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const MouseWardrobePage()),
+        );
+      case HomeMenuAction.feeding:
+        break;
+    }
+    if (mounted) setState(() => _selectedMenu = null);
+  }
+
+  void _handleFeedingPointer(Offset position) {
+    unawaited(_feedingController.dragCheese(position, _mouseRectInStage()));
+  }
+
+  Rect? _mouseRectInStage() {
+    final stage = _stageKey.currentContext?.findRenderObject();
+    final mouse = _mouseKey.currentContext?.findRenderObject();
+    if (stage is! RenderBox ||
+        mouse is! RenderBox ||
+        !stage.hasSize ||
+        !mouse.hasSize) {
+      return null;
+    }
+    final mouseGlobal = mouse.localToGlobal(Offset.zero);
+    return stage.globalToLocal(mouseGlobal) & mouse.size;
+  }
+
+  void _onFeedingChanged() {
+    if (!mounted) return;
+    setState(() {
+      final feeding = _feedingController.state;
+      if (!feeding.isActive &&
+          !feeding.isFeeding &&
+          _selectedMenu == HomeMenuAction.feeding) {
+        _selectedMenu = null;
+      }
+    });
+  }
+
+  void _showMissingFolderMessage() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('폴더를 연결해 주세요!')));
   }
 
   void _openSettings() {
@@ -546,17 +664,21 @@ class _ManagedFolderSelector extends StatelessWidget {
 
 class _MousePlayground extends StatelessWidget {
   const _MousePlayground({
+    required this.mouseKey,
     required this.mouseAlignment,
     required this.mouseAsset,
     required this.mouseWalking,
     required this.mouseMovingRight,
+    required this.isFeeding,
     required this.onMouseTap,
   });
 
+  final GlobalKey mouseKey;
   final Offset mouseAlignment;
   final String mouseAsset;
   final bool mouseWalking;
   final bool mouseMovingRight;
+  final bool isFeeding;
   final VoidCallback onMouseTap;
 
   @override
@@ -568,82 +690,34 @@ class _MousePlayground extends StatelessWidget {
         curve: _mouseMoveCurve,
         alignment: Alignment(mouseAlignment.dx, mouseAlignment.dy),
         child: GestureDetector(
+          key: mouseKey,
           behavior: HitTestBehavior.translucent,
           onTap: onMouseTap,
-          child: Transform(
-            alignment: Alignment.center,
-            transform: Matrix4.diagonal3Values(
-              mouseWalking && mouseMovingRight ? -1.0 : 1.0,
-              1.0,
-              1.0,
-            ),
-            child: Image.asset(
-              mouseAsset,
-              key: ValueKey('$mouseAsset-$mouseMovingRight'),
-              package: mousekeeperMascotPackage,
-              width: _mouseDisplaySize,
-              height: _mouseDisplaySize,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.none,
+          child: AnimatedScale(
+            scale: isFeeding ? 1.12 : 1,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.elasticOut,
+            child: Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.diagonal3Values(
+                mouseWalking && mouseMovingRight ? -1.0 : 1.0,
+                1.0,
+                1.0,
+              ),
+              child: Image.asset(
+                mouseAsset,
+                key: ValueKey('$mouseAsset-$mouseMovingRight'),
+                package: mousekeeperMascotPackage,
+                width: _mouseDisplaySize,
+                height: _mouseDisplaySize,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.none,
+              ),
             ),
           ),
         ),
       ),
     ],
-  );
-}
-
-class _DummyBottomMenu extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => const Padding(
-    padding: EdgeInsets.symmetric(horizontal: 28),
-    child: Row(
-      children: [
-        Expanded(child: _DummyBottomMenuButton(label: '퍼즐')),
-        SizedBox(width: 14),
-        Expanded(child: _DummyBottomMenuButton(label: '식사')),
-        SizedBox(width: 14),
-        Expanded(child: _DummyBottomMenuButton(label: '독서')),
-      ],
-    ),
-  );
-}
-
-class _DummyBottomMenuButton extends StatelessWidget {
-  const _DummyBottomMenuButton({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) => SizedBox(
-    height: 48,
-    child: OutlinedButton(
-      onPressed: null,
-      style: OutlinedButton.styleFrom(
-        disabledForegroundColor: const Color(0xFF3B2A24),
-        disabledBackgroundColor: const Color(
-          0xFFFFFAF4,
-        ).withValues(alpha: 0.94),
-        side: const BorderSide(color: Color(0xFFB9A696), width: 1.5),
-        textStyle: const TextStyle(
-          fontFamily: mouseKeeperFontFamily,
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: Text(
-          label,
-          maxLines: 1,
-          softWrap: false,
-          style: const TextStyle(
-            fontFamily: mouseKeeperFontFamily,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    ),
   );
 }
 
