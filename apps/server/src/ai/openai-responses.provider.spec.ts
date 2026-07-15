@@ -294,6 +294,59 @@ describe('OpenAiResponsesProvider', () => {
     });
   });
 
+  it('retries once with a larger budget when structured output is incomplete', async () => {
+    const fetcher = jest
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            status: 'incomplete',
+            incomplete_details: { reason: 'max_output_tokens' },
+            output: [],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        okOutput({
+          kind: 'QUERY',
+          reasonCode: '',
+          reply: '',
+          intent: 'NONE',
+          argumentsJson: '{}',
+          confirmationSummary: '',
+          browseJson: JSON.stringify({
+            relativeDirectory: 'img',
+            cursor: null,
+            query: null,
+            extensions: [],
+            limit: 25,
+            searchScope: 'CURRENT_DIRECTORY',
+          }),
+          responseSummary: 'img 폴더의 목록을 확인합니다.',
+        }),
+      );
+
+    await expect(
+      providerWith(fetcher).classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: { id: 'message-1', content: 'img 폴더의 목록을 줘' },
+      }),
+    ).resolves.toMatchObject({
+      status: 'READY',
+      kind: 'QUERY',
+      browse: { relativeDirectory: 'img', query: null },
+    });
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const retryBody = JSON.parse(
+      (fetcher.mock.calls[1][1] as RequestInit).body as string,
+    );
+    expect(retryBody.max_output_tokens).toBe(1000);
+  });
+
   it('translates rule drafts only after Rule DSL validation', async () => {
     const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
       okOutput({

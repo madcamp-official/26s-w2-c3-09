@@ -4,6 +4,7 @@ import {
   createFileBrowseRequestSchema,
   ruleDefinitionSchema,
 } from '@mousekeeper/contracts';
+import { Logger } from '@nestjs/common';
 import { z } from 'zod';
 import type {
   AiProvider,
@@ -27,11 +28,12 @@ export type OpenAiResponsesProviderOptions = {
 type StructuredCallResult =
   | { status: 'OK'; value: unknown }
   | { status: 'UNCONFIGURED' }
-  | { status: 'INVALID' };
+  | { status: 'INVALID'; reason: string };
 
 const DEFAULT_ENDPOINT = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_OUTPUT_TOKENS = 1_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 3_000;
+const INCOMPLETE_RETRY_MULTIPLIER = 2;
 
 const rawCommandDraftSchema = z
   .object({
@@ -153,6 +155,7 @@ const ruleDraftJsonSchema = {
 } as const;
 
 export class OpenAiResponsesProvider implements AiProvider {
+  private readonly logger = new Logger(OpenAiResponsesProvider.name);
   private readonly timeoutMs: number;
   private readonly maxOutputTokens: number;
   private readonly endpoint: string;
@@ -180,22 +183,22 @@ export class OpenAiResponsesProvider implements AiProvider {
       }),
     });
     if (result.status === 'UNCONFIGURED') return this.unconfigured();
-    if (result.status === 'INVALID') return this.invalid();
+    if (result.status === 'INVALID') return this.invalid(result.reason);
 
     const parsed = rawCommandDraftSchema.safeParse(result.value);
-    if (!parsed.success) return this.invalid();
+    if (!parsed.success) return this.invalid('COMMAND_ENVELOPE_SCHEMA');
     if (parsed.data.kind === 'RULE_DRAFT') {
       if (
         !parsed.data.name?.trim() ||
         !parsed.data.explanation?.trim() ||
         parsed.data.definitionJson == null
       ) {
-        return this.invalid();
+        return this.invalid('RULE_DRAFT_FIELDS');
       }
       const definition = ruleDefinitionSchema.safeParse(
         parseJsonObject(parsed.data.definitionJson),
       );
-      if (!definition.success) return this.invalid();
+      if (!definition.success) return this.invalid('RULE_DEFINITION_SCHEMA');
       return {
         status: 'READY',
         kind: 'RULE_DRAFT',
@@ -209,12 +212,12 @@ export class OpenAiResponsesProvider implements AiProvider {
     }
     if (parsed.data.kind === 'QUERY') {
       if (!parsed.data.browseJson || !parsed.data.responseSummary?.trim()) {
-        return this.invalid();
+        return this.invalid('QUERY_FIELDS');
       }
       const browse = createFileBrowseRequestSchema.safeParse(
         parseJsonObject(parsed.data.browseJson),
       );
-      if (!browse.success) return this.invalid();
+      if (!browse.success) return this.invalid('QUERY_BROWSE_SCHEMA');
       return {
         status: 'READY',
         kind: 'QUERY',
@@ -224,23 +227,23 @@ export class OpenAiResponsesProvider implements AiProvider {
     }
     if (parsed.data.kind !== 'COMMAND_DRAFT') {
       const reply = parsed.data.reply.trim();
-      if (reply === '') return this.invalid();
+      if (reply === '') return this.invalid('EMPTY_REPLY');
       return { status: 'READY', kind: 'NO_ACTION', reply };
     }
     if (
       parsed.data.intent === 'NONE' ||
       parsed.data.confirmationSummary.trim() === ''
     ) {
-      return this.invalid();
+      return this.invalid('COMMAND_FIELDS');
     }
     const argumentsObject = parseJsonObject(parsed.data.argumentsJson);
-    if (argumentsObject == null) return this.invalid();
+    if (argumentsObject == null) return this.invalid('COMMAND_ARGUMENTS_JSON');
 
     const command = createCommandSchema.safeParse({
       intent: parsed.data.intent,
       payload: argumentsObject,
     });
-    if (!command.success) return this.invalid();
+    if (!command.success) return this.invalid('COMMAND_PAYLOAD_SCHEMA');
     return {
       status: 'READY',
       kind: 'COMMAND_DRAFT',
@@ -262,22 +265,22 @@ export class OpenAiResponsesProvider implements AiProvider {
       }),
     });
     if (result.status === 'UNCONFIGURED') return this.unconfigured();
-    if (result.status === 'INVALID') return this.invalid();
+    if (result.status === 'INVALID') return this.invalid(result.reason);
 
     const parsed = rawRuleDraftSchema.safeParse(result.value);
     if (!parsed.success || parsed.data.kind !== 'RULE_DRAFT') {
-      return this.invalid();
+      return this.invalid('RULE_ENVELOPE_SCHEMA');
     }
     if (
       parsed.data.name.trim() === '' ||
       parsed.data.explanation.trim() === ''
     ) {
-      return this.invalid();
+      return this.invalid('RULE_DRAFT_FIELDS');
     }
     const definition = ruleDefinitionSchema.safeParse(
       parseJsonObject(parsed.data.definitionJson),
     );
-    if (!definition.success) return this.invalid();
+    if (!definition.success) return this.invalid('RULE_DEFINITION_SCHEMA');
     return {
       status: 'READY',
       kind: 'RULE_DRAFT',
@@ -296,6 +299,26 @@ export class OpenAiResponsesProvider implements AiProvider {
     instructions: string;
     input: string;
   }): Promise<StructuredCallResult> {
+    const first = await this.callStructuredOnce(input, this.maxOutputTokens);
+    if (first.status !== 'INVALID' || first.reason !== 'INCOMPLETE_OUTPUT') {
+      return first;
+    }
+    this.logger.warn('AI structured output was incomplete; retrying once');
+    return this.callStructuredOnce(
+      input,
+      this.maxOutputTokens * INCOMPLETE_RETRY_MULTIPLIER,
+    );
+  }
+
+  private async callStructuredOnce(
+    input: {
+      name: string;
+      schema: unknown;
+      instructions: string;
+      input: string;
+    },
+    maxOutputTokens: number,
+  ): Promise<StructuredCallResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -309,7 +332,7 @@ export class OpenAiResponsesProvider implements AiProvider {
           model: this.options.model,
           instructions: input.instructions,
           input: input.input,
-          max_output_tokens: this.maxOutputTokens,
+          max_output_tokens: maxOutputTokens,
           text: {
             format: {
               type: 'json_schema',
@@ -334,11 +357,18 @@ export class OpenAiResponsesProvider implements AiProvider {
       }
       const body = (await response.json()) as unknown;
       const text = responseText(body);
-      if (text == null) return { status: 'INVALID' };
+      if (text == null) {
+        return {
+          status: 'INVALID',
+          reason: responseIncomplete(body)
+            ? 'INCOMPLETE_OUTPUT'
+            : 'MISSING_OUTPUT_TEXT',
+        };
+      }
       try {
         return { status: 'OK', value: JSON.parse(text) };
       } catch {
-        return { status: 'INVALID' };
+        return { status: 'INVALID', reason: 'OUTPUT_JSON_PARSE' };
       }
     } finally {
       clearTimeout(timer);
@@ -359,12 +389,26 @@ export class OpenAiResponsesProvider implements AiProvider {
     };
   }
 
-  private invalid() {
+  private invalid(reason = 'UNKNOWN') {
+    // Do not log model output because it may contain user file names or paths.
+    this.logger.warn(`Rejected AI output at validation stage: ${reason}`);
     return {
       status: 'INVALID' as const,
       code: 'AI_OUTPUT_INVALID' as const,
     };
   }
+}
+
+function responseIncomplete(value: unknown): boolean {
+  if (value == null || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  if (record.status === 'incomplete') return true;
+  const details = record.incomplete_details;
+  return (
+    details != null &&
+    typeof details === 'object' &&
+    (details as Record<string, unknown>).reason === 'max_output_tokens'
+  );
 }
 
 function responseText(value: unknown): string | null {
@@ -411,7 +455,7 @@ function commandInstructions() {
     'Return only the requested JSON object.',
     'Do not execute files, do not invent local file contents, and do not include command metadata.',
     'Always include every schema field; use empty strings, intent NONE, argumentsJson "{}", and [] for irrelevant fields.',
-    'Voice: you play a small, friendly house-mouse mascot who tidies the user\'s files.',
+    "Voice: you play a small, friendly house-mouse mascot who tidies the user's files.",
     'Write the `reply` field in Korean with a light squeaky-mouse flavor — a soft "찍!" or "찍찍" now and then, warm and cute, kept short. Use it sparingly (about one squeak per reply), never let the persona distort facts, and drop it entirely for refusals or errors.',
     'Keep confirmationSummary, responseSummary, explanation, and name plain, clear, and squeak-free so approval cards and results stay trustworthy.',
     'Classification policy: choose exactly ONE kind. Evaluate in this priority order and stop at the first match.',
@@ -435,11 +479,12 @@ function commandInstructions() {
     '- ANALYZE: argumentsJson {}.',
     'Use "root:downloads" as the default rootId unless the user names another connected root alias. Never invent absolute local paths.',
     'For QUERY, put createFileBrowseRequestSchema JSON in browseJson: {"relativeDirectory":"","cursor":null,"query":"docs","extensions":[],"limit":25,"searchScope":"MANAGED_ROOT"}. Use searchScope MANAGED_ROOT unless the user explicitly asks only for the current folder. For Korean/English broad terms like "문서", "docs", "documents", use query "docs" or the literal search word and omit extensions unless the user specifies file types.',
+    'For listing a named folder such as "img 폴더의 목록을 줘", use kind QUERY with relativeDirectory "img", query null, extensions [], and searchScope CURRENT_DIRECTORY.',
     'For RULE_DRAFT, put the Rule DSL JSON in definitionJson and leave intent NONE, argumentsJson "{}", confirmationSummary empty, and browseJson "{}". Rule DSL examples: move PDFs => {"match":"ALL","conditions":[{"field":"extension","operator":"IN","value":[".pdf"]}],"action":{"type":"MOVE","destinationTemplate":"Archive/PDF"}}; trash temp files => {"match":"ALL","conditions":[{"field":"name","operator":"ENDS_WITH","value":".tmp"}],"action":{"type":"TRASH"}}.',
     'For COMMAND_DRAFT ANALYZE, use intent ANALYZE, argumentsJson "{}", and a confirmationSummary that says the PC will analyze and propose cleanup, not execute changes.',
     'Valid command intents are the MouseKeeper server contract intents.',
-    'The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is NOT a live filesystem listing - never claim to know what files or folders currently exist from it. Use it only to: prefer the room\'s own rootAlias as the default rootId when set; recognize when a new RULE_DRAFT duplicates or conflicts with an existingRules entry (mention this briefly in explanation/ambiguities rather than silently proceeding); and reuse an existing rule\'s destinationTemplate wording when the user clearly means the same folder.',
-    'A rule\'s destinationTemplate folder does not need to already exist — never refuse or ask a clarification question just because you cannot confirm a destination folder exists. Only ask a clarification question for genuinely missing information (which file, which condition, which destination) as instructed above.',
+    "The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is NOT a live filesystem listing - never claim to know what files or folders currently exist from it. Use it only to: prefer the room's own rootAlias as the default rootId when set; recognize when a new RULE_DRAFT duplicates or conflicts with an existingRules entry (mention this briefly in explanation/ambiguities rather than silently proceeding); and reuse an existing rule's destinationTemplate wording when the user clearly means the same folder.",
+    "A rule's destinationTemplate folder does not need to already exist — never refuse or ask a clarification question just because you cannot confirm a destination folder exists. Only ask a clarification question for genuinely missing information (which file, which condition, which destination) as instructed above.",
   ].join('\n');
 }
 
