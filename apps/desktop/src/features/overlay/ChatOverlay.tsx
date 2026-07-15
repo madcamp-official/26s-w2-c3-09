@@ -11,6 +11,7 @@ import type { AutoCleanupProposalEvent, ExecuteReport, ManagedRoot } from "../fi
 import {
   approveAgentCommandDraftAndExecute,
   approveAgentOpenProposalAndExecute,
+  confirmAgentRuleDraft,
   createAgentChatQuickCleanup,
   createAgentChatSession,
   getBackgroundRuntimeStatus,
@@ -19,6 +20,7 @@ import {
   listAgentChatMessages,
   listAgentChatSessions,
   markAgentChatSessionRead,
+  rejectAgentRuleDraft,
   sendAgentChatMessage
 } from "../agent/agentApi";
 import type {
@@ -74,14 +76,17 @@ type ChatTimelineItem =
 
 type PersistedChatActionState = {
   approvedDraftIds: string[];
+  approvedRuleDraftIds: string[];
   dismissedLocalProposalKeys: string[];
   proposalReceivedAtByKey: Record<string, number>;
+  rejectedRuleDraftIds: string[];
   skippedDraftIds: string[];
   skippedLocalProposalKeys: string[];
   skippedProposalIds: string[];
   submittedDraftIds: string[];
   submittedLocalProposalKeys: string[];
   submittedProposalIds: string[];
+  submittedRuleDraftIds: string[];
 };
 
 const CHAT_ACTION_STATE_STORAGE_KEY = "mousekeeper.chatOverlay.actionState.v1";
@@ -111,14 +116,17 @@ const fallbackQuickPrompts = [
 
 const emptyChatActionState: PersistedChatActionState = {
   approvedDraftIds: [],
+  approvedRuleDraftIds: [],
   dismissedLocalProposalKeys: [],
   proposalReceivedAtByKey: {},
+  rejectedRuleDraftIds: [],
   skippedDraftIds: [],
   skippedLocalProposalKeys: [],
   skippedProposalIds: [],
   submittedDraftIds: [],
   submittedLocalProposalKeys: [],
-  submittedProposalIds: []
+  submittedProposalIds: [],
+  submittedRuleDraftIds: []
 };
 
 function setFromArray(values: readonly string[] | undefined) {
@@ -133,14 +141,17 @@ function readPersistedChatActionState(): PersistedChatActionState {
     const parsed = JSON.parse(raw) as Partial<PersistedChatActionState>;
     return {
       approvedDraftIds: arrayField(parsed.approvedDraftIds),
+      approvedRuleDraftIds: arrayField(parsed.approvedRuleDraftIds),
       dismissedLocalProposalKeys: arrayField(parsed.dismissedLocalProposalKeys),
       proposalReceivedAtByKey: numberRecordField(parsed.proposalReceivedAtByKey),
+      rejectedRuleDraftIds: arrayField(parsed.rejectedRuleDraftIds),
       skippedDraftIds: arrayField(parsed.skippedDraftIds),
       skippedLocalProposalKeys: arrayField(parsed.skippedLocalProposalKeys),
       skippedProposalIds: arrayField(parsed.skippedProposalIds),
       submittedDraftIds: arrayField(parsed.submittedDraftIds),
       submittedLocalProposalKeys: arrayField(parsed.submittedLocalProposalKeys),
-      submittedProposalIds: arrayField(parsed.submittedProposalIds)
+      submittedProposalIds: arrayField(parsed.submittedProposalIds),
+      submittedRuleDraftIds: arrayField(parsed.submittedRuleDraftIds)
     };
   } catch (cause) {
     console.warn("Failed to read persisted chat action state", cause);
@@ -186,11 +197,22 @@ export function ChatOverlay() {
   const [answerPending, setAnswerPending] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [approvingDraftIds, setApprovingDraftIds] = useState<Set<string>>(new Set());
+  const [approvingRuleDraftIds, setApprovingRuleDraftIds] = useState<Set<string>>(new Set());
+  const [rejectingRuleDraftIds, setRejectingRuleDraftIds] = useState<Set<string>>(new Set());
   const [approvedDraftIds, setApprovedDraftIds] = useState<Set<string>>(
     () => setFromArray(persistedActionStateRef.current.approvedDraftIds)
   );
+  const [approvedRuleDraftIds, setApprovedRuleDraftIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.approvedRuleDraftIds)
+  );
+  const [rejectedRuleDraftIds, setRejectedRuleDraftIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.rejectedRuleDraftIds)
+  );
   const [submittedDraftIds, setSubmittedDraftIds] = useState<Set<string>>(
     () => setFromArray(persistedActionStateRef.current.submittedDraftIds)
+  );
+  const [submittedRuleDraftIds, setSubmittedRuleDraftIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.submittedRuleDraftIds)
   );
   const [skippedDraftIds, setSkippedDraftIds] = useState<Set<string>>(
     () => setFromArray(persistedActionStateRef.current.skippedDraftIds)
@@ -337,25 +359,31 @@ export function ChatOverlay() {
   useEffect(() => {
     writePersistedChatActionState({
       approvedDraftIds: Array.from(approvedDraftIds),
+      approvedRuleDraftIds: Array.from(approvedRuleDraftIds),
       dismissedLocalProposalKeys: Array.from(dismissedLocalProposalKeys),
       proposalReceivedAtByKey,
+      rejectedRuleDraftIds: Array.from(rejectedRuleDraftIds),
       skippedDraftIds: Array.from(skippedDraftIds),
       skippedLocalProposalKeys: Array.from(skippedLocalProposalKeys),
       skippedProposalIds: Array.from(skippedProposalIds),
       submittedDraftIds: Array.from(submittedDraftIds),
       submittedLocalProposalKeys: Array.from(submittedLocalProposalKeys),
-      submittedProposalIds: Array.from(submittedProposalIds)
+      submittedProposalIds: Array.from(submittedProposalIds),
+      submittedRuleDraftIds: Array.from(submittedRuleDraftIds)
     });
   }, [
     approvedDraftIds,
+    approvedRuleDraftIds,
     dismissedLocalProposalKeys,
     proposalReceivedAtByKey,
+    rejectedRuleDraftIds,
     skippedDraftIds,
     skippedLocalProposalKeys,
     skippedProposalIds,
     submittedDraftIds,
     submittedLocalProposalKeys,
-    submittedProposalIds
+    submittedProposalIds,
+    submittedRuleDraftIds
   ]);
 
   useEffect(() => {
@@ -635,6 +663,71 @@ export function ChatOverlay() {
     }
   }
 
+  async function approveRuleDraft(draftId: string) {
+    if (!activeRoomId) {
+      setNotice("관리 폴더를 서버 room과 연결해야 규칙을 추가할 수 있어요.");
+      return;
+    }
+    const idempotencyKey = ruleDraftApprovalKey(draftId);
+    setNotice(null);
+    setBusy(true);
+    setSubmittedRuleDraftIds((current) => new Set(current).add(draftId));
+    setApprovingRuleDraftIds((current) => new Set(current).add(draftId));
+    try {
+      const result = await confirmAgentRuleDraft(draftId, activeRoomId, idempotencyKey);
+      setApprovedRuleDraftIds((current) => new Set(current).add(draftId));
+      pushLocalStatusMessage(
+        executionStatusMessage({
+          roomId: activeRoomId,
+          sessionId: chatSession?.session_id ?? null,
+          content: `규칙을 추가했어요.\n${result.rule.name}\n이제 이 PC의 정리 엔진에도 적용됩니다.`
+        })
+      );
+      setNotice("규칙 추가 완료");
+      if (chatSession) {
+        const messages = await listAgentChatMessages(chatSession.session_id);
+        setChatMessages(messages);
+        await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
+      }
+      const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
+      setQuickView(quick);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+      setApprovingRuleDraftIds((current) => {
+        const next = new Set(current);
+        next.delete(draftId);
+        return next;
+      });
+    }
+  }
+
+  async function rejectRuleDraft(draftId: string) {
+    setNotice(null);
+    setBusy(true);
+    setRejectingRuleDraftIds((current) => new Set(current).add(draftId));
+    try {
+      await rejectAgentRuleDraft(draftId);
+      setRejectedRuleDraftIds((current) => new Set(current).add(draftId));
+      setNotice("규칙 초안을 거절했어요.");
+      if (chatSession) {
+        const messages = await listAgentChatMessages(chatSession.session_id);
+        setChatMessages(messages);
+        await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
+      }
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+      setRejectingRuleDraftIds((current) => {
+        const next = new Set(current);
+        next.delete(draftId);
+        return next;
+      });
+    }
+  }
+
   async function approveOpenProposal(proposalId: string) {
     if (!activeRoomId) {
       setNotice("관리 폴더를 서버 room과 연결해야 제안을 실행할 수 있어요.");
@@ -782,10 +875,15 @@ export function ChatOverlay() {
         sessionTitle={chatSession?.title ?? null}
         quickView={quickView}
         approvedDraftIds={approvedDraftIds}
+        approvedRuleDraftIds={approvedRuleDraftIds}
         approvingDraftIds={approvingDraftIds}
+        approvingRuleDraftIds={approvingRuleDraftIds}
         approvingProposalIds={approvingProposalIds}
         approvingLocalProposalKeys={approvingLocalProposalKeys}
+        rejectedRuleDraftIds={rejectedRuleDraftIds}
+        rejectingRuleDraftIds={rejectingRuleDraftIds}
         submittedDraftIds={submittedDraftIds}
+        submittedRuleDraftIds={submittedRuleDraftIds}
         submittedProposalIds={submittedProposalIds}
         submittedLocalProposalKeys={submittedLocalProposalKeys}
         skippedDraftIds={skippedDraftIds}
@@ -793,8 +891,10 @@ export function ChatOverlay() {
         skippedLocalProposalKeys={skippedLocalProposalKeys}
         onBeginWindowDrag={beginChatWindowDrag}
         onApproveCommandDraft={(draftId) => void approveCommandDraft(draftId)}
+        onApproveRuleDraft={(draftId) => void approveRuleDraft(draftId)}
         onApproveOpenProposal={(proposalId) => void approveOpenProposal(proposalId)}
         onApproveLocalAutoProposal={(localKey) => void approveLocalAutoProposal(localKey)}
+        onRejectRuleDraft={(draftId) => void rejectRuleDraft(draftId)}
         onChangeDraft={setDraft}
         onClose={() => {
           void hideChatOverlay();
@@ -929,6 +1029,10 @@ function commandDraftApprovalKey(draftId: string) {
   return `chatdraft-${draftId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`;
 }
 
+function ruleDraftApprovalKey(draftId: string) {
+  return `ruledraft-${draftId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`;
+}
+
 function proposalApprovalKey(proposalId: string) {
   return `chatproposal-${proposalId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`;
 }
@@ -1026,6 +1130,25 @@ function commandDraftPayload(payload: unknown): CommandDraftPayload | null {
     : null;
 }
 
+type RuleDraftPayload = {
+  id: string;
+  name: string;
+  explanation: string;
+  status: string;
+};
+
+function ruleDraftPayload(payload: unknown): RuleDraftPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.id !== "string" || typeof record.status !== "string") return null;
+  return {
+    id: record.id,
+    status: record.status,
+    name: typeof record.name === "string" ? record.name : "새 규칙",
+    explanation: typeof record.explanation === "string" ? record.explanation : ""
+  };
+}
+
 function CommandDraftActions({
   approvedDraftIds,
   approvingDraftIds,
@@ -1071,6 +1194,80 @@ function CommandDraftActions({
     >
       {approving ? "실행 중" : "승인하고 실행"}
     </button>
+  );
+}
+
+function RuleDraftActions({
+  approvedRuleDraftIds,
+  approvingRuleDraftIds,
+  busy,
+  payload,
+  rejectedRuleDraftIds,
+  rejectingRuleDraftIds,
+  roomId,
+  submittedRuleDraftIds,
+  onApprove,
+  onReject
+}: {
+  approvedRuleDraftIds: Set<string>;
+  approvingRuleDraftIds: Set<string>;
+  busy: boolean;
+  payload: unknown;
+  rejectedRuleDraftIds: Set<string>;
+  rejectingRuleDraftIds: Set<string>;
+  roomId: string | null;
+  submittedRuleDraftIds: Set<string>;
+  onApprove: (draftId: string) => void;
+  onReject: (draftId: string) => void;
+}) {
+  const draft = ruleDraftPayload(payload);
+  if (!draft) {
+    return <small className="room-chat-draft-hint">규칙 상태를 확인할 수 없어요.</small>;
+  }
+  if (approvedRuleDraftIds.has(draft.id) || draft.status === "MATERIALIZED") {
+    return <small className="room-chat-draft-hint">규칙 추가 완료</small>;
+  }
+  if (rejectedRuleDraftIds.has(draft.id) || draft.status === "REJECTED") {
+    return <small className="room-chat-draft-hint">거절됨</small>;
+  }
+  if (submittedRuleDraftIds.has(draft.id)) {
+    return <small className="room-chat-draft-hint">규칙 추가 요청됨</small>;
+  }
+  if (draft.status !== "DRAFT") {
+    return <small className="room-chat-draft-hint">규칙 상태: {draft.status}</small>;
+  }
+  const approving = approvingRuleDraftIds.has(draft.id);
+  const rejecting = rejectingRuleDraftIds.has(draft.id);
+  return (
+    <div className="room-chat-rule-actions">
+      <button
+        type="button"
+        className="room-chat-draft-approve"
+        onClick={() => onApprove(draft.id)}
+        disabled={busy || approving || rejecting || roomId == null}
+      >
+        {approving ? "추가 중" : "규칙 추가"}
+      </button>
+      <button
+        type="button"
+        className="room-chat-draft-reject"
+        onClick={() => onReject(draft.id)}
+        disabled={busy || approving || rejecting}
+      >
+        {rejecting ? "거절 중" : "거절"}
+      </button>
+    </div>
+  );
+}
+
+function RuleDraftSummary({ payload }: { payload: unknown }) {
+  const draft = ruleDraftPayload(payload);
+  if (!draft) return null;
+  return (
+    <div className="room-chat-rule-summary">
+      <strong>{draft.name}</strong>
+      {draft.explanation.trim().length > 0 ? <span>{draft.explanation}</span> : null}
+    </div>
   );
 }
 
@@ -1140,7 +1337,9 @@ function RoomChatPanel({
   avatarUrl,
   answerPending,
   approvedDraftIds,
+  approvedRuleDraftIds,
   approvingDraftIds,
+  approvingRuleDraftIds,
   approvingLocalProposalKeys,
   approvingProposalIds,
   busy,
@@ -1152,6 +1351,8 @@ function RoomChatPanel({
   notice,
   openProposals,
   quickView,
+  rejectedRuleDraftIds,
+  rejectingRuleDraftIds,
   roomId,
   roomName,
   sessionTitle,
@@ -1161,20 +1362,25 @@ function RoomChatPanel({
   submittedDraftIds,
   submittedLocalProposalKeys,
   submittedProposalIds,
+  submittedRuleDraftIds,
   onChangeDraft,
   onClose,
   onQuickCleanup,
   onBeginWindowDrag,
   onApproveCommandDraft,
+  onApproveRuleDraft,
   onApproveLocalAutoProposal,
   onApproveOpenProposal,
+  onRejectRuleDraft,
   onUsePrompt,
   onSubmit
 }: {
   avatarUrl: string;
   answerPending: boolean;
   approvedDraftIds: Set<string>;
+  approvedRuleDraftIds: Set<string>;
   approvingDraftIds: Set<string>;
+  approvingRuleDraftIds: Set<string>;
   approvingLocalProposalKeys: Set<string>;
   approvingProposalIds: Set<string>;
   busy: boolean;
@@ -1186,6 +1392,8 @@ function RoomChatPanel({
   notice: string | null;
   openProposals: TimedOpenProposal[];
   quickView: AgentChatQuickView | null;
+  rejectedRuleDraftIds: Set<string>;
+  rejectingRuleDraftIds: Set<string>;
   roomId: string | null;
   roomName: string;
   sessionTitle: string | null;
@@ -1195,13 +1403,16 @@ function RoomChatPanel({
   submittedDraftIds: Set<string>;
   submittedLocalProposalKeys: Set<string>;
   submittedProposalIds: Set<string>;
+  submittedRuleDraftIds: Set<string>;
   onChangeDraft: (value: string) => void;
   onClose: () => void;
   onQuickCleanup: () => void;
   onBeginWindowDrag: (event: PointerEvent<HTMLElement>) => void;
   onApproveCommandDraft: (draftId: string) => void;
+  onApproveRuleDraft: (draftId: string) => void;
   onApproveLocalAutoProposal: (localKey: string) => void;
   onApproveOpenProposal: (proposalId: string) => void;
+  onRejectRuleDraft: (draftId: string) => void;
   onUsePrompt: (value: string) => void;
   onSubmit: () => void;
 }) {
@@ -1293,6 +1504,24 @@ function RoomChatPanel({
                         skippedDraftIds={skippedDraftIds}
                         submittedDraftIds={submittedDraftIds}
                         onApprove={onApproveCommandDraft}
+                      />
+                    </div>
+                  ) : null}
+                  {message.message_type === "RULE_DRAFT" ? (
+                    <div className="room-chat-draft-actions">
+                      <small className="room-chat-draft-hint">승인 대기 중인 규칙 초안이에요.</small>
+                      <RuleDraftSummary payload={message.structured_payload} />
+                      <RuleDraftActions
+                        payload={message.structured_payload}
+                        roomId={roomId}
+                        busy={busy}
+                        approvedRuleDraftIds={approvedRuleDraftIds}
+                        approvingRuleDraftIds={approvingRuleDraftIds}
+                        rejectedRuleDraftIds={rejectedRuleDraftIds}
+                        rejectingRuleDraftIds={rejectingRuleDraftIds}
+                        submittedRuleDraftIds={submittedRuleDraftIds}
+                        onApprove={onApproveRuleDraft}
+                        onReject={onRejectRuleDraft}
                       />
                     </div>
                   ) : null}

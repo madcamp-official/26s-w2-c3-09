@@ -135,6 +135,31 @@ export type AgentChatQuickCleanupResult = AgentChatSendResult & {
   session: AgentChatSession;
 };
 
+export type AgentRuleDraftSummary = {
+  draft_id: string;
+  status: string;
+  rule_id: string | null;
+};
+
+export type AgentRule = {
+  rule_id: string;
+  room_id: string;
+  name: string;
+  definition: unknown;
+  priority: number;
+  enabled: boolean;
+  version: number;
+};
+
+export type AgentRuleDraftConfirmation = {
+  draft: AgentRuleDraftSummary;
+  rule: AgentRule;
+};
+
+export type AgentRuleDraftRejection = {
+  draft: AgentRuleDraftSummary;
+};
+
 export type CleanlinessSnapshot = {
   formulaVersion: string;
   score: number;
@@ -438,6 +463,21 @@ export function approveAgentCommandDraftAndExecute(
     "approve_agent_command_draft_and_execute",
     { draftId, roomId, idempotencyKey }
   );
+}
+
+export function confirmAgentRuleDraft(
+  draftId: string,
+  roomId: string,
+  idempotencyKey: string
+) {
+  return invokeAgentCommand<AgentRuleDraftConfirmation>(
+    "confirm_agent_rule_draft",
+    { draftId, roomId, idempotencyKey }
+  );
+}
+
+export function rejectAgentRuleDraft(draftId: string) {
+  return invokeAgentCommand<AgentRuleDraftRejection>("reject_agent_rule_draft", { draftId });
 }
 
 export function listAgentOpenProposals(roomId: string) {

@@ -93,6 +93,15 @@ describe('OpenAiResponsesProvider', () => {
     expect(JSON.parse(init.body as string).instructions).toContain(
       'quick cleanup',
     );
+    expect(JSON.parse(init.body as string).instructions).toContain(
+      'sourceRelativePaths',
+    );
+    expect(JSON.parse(init.body as string).instructions).toContain(
+      'createFileBrowseRequestSchema',
+    );
+    expect(JSON.parse(init.body as string).instructions).toContain(
+      'destinationTemplate',
+    );
   });
 
   it('rejects model output that fails command payload validation', async () => {

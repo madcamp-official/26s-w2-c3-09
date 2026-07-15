@@ -972,6 +972,9 @@ async fn replay_events(
                 }
             }
         }
+        if event.event_type == "rule.created" {
+            let _ = crate::commands::agent::apply_rule_created_event(agent, roots, event).await?;
+        }
         if event.event_type == "device.revoked"
             && (event.device_id.as_deref() == Some(device_id)
                 || (event.aggregate_type == "device" && event.aggregate_id == device_id))

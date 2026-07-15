@@ -2006,13 +2006,15 @@ function queryResultContent(
   cacheHitCount: number,
   liveStatus: string | null,
 ) {
-  const status =
-    liveStatus === 'REQUESTED'
-      ? 'live browse requested'
-      : liveStatus === 'FAILED'
-        ? 'offline cache only'
-        : 'cache only';
-  return `${summary} Cache matches: ${cacheHitCount}; ${status}.`;
+  const trimmed = summary.trim();
+  const prefix = trimmed.length > 0 ? `${trimmed}\n` : '';
+  if (liveStatus === 'REQUESTED') {
+    return `${prefix}캐시에서 ${cacheHitCount}개를 찾았고, PC에 최신 탐색도 요청했어요. 결과가 도착하면 이어서 보여줄게요.`;
+  }
+  if (liveStatus === 'FAILED') {
+    return `${prefix}지금 PC 탐색은 사용할 수 없어서 캐시 기준으로 ${cacheHitCount}개를 찾았어요.`;
+  }
+  return `${prefix}캐시 기준으로 ${cacheHitCount}개를 찾았어요.`;
 }
 
 function normalizeQueryDirectory(value: string) {

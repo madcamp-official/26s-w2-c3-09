@@ -2,12 +2,13 @@ use crate::agent::{
     AgentChatMessage, AgentChatQuickCleanupResult, AgentChatQuickView, AgentChatSendResult,
     AgentChatSession, AgentCommand, AgentCommandDraftConfirmation, AgentConnectionStatus,
     AgentDecision, AgentOpenProposal, AgentProposalDetails, AgentRoomSnapshot, AgentRoomSync,
-    AgentRuntime, HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
+    AgentRule, AgentRuleDraftConfirmation, AgentRuleDraftRejection, AgentRuntime, HeartbeatResult,
+    PairingSession, PairingStatus, SyncEvent,
 };
 use crate::cleanliness::{calculate_cleanliness_snapshot, CleanlinessSnapshot};
-use crate::command_processor::{
-    process_commands, process_pending_commands, CommandProcessingReport, CommandProcessingStatus,
-};
+#[cfg(feature = "tauri-commands")]
+use crate::command_processor::{process_commands, CommandProcessingStatus};
+use crate::command_processor::{process_pending_commands, CommandProcessingReport};
 use crate::execution_processor::{process_pending_decisions, DecisionProcessingReport};
 use crate::file_browse_processor::{
     process_pending_file_browse_requests, FileBrowseProcessingReport,
@@ -22,6 +23,9 @@ use crate::storage::watchers::WatcherStore;
 #[cfg(feature = "tauri-commands")]
 use crate::work_limiter::WorkLimiter;
 use file_engine_cli::journal::{read_operation_history, JournalStatus};
+use file_engine_cli::rules::{default_rule_set, load_rule_set_for_root, RuleSet, RULES_FILE};
+use std::fs;
+use std::path::Path;
 
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 pub struct SyncReplay {
@@ -380,6 +384,72 @@ async fn approve_agent_command_draft_and_execute_impl(
         proposal_outbox_report,
         execution_outbox_report: executed.execution_outbox_report,
     })
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn confirm_agent_rule_draft(
+    draft_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+) -> Result<AgentRuleDraftConfirmation, String> {
+    confirm_agent_rule_draft_impl(draft_id, room_id, idempotency_key, &runtime, &roots).await
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn confirm_agent_rule_draft(
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    draft_id: String,
+    room_id: String,
+    idempotency_key: String,
+) -> Result<AgentRuleDraftConfirmation, String> {
+    confirm_agent_rule_draft_impl(draft_id, room_id, idempotency_key, runtime, roots).await
+}
+
+async fn confirm_agent_rule_draft_impl(
+    draft_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<AgentRuleDraftConfirmation, String> {
+    let confirmation = runtime
+        .confirm_rule_draft(draft_id, idempotency_key)
+        .await
+        .map_err(|error| error.to_string())?;
+    if confirmation.rule.room_id != room_id {
+        return Err(
+            "RULE_ROOM_MISMATCH: confirmed rule belongs to a different room".to_string(),
+        );
+    }
+    apply_server_rule_to_local_root(roots, &confirmation.rule)?;
+    Ok(confirmation)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn reject_agent_rule_draft(
+    draft_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<AgentRuleDraftRejection, String> {
+    runtime
+        .reject_rule_draft(draft_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn reject_agent_rule_draft(
+    runtime: &AgentRuntime,
+    draft_id: String,
+) -> Result<AgentRuleDraftRejection, String> {
+    runtime
+        .reject_rule_draft(draft_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -891,6 +961,9 @@ async fn replay_agent_events_impl(
                 let _ = apply_local_room_detached(room_id, roots, watchers)?;
             }
         }
+        if event.event_type == "rule.created" {
+            let _ = apply_rule_created_event(runtime, roots, event).await?;
+        }
         if event.event_type == "device.revoked"
             && (event.device_id.as_deref() == Some(device_id.as_str())
                 || (event.aggregate_type == "device" && event.aggregate_id == device_id))
@@ -912,6 +985,78 @@ async fn replay_agent_events_impl(
         next_cursor,
         events,
     })
+}
+
+pub async fn apply_rule_created_event(
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    event: &SyncEvent,
+) -> Result<bool, String> {
+    if event.event_type != "rule.created" {
+        return Ok(false);
+    }
+    let Some(room_id) = event.room_id.as_deref() else {
+        return Ok(false);
+    };
+    let rule_id = event
+        .payload
+        .get("ruleId")
+        .and_then(|value| value.as_str())
+        .unwrap_or(event.aggregate_id.as_str());
+    let rules = runtime
+        .list_rules(room_id.to_string())
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(rule) = rules.into_iter().find(|candidate| candidate.rule_id == rule_id) else {
+        return Ok(false);
+    };
+    apply_server_rule_to_local_root(roots, &rule)?;
+    Ok(true)
+}
+
+fn apply_server_rule_to_local_root(
+    roots: &ManagedRootStore,
+    rule: &AgentRule,
+) -> Result<(), String> {
+    let managed_root = roots
+        .find_by_room(&rule.room_id)?
+        .ok_or_else(|| format!("managed root is not bound to room: {}", rule.room_id))?;
+    let root_path = Path::new(&managed_root.root);
+    let state_dir = root_path.join(".mousekeeper");
+    let rules_path = state_dir.join(RULES_FILE);
+    let mut rule_set = if rules_path.exists() {
+        load_rule_set_for_root(root_path)
+            .map_err(|error| format!("cannot load existing local rules: {error}"))?
+    } else {
+        default_rule_set()
+    };
+    let rule_prefix = format!("{}-any-", rule.rule_id);
+    rule_set
+        .rules
+        .retain(|existing| existing.id != rule.rule_id && !existing.id.starts_with(&rule_prefix));
+
+    if rule.enabled {
+        let mut incoming = RuleSet::from_contract_definition(
+            rule.rule_id.clone(),
+            rule.priority,
+            rule.definition.clone(),
+        )
+        .map_err(|error| format!("invalid server rule definition: {error}"))?;
+        rule_set.rules.append(&mut incoming.rules);
+    }
+    rule_set
+        .validate()
+        .map_err(|error| format!("invalid merged local rules: {error}"))?;
+    fs::create_dir_all(&state_dir).map_err(|error| {
+        format!(
+            "cannot create rules directory {}: {error}",
+            state_dir.display()
+        )
+    })?;
+    let encoded = serde_json::to_string_pretty(&rule_set)
+        .map_err(|error| format!("cannot serialize local rules: {error}"))?;
+    fs::write(&rules_path, encoded)
+        .map_err(|error| format!("cannot write local rules {}: {error}", rules_path.display()))
 }
 
 #[cfg(feature = "tauri-commands")]
