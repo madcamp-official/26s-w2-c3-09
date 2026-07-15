@@ -6,6 +6,68 @@ import 'package:flutter/scheduler.dart';
 
 import 'pixel_game_widgets.dart';
 
+class CageLevel {
+  CageLevel._({
+    required this.start,
+    required this.platforms,
+    required this.hazards,
+    required this.exit,
+  });
+
+  factory CageLevel.generate({math.Random? random}) {
+    final rng = random ?? math.Random();
+    const worldWidth = 360.0;
+    final start = Offset(18 + rng.nextDouble() * 34, 520);
+    final platforms = <Rect>[const Rect.fromLTWH(0, 560, 360, 40)];
+    var previousCenter = start.dx + 14;
+    const platformTops = <double>[486, 414, 342, 270, 198, 126];
+
+    for (final baseTop in platformTops) {
+      final width = 96 + rng.nextDouble() * 22;
+      final center = (previousCenter + (rng.nextDouble() * 150 - 75))
+          .clamp(width / 2 + 12, worldWidth - width / 2 - 12)
+          .toDouble();
+      final top = baseTop + (rng.nextDouble() * 10 - 5);
+      platforms.add(Rect.fromLTWH(center - width / 2, top, width, 14));
+      previousCenter = center;
+    }
+
+    final hazards = <Rect>[
+      Rect.fromLTWH(150 + rng.nextDouble() * 70, 542, 34, 18),
+    ];
+    for (var index = 1; index < platforms.length - 1; index++) {
+      if (!rng.nextBool()) continue;
+      final platform = platforms[index];
+      final placeOnLeft = rng.nextBool();
+      hazards.add(
+        Rect.fromLTWH(
+          placeOnLeft ? platform.left + 5 : platform.right - 29,
+          platform.top - 18,
+          24,
+          18,
+        ),
+      );
+    }
+
+    final lastPlatform = platforms.last;
+    final exitLeft = rng.nextBool()
+        ? lastPlatform.left + 4
+        : lastPlatform.right - 46;
+    final exit = Rect.fromLTWH(exitLeft, lastPlatform.top - 58, 42, 58);
+    return CageLevel._(
+      start: start,
+      platforms: List.unmodifiable(platforms),
+      hazards: List.unmodifiable(hazards),
+      exit: exit,
+    );
+  }
+
+  final Offset start;
+  final List<Rect> platforms;
+  final List<Rect> hazards;
+  final Rect exit;
+}
+
 class CageEscapeGamePage extends StatefulWidget {
   const CageEscapeGamePage({super.key});
 
@@ -20,28 +82,12 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
   static const _gravity = 900.0;
   static const _moveSpeed = 155.0;
   static const _jumpSpeed = -430.0;
-  static const _start = Offset(22, 520);
-  static const _exit = Rect.fromLTWH(298, 96, 42, 58);
-  static const _platforms = <Rect>[
-    Rect.fromLTWH(0, 560, 360, 40),
-    Rect.fromLTWH(55, 486, 98, 14),
-    Rect.fromLTWH(190, 414, 104, 14),
-    Rect.fromLTWH(72, 340, 106, 14),
-    Rect.fromLTWH(205, 266, 100, 14),
-    Rect.fromLTWH(78, 198, 105, 14),
-    Rect.fromLTWH(244, 154, 100, 14),
-  ];
-  static const _hazards = <Rect>[
-    Rect.fromLTWH(144, 542, 42, 18),
-    Rect.fromLTWH(239, 396, 32, 18),
-    Rect.fromLTWH(112, 322, 30, 18),
-    Rect.fromLTWH(240, 248, 30, 18),
-  ];
 
   late final Ticker _ticker;
+  late CageLevel _level;
   Duration? _lastTick;
   late DateTime _startedAt;
-  Offset _position = _start;
+  Offset _position = Offset.zero;
   Offset _velocity = Offset.zero;
   bool _moveLeft = false;
   bool _moveRight = false;
@@ -52,6 +98,8 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
   @override
   void initState() {
     super.initState();
+    _level = CageLevel.generate();
+    _position = _level.start;
     _startedAt = DateTime.now();
     _ticker = createTicker(_tick)..start();
   }
@@ -93,7 +141,7 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
         _playerSize.width,
         _playerSize.height,
       );
-      for (final platform in _platforms) {
+      for (final platform in _level.platforms) {
         final crossesTop =
             previousRect.bottom <= platform.top + 3 &&
             nextRect.bottom >= platform.top;
@@ -115,11 +163,11 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
       _playerSize.height,
     );
     if (nextY > _worldSize.height ||
-        _hazards.any((hazard) => hazard.overlaps(nextRect))) {
+        _level.hazards.any((hazard) => hazard.overlaps(nextRect))) {
       _respawn();
       return;
     }
-    if (_exit.overlaps(nextRect)) {
+    if (_level.exit.overlaps(nextRect)) {
       _complete();
       return;
     }
@@ -141,7 +189,7 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
   void _respawn() {
     if (!mounted) return;
     setState(() {
-      _position = _start;
+      _position = _level.start;
       _velocity = Offset.zero;
       _grounded = false;
       _respawns++;
@@ -149,10 +197,14 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
   }
 
   void _restart() {
+    final nextLevel = CageLevel.generate();
     setState(() {
-      _position = _start;
+      _level = nextLevel;
+      _position = nextLevel.start;
       _velocity = Offset.zero;
       _grounded = false;
+      _moveLeft = false;
+      _moveRight = false;
       _cleared = false;
       _respawns = 0;
       _startedAt = DateTime.now();
@@ -181,7 +233,7 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
               Navigator.of(context).pop();
               _restart();
             },
-            child: const Text('다시 하기'),
+            child: const Text('새 맵으로 다시 하기'),
           ),
           FilledButton(
             onPressed: () {
@@ -202,7 +254,11 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
       title: const Text('케이지 탈출'),
       actions: [
         Center(child: Text('리스폰 $_respawns')),
-        IconButton(onPressed: _restart, icon: const Icon(Icons.refresh)),
+        IconButton(
+          tooltip: '새 점프맵',
+          onPressed: _restart,
+          icon: const Icon(Icons.refresh),
+        ),
       ],
     ),
     body: SafeArea(
@@ -219,9 +275,9 @@ class _CageEscapeGamePageState extends State<CageEscapeGamePage>
                     painter: _CagePainter(
                       worldSize: _worldSize,
                       player: _playerRect,
-                      platforms: _platforms,
-                      hazards: _hazards,
-                      exit: _exit,
+                      platforms: _level.platforms,
+                      hazards: _level.hazards,
+                      exit: _level.exit,
                     ),
                   ),
                 ),
@@ -363,5 +419,8 @@ class _CagePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CagePainter oldDelegate) =>
-      oldDelegate.player != player;
+      oldDelegate.player != player ||
+      oldDelegate.platforms != platforms ||
+      oldDelegate.hazards != hazards ||
+      oldDelegate.exit != exit;
 }

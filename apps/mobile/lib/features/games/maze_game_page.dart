@@ -332,17 +332,70 @@ class _MazePainter extends CustomPainter {
       origin.dx + (player.x + 0.5) * cell,
       (player.y + 0.5) * cell,
     );
-    final mouse = Paint()
+    _paintMouseFace(canvas, playerCenter, cell * 0.82);
+  }
+
+  void _paintMouseFace(Canvas canvas, Offset center, double size) {
+    // Primitive, non-antialiased shapes keep the marker readable as a mouse
+    // face even when a maze cell is only a few dozen physical pixels wide.
+    final fur = Paint()
+      ..color = const Color(0xFFFFE2C2)
+      ..isAntiAlias = false;
+    final innerEar = Paint()
       ..color = const Color(0xFFE78596)
       ..isAntiAlias = false;
-    canvas.drawRect(
-      Rect.fromCenter(
-        center: playerCenter,
-        width: cell * 0.52,
-        height: cell * 0.52,
-      ),
-      mouse,
+    final ink = Paint()
+      ..color = pixelGameInk
+      ..isAntiAlias = false;
+    final earSize = size * 0.32;
+    final head = Rect.fromCenter(
+      center: center + Offset(0, size * 0.06),
+      width: size * 0.7,
+      height: size * 0.62,
     );
+    final leftEar = Rect.fromCenter(
+      center: center + Offset(-size * 0.27, -size * 0.24),
+      width: earSize,
+      height: earSize,
+    );
+    final rightEar = Rect.fromCenter(
+      center: center + Offset(size * 0.27, -size * 0.24),
+      width: earSize,
+      height: earSize,
+    );
+    canvas
+      ..drawRect(leftEar, fur)
+      ..drawRect(rightEar, fur)
+      ..drawRect(leftEar.deflate(size * 0.08), innerEar)
+      ..drawRect(rightEar.deflate(size * 0.08), innerEar)
+      ..drawRect(head, fur);
+
+    final eyeSize = max(2.0, size * 0.09);
+    canvas
+      ..drawRect(
+        Rect.fromCenter(
+          center: center + Offset(-size * 0.17, 0),
+          width: eyeSize,
+          height: eyeSize,
+        ),
+        ink,
+      )
+      ..drawRect(
+        Rect.fromCenter(
+          center: center + Offset(size * 0.17, 0),
+          width: eyeSize,
+          height: eyeSize,
+        ),
+        ink,
+      )
+      ..drawRect(
+        Rect.fromCenter(
+          center: center + Offset(0, size * 0.18),
+          width: eyeSize,
+          height: eyeSize * 0.75,
+        ),
+        innerEar,
+      );
   }
 
   @override

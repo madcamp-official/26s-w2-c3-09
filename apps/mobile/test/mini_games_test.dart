@@ -27,6 +27,27 @@ void main() {
     expect(visited, contains(const Point(9, 9)));
   });
 
+  test('cage escape generates a new reachable platform route per seed', () {
+    final first = CageLevel.generate(random: Random(11));
+    final second = CageLevel.generate(random: Random(29));
+
+    expect(first.platforms, isNot(equals(second.platforms)));
+    for (final level in [first, second]) {
+      expect(level.platforms, hasLength(7));
+      for (var index = 1; index < level.platforms.length; index++) {
+        final lower = level.platforms[index - 1];
+        final upper = level.platforms[index];
+        final horizontalGap = max(
+          0.0,
+          max(upper.left - lower.right, lower.left - upper.right),
+        );
+        expect(lower.top - upper.top, inInclusiveRange(60, 82));
+        expect(horizontalGap, lessThanOrEqualTo(75));
+      }
+      expect(level.exit.bottom, closeTo(level.platforms.last.top, 0.001));
+    }
+  });
+
   testWidgets('game hub routes to all three playable games', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: MiniGameHubPage()));
 
