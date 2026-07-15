@@ -31,6 +31,7 @@ export async function buildRoomContext(
   return {
     roomName: room.name,
     rootAlias: room.rootAlias,
+    aiDocumentAnalysisConsent: room.aiDocumentAnalysisConsent,
     existingRules: roomRules.map((rule) => ({
       name: rule.name,
       destinationTemplate: destinationTemplateFromDefinition(rule.definition),

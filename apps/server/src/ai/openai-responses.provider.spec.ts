@@ -20,6 +20,50 @@ function okOutput(value: unknown) {
 }
 
 describe('OpenAiResponsesProvider', () => {
+  it('uses a separate classifier model before the agent model when configured', async () => {
+    const fetcher = jest
+      .fn()
+      .mockResolvedValueOnce(okOutput({ route: 'CHAT', needsTools: false }))
+      .mockResolvedValueOnce(
+        okOutput({
+          kind: 'NO_ACTION',
+          reasonCode: '',
+          reply: '안녕하세요!',
+          intent: 'NONE',
+          arguments: {},
+          confirmationSummary: '',
+          browse: {},
+          responseSummary: '',
+          name: '',
+          definition: {},
+          explanation: '',
+          ambiguities: [],
+        }),
+      );
+    const provider = new OpenAiResponsesProvider({
+      apiKey: 'test-openai-key',
+      model: 'agent-model',
+      classifierModel: 'classifier-model',
+      fetcher,
+    });
+
+    await expect(
+      provider.classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: { id: 'message-1', content: '안녕' },
+      }),
+    ).resolves.toMatchObject({ status: 'READY', kind: 'NO_ACTION' });
+    const requestModels = fetcher.mock.calls.map((call) =>
+      JSON.parse((call[1] as RequestInit).body as string),
+    );
+    expect(requestModels.map((request) => request.model)).toEqual([
+      'classifier-model',
+      'agent-model',
+    ]);
+  });
+
   it('drafts commands through Responses API output then validates server contracts', async () => {
     const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
       okOutput({
@@ -80,7 +124,7 @@ describe('OpenAiResponsesProvider', () => {
         format: {
           type: 'json_schema',
           name: 'mousekeeper_command_draft',
-          strict: true,
+          strict: false,
         },
       },
     });
@@ -316,6 +360,45 @@ describe('OpenAiResponsesProvider', () => {
         searchScope: 'MANAGED_ROOT',
       },
       responseSummary: 'Looking for report PDFs under Documents.',
+    });
+  });
+
+  it('accepts direct nested objects without JSON string encoding', async () => {
+    const fetcher = jest.fn(async () =>
+      okOutput({
+        kind: 'QUERY',
+        reasonCode: '',
+        reply: '',
+        intent: 'NONE',
+        arguments: {},
+        confirmationSummary: '',
+        browse: {
+          relativeDirectory: 'images',
+          cursor: null,
+          query: null,
+          extensions: [],
+          limit: 25,
+          searchScope: 'CURRENT_DIRECTORY',
+        },
+        responseSummary: 'images 폴더를 확인합니다.',
+        name: '',
+        definition: {},
+        explanation: '',
+        ambiguities: [],
+      }),
+    );
+
+    await expect(
+      providerWith(fetcher).classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: { id: 'message-1', content: 'images 폴더를 보여줘' },
+      }),
+    ).resolves.toMatchObject({
+      status: 'READY',
+      kind: 'QUERY',
+      browse: { relativeDirectory: 'images', query: null },
     });
   });
 

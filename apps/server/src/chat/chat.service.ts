@@ -4,6 +4,8 @@ import {
   Injectable,
   NotFoundException,
   Optional,
+  OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import {
   createCommandDraftSchema,
@@ -19,6 +21,7 @@ import {
   chatMessages,
   chatReadStates,
   chatSessions,
+  agentSteps,
   commandDrafts,
   commands,
   devices,
@@ -29,7 +32,18 @@ import {
   rooms,
   type Database,
 } from '@mousekeeper/database';
-import { and, asc, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { z } from 'zod';
 import { mapAiResultToCommandDraft } from '../ai/ai-command-draft.mapper';
 import {
@@ -39,11 +53,13 @@ import {
   type AiRuleDraftResult,
 } from '../ai/ai.provider';
 import { buildFileContext, buildRoomContext } from '../ai/room-context';
+import { rankDirectoryCandidates } from '../ai/path-candidates';
 import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
 import { FileBrowseService } from '../file-access/file-browse.service';
 import { SyncService } from '../sync/sync.service';
 import { TransfersService } from '../transfers/transfers.service';
+import { AgentRunsService } from './agent-runs.service';
 
 const CHAT_SESSION_LIMIT = 5;
 const DEFAULT_CHAT_TITLE = 'New chat';
@@ -92,14 +108,30 @@ type PublicChatMessage = {
 };
 
 @Injectable()
-export class ChatService {
+export class ChatService implements OnModuleInit, OnModuleDestroy {
+  private agentRunTimer: ReturnType<typeof setInterval> | null = null;
+  private agentRunTickActive = false;
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly sync: SyncService,
     @Inject(AI_PROVIDER) private readonly ai: AiProvider,
     @Optional() private readonly browse?: FileBrowseService,
     @Optional() private readonly transfers?: TransfersService,
+    @Optional() private readonly agentRuns?: AgentRunsService,
   ) {}
+
+  onModuleInit() {
+    if (!this.agentRuns) return;
+    this.agentRunTimer = setInterval(
+      () => void this.processQueuedAgentRun(),
+      1000,
+    );
+    void this.processQueuedAgentRun();
+  }
+
+  onModuleDestroy() {
+    if (this.agentRunTimer) clearInterval(this.agentRunTimer);
+  }
 
   async listSessions(userId: string, roomId: string) {
     await this.requireOwnedRoom(userId, roomId);
@@ -928,7 +960,7 @@ export class ChatService {
       );
       return { session, message: result.message };
     });
-    return this.withAiResult(userId, created.session, created.message);
+    return this.withAgentRun(userId, created.session, created.message);
   }
 
   private async createMessageForSession(
@@ -939,7 +971,334 @@ export class ChatService {
     const result = await this.db.transaction((tx) =>
       this.createMessageForSessionIn(tx, userId, session, content),
     );
-    return this.withAiResult(userId, session, result.message);
+    return this.withAgentRun(userId, session, result.message);
+  }
+
+  private async withAgentRun(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+    message: PublicChatMessage,
+  ) {
+    if (!this.agentRuns) return this.withAiResult(userId, session, message);
+    const run = await this.agentRuns.begin({
+      userId,
+      roomId: session.roomId,
+      sessionId: session.id,
+      sourceMessageId: message.id,
+    });
+    const progress = await this.createAiTextAssistantMessage(
+      userId,
+      session,
+      '요청을 확인하고 있어요.',
+    );
+    return {
+      message,
+      assistant: progress,
+      aiStatus: 'READY' as const,
+      ai: { status: 'READY' as const, kind: 'NO_ACTION' as const },
+      agentRunId: run.id,
+      agentRunStatus: run.status,
+    };
+  }
+
+  private async processQueuedAgentRun() {
+    if (!this.agentRuns || this.agentRunTickActive) return;
+    this.agentRunTickActive = true;
+    try {
+      const run = await this.agentRuns.claimNext();
+      if (!run) return;
+      const [session, row] = await Promise.all([
+        this.db.query.chatSessions.findFirst({
+          where: and(
+            eq(chatSessions.id, run.sessionId),
+            eq(chatSessions.userId, run.userId),
+          ),
+        }),
+        this.db.query.chatMessages.findFirst({
+          where: and(
+            eq(chatMessages.id, run.sourceMessageId),
+            eq(chatMessages.sessionId, run.sessionId),
+          ),
+        }),
+      ]);
+      if (!session || !row) {
+        await this.agentRuns.transition(run.userId, run.id, 'FAILED', {
+          failureCode: 'AGENT_RUN_CONTEXT_MISSING',
+        });
+        return;
+      }
+      const resumeContext = recordValue(run.resumeContext);
+      const completedBrowse = await this.completedBrowseForRun(run.id);
+      if (completedBrowse) {
+        await this.finalizeBrowseAgentRun(run.userId, session, completedBrowse);
+        await this.agentRuns.transition(run.userId, run.id, 'COMPLETED', {
+          route: 'QUERY',
+        });
+        return;
+      }
+      const completedHistory = await this.completedOperationHistoryForRun(run.id);
+      if (completedHistory) {
+        await this.finalizeOperationHistoryAgentRun(run.userId, session, completedHistory);
+        await this.agentRuns.transition(run.userId, run.id, 'COMPLETED', { route: 'HISTORY' });
+        return;
+      }
+      const completedDocument = await this.completedDocumentExtractionForRun(run.id);
+      if (completedDocument) {
+        const metadata = recordValue(completedDocument.resultMetadata);
+        const chunks = await this.agentRuns.getEphemeralDocumentChunks(completedDocument.id);
+        const result = await this.withAiResult(run.userId, session, this.publicMessage(row), {
+          relativePath: typeof metadata?.relativePath === 'string' ? metadata.relativePath : 'document',
+          chunks,
+          modifiedUnixMs: typeof metadata?.modifiedUnixMs === 'number' ? metadata.modifiedUnixMs : 0,
+        });
+        await this.agentRuns.transition(run.userId, run.id, result.aiStatus === 'INVALID' ? 'FAILED' : 'COMPLETED', { route: 'CHAT' });
+        return;
+      }
+      if (!recordValue(run.resumeContext)?.operationHistoryRequested && isOperationHistoryRequest(row.content)) {
+        const roomContext = await buildRoomContext(this.db, run.roomId);
+        const step = await this.agentRuns.addStep(
+          run.userId,
+          run.id,
+          'OPERATION_HISTORY',
+          { rootId: roomContext?.rootAlias ?? '', limit: 20 },
+        );
+        await this.agentRuns.transition(run.userId, run.id, 'WAITING_TOOL', {
+          route: 'HISTORY',
+          resumeContext: { operationHistoryRequested: true, stepId: step.id },
+        });
+        return;
+      }
+      const completedRules = await this.completedRuleListForRun(run.id);
+      if (completedRules) {
+        const metadata = recordValue(completedRules.resultMetadata);
+        const rules = Array.isArray(metadata?.rules) ? metadata.rules : [];
+        await this.createAiTextAssistantMessage(run.userId, session, rules.length === 0 ? '현재 규칙이 없습니다.' : `현재 활성 규칙 ${rules.length}개를 확인했습니다.`);
+        await this.agentRuns.transition(run.userId, run.id, 'COMPLETED', { route: 'RULE' });
+        return;
+      }
+      if (!recordValue(run.resumeContext)?.ruleListRequested && isRuleListRequest(row.content)) {
+        const roomContext = await buildRoomContext(this.db, run.roomId);
+        const step = await this.agentRuns.addStep(run.userId, run.id, 'RULE_LIST', { rootId: roomContext?.rootAlias ?? '' });
+        await this.agentRuns.transition(run.userId, run.id, 'WAITING_TOOL', { route: 'RULE', resumeContext: { ruleListRequested: true, stepId: step.id } });
+        return;
+      }
+      if (!recordValue(run.resumeContext)?.documentExtractionRequested && isDocumentExtractionRequest(row.content)) {
+        const roomContext = await buildRoomContext(this.db, run.roomId);
+        const fileContext = await buildFileContext(this.db, run.roomId);
+        const relativePath = documentPathFromMessage(row.content, fileContext.recentFiles.map((file) => file.relativePath));
+        if (roomContext?.aiDocumentAnalysisConsent && relativePath) {
+          const step = await this.agentRuns.addStep(run.userId, run.id, 'DOCUMENT_EXTRACT', { rootId: roomContext.rootAlias, relativePath, expectedSha256: null, maxChars: 100000 });
+          await this.agentRuns.transition(run.userId, run.id, 'WAITING_TOOL', { route: 'CHAT', resumeContext: { documentExtractionRequested: true, stepId: step.id } });
+          return;
+        }
+      }
+      const selectedCandidate =
+        typeof resumeContext?.selectedCandidate === 'string'
+          ? resumeContext.selectedCandidate
+          : null;
+      if (!selectedCandidate) {
+        const requestedFolder = namedFolderFromMessage(row.content);
+        if (requestedFolder) {
+          const fileContext = await buildFileContext(this.db, run.roomId);
+          const exact = fileContext.knownFolders.some(
+            (folder) =>
+              folder.toLocaleLowerCase() ===
+              requestedFolder.toLocaleLowerCase(),
+          );
+          const candidates = exact
+            ? []
+            : rankDirectoryCandidates(
+                requestedFolder,
+                fileContext.knownFolders,
+              ).map((candidate) => candidate.relativePath);
+          if (candidates.length > 0) {
+            await this.createAiTextAssistantMessage(
+              run.userId,
+              session,
+              candidates.length === 1
+                ? `${candidates[0]} 폴더를 말씀하신 건가요?`
+                : `어느 폴더를 말씀하셨나요? ${candidates.join(', ')}`,
+            );
+            await this.agentRuns.transition(
+              run.userId,
+              run.id,
+              'WAITING_USER',
+              {
+                route: 'QUERY',
+                resumeContext: { requestedFolder, candidates },
+              },
+            );
+            return;
+          }
+        }
+      }
+      const sourceMessage = this.publicMessage(row);
+      if (selectedCandidate) {
+        sourceMessage.content = `${sourceMessage.content}\n사용자가 확인한 상대 폴더 경로: ${selectedCandidate}`;
+      }
+      const result = await this.withAiResult(
+        run.userId,
+        session,
+        sourceMessage,
+      );
+      const kind = result.ai.status === 'READY' ? result.ai.kind : null;
+      const browseRequestId =
+        result.ai.status === 'READY' && result.ai.kind === 'QUERY'
+          ? result.ai.fileBrowseRequestId
+          : null;
+      const status =
+        result.aiStatus === 'INVALID'
+          ? 'FAILED'
+          : kind === 'QUERY' && browseRequestId
+            ? 'WAITING_TOOL'
+            : kind === 'COMMAND_DRAFT' || kind === 'RULE_DRAFT'
+              ? 'WAITING_APPROVAL'
+              : 'COMPLETED';
+      const route = routeForAiKind(kind);
+      if (browseRequestId) {
+        await this.agentRuns.addStep(
+          run.userId,
+          run.id,
+          'FILE_BROWSE',
+          { requestId: browseRequestId },
+          browseRequestId,
+        );
+      }
+      await this.agentRuns.transition(run.userId, run.id, status, {
+        route,
+        failureCode: result.aiStatus === 'INVALID' ? 'AI_OUTPUT_INVALID' : null,
+      });
+      if (result.aiStatus === 'UNCONFIGURED') {
+        await this.createAiTextAssistantMessage(
+          run.userId,
+          session,
+          'AI 제공자 설정을 확인해 주세요.',
+        );
+      } else if (result.aiStatus === 'INVALID') {
+        await this.createAiTextAssistantMessage(
+          run.userId,
+          session,
+          'AI 응답을 안전한 파일 작업으로 검증하지 못했어요.',
+        );
+      }
+    } catch (error) {
+      // A claimed run remains visible as RUNNING and expires safely. A later
+      // lease-recovery migration can requeue it without duplicating mutations.
+      console.error('AGENT_RUN_PROCESSING_FAILED');
+    } finally {
+      this.agentRunTickActive = false;
+    }
+  }
+
+  private async completedBrowseForRun(runId: string) {
+    const step = (
+      await this.db
+        .select()
+        .from(agentSteps)
+        .where(
+          and(
+            eq(agentSteps.runId, runId),
+            eq(agentSteps.toolName, 'FILE_BROWSE'),
+            eq(agentSteps.status, 'SUCCEEDED'),
+          ),
+        )
+        .orderBy(desc(agentSteps.sequence))
+        .limit(1)
+    )[0];
+    if (!step?.externalRequestId) return null;
+    const request = (
+      await this.db
+        .select()
+        .from(fileBrowseRequests)
+        .where(eq(fileBrowseRequests.id, step.externalRequestId))
+        .limit(1)
+    )[0];
+    return request?.status === 'READY' ? request : null;
+  }
+
+  private async completedOperationHistoryForRun(runId: string) {
+    return (await this.db.select().from(agentSteps).where(and(
+      eq(agentSteps.runId, runId), eq(agentSteps.toolName, 'OPERATION_HISTORY'),
+      eq(agentSteps.status, 'SUCCEEDED'),
+    )).orderBy(desc(agentSteps.sequence)).limit(1))[0] ?? null;
+  }
+
+  private async completedDocumentExtractionForRun(runId: string) {
+    return (await this.db.select().from(agentSteps).where(and(eq(agentSteps.runId, runId), eq(agentSteps.toolName, 'DOCUMENT_EXTRACT'), eq(agentSteps.status, 'SUCCEEDED'))).orderBy(desc(agentSteps.sequence)).limit(1))[0] ?? null;
+  }
+
+  private async completedRuleListForRun(runId: string) {
+    return (await this.db.select().from(agentSteps).where(and(eq(agentSteps.runId, runId), eq(agentSteps.toolName, 'RULE_LIST'), eq(agentSteps.status, 'SUCCEEDED'))).orderBy(desc(agentSteps.sequence)).limit(1))[0] ?? null;
+  }
+
+  private async finalizeOperationHistoryAgentRun(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+    step: typeof agentSteps.$inferSelect,
+  ) {
+    const metadata = recordValue(step.resultMetadata);
+    const operations = Array.isArray(metadata?.operations) ? metadata.operations : [];
+    const undoCandidate = operations.map((item) => recordValue(item)).find((item) => item?.canUndo === true);
+    const text = operations.length === 0
+      ? '최근 작업 기록이 없습니다.'
+      : `최근 작업 ${operations.length}건을 확인했습니다.\n${operations.map((item) => {
+          const value = recordValue(item);
+          return `- ${String(value?.action ?? '작업')} (${String(value?.operationId ?? 'id 없음')})${value?.canUndo ? ' · 되돌리기 가능' : ''}`;
+        }).join('\n')}`;
+    await this.createAiTextAssistantMessage(userId, session, text, undoCandidate ? {
+      kind: 'UNDO_DRAFT',
+      rootId: recordValue(step.input)?.rootId ?? null,
+      operationId: undoCandidate.operationId ?? null,
+      requiresApproval: true,
+      confirmationSummary: '이 작업을 되돌리려면 사용자 승인이 필요합니다.',
+    } : undefined);
+  }
+
+  private async finalizeBrowseAgentRun(
+    userId: string,
+    session: typeof chatSessions.$inferSelect,
+    request: typeof fileBrowseRequests.$inferSelect,
+  ) {
+    await this.db.transaction(async (tx) => {
+      const messages = await tx
+        .select()
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.sessionId, session.id),
+            eq(chatMessages.messageType, 'QUERY_RESULT'),
+          ),
+        )
+        .orderBy(desc(chatMessages.createdAt))
+        .limit(20);
+      const existing = messages.find((message) => {
+        const payload = recordValue(message.structuredPayload);
+        return recordValue(payload?.liveBrowseRequest)?.id === request.id;
+      });
+      if (!existing) return;
+      const payload = recordValue(existing.structuredPayload) ?? {};
+      await tx
+        .update(chatMessages)
+        .set({
+          content: '파일 조회가 완료되었습니다.',
+          structuredPayload: {
+            ...payload,
+            cacheMode: 'LIVE',
+            liveBrowseRequest: this.publicFileBrowseRequest(request),
+            liveResult: request.resultPage ?? null,
+          },
+        })
+        .where(eq(chatMessages.id, existing.id));
+      await this.sync.append(tx, {
+        userId,
+        deviceId: null,
+        roomId: session.roomId,
+        eventType: 'chat.message.updated',
+        aggregateType: 'chat_message',
+        aggregateId: existing.id,
+        payload: { messageId: existing.id, messageType: 'QUERY_RESULT' },
+      });
+    });
   }
 
   private async createMessageForSessionIn(
@@ -991,6 +1350,7 @@ export class ChatService {
     userId: string,
     session: typeof chatSessions.$inferSelect,
     message: PublicChatMessage,
+    documentChunks?: { relativePath: string; chunks: string[]; modifiedUnixMs: number },
   ) {
     const [roomContext, fileContext] = await Promise.all([
       buildRoomContext(this.db, session.roomId),
@@ -1006,6 +1366,7 @@ export class ChatService {
       },
       room: roomContext,
       fileContext,
+      documentChunks,
     });
     if (ai.status === 'READY' && ai.kind === 'NO_ACTION') {
       const assistant = await this.createAiTextAssistantMessage(
@@ -1024,7 +1385,12 @@ export class ChatService {
       };
     }
     if (ai.status === 'READY' && ai.kind === 'RULE_DRAFT') {
-      const draft = await this.createRuleDraftFromAi(userId, session, message, ai);
+      const draft = await this.createRuleDraftFromAi(
+        userId,
+        session,
+        message,
+        ai,
+      );
       if (!draft) {
         return {
           message,
@@ -1223,6 +1589,7 @@ export class ChatService {
     userId: string,
     session: typeof chatSessions.$inferSelect,
     content: string,
+    structuredPayload?: Record<string, unknown>,
   ) {
     return this.db.transaction(async (tx) => {
       const currentSession = await this.requireOwnedSessionIn(
@@ -1239,6 +1606,7 @@ export class ChatService {
             senderType: 'ASSISTANT',
             messageType: 'TEXT',
             content,
+            structuredPayload: structuredPayload ?? null,
           })
           .returning()
       )[0]!;
@@ -1693,8 +2061,7 @@ export class ChatService {
       commandMetadata &&
       typeof commandMetadata === 'object' &&
       !Array.isArray(commandMetadata) &&
-      typeof (commandMetadata as Record<string, unknown>).sessionId ===
-        'string'
+      typeof (commandMetadata as Record<string, unknown>).sessionId === 'string'
         ? ((commandMetadata as Record<string, unknown>).sessionId as string)
         : null;
     if (metadataSessionId) {
@@ -1976,7 +2343,10 @@ export class ChatService {
         .select()
         .from(chatMessages)
         .where(
-          and(eq(chatMessages.id, messageId), eq(chatMessages.sessionId, sessionId)),
+          and(
+            eq(chatMessages.id, messageId),
+            eq(chatMessages.sessionId, sessionId),
+          ),
         )
         .limit(1)
     )[0];
@@ -2007,7 +2377,11 @@ export class ChatService {
         session.id,
         readState.lastReadMessageId,
       );
-      unreadCount = await this.unreadCountAfter(db, session.id, readMessage.createdAt);
+      unreadCount = await this.unreadCountAfter(
+        db,
+        session.id,
+        readMessage.createdAt,
+      );
     } else {
       unreadCount = await this.unreadCountAfter(db, session.id, null);
     }
@@ -2032,7 +2406,9 @@ export class ChatService {
           and(
             eq(chatMessages.sessionId, sessionId),
             ne(chatMessages.senderType, 'USER'),
-            ...(afterCreatedAt ? [gt(chatMessages.createdAt, afterCreatedAt)] : []),
+            ...(afterCreatedAt
+              ? [gt(chatMessages.createdAt, afterCreatedAt)]
+              : []),
           ),
         )
     )[0];
@@ -2056,7 +2432,10 @@ export class ChatService {
         .select({ value: sql<number>`count(*)::int` })
         .from(ruleDrafts)
         .where(
-          and(eq(ruleDrafts.sessionId, sessionId), eq(ruleDrafts.status, 'DRAFT')),
+          and(
+            eq(ruleDrafts.sessionId, sessionId),
+            eq(ruleDrafts.status, 'DRAFT'),
+          ),
         )
     )[0];
     return Number(commandRow?.value ?? 0) + Number(ruleRow?.value ?? 0);
@@ -2211,6 +2590,46 @@ function titleFromContent(content: string) {
   return title.length > 0 ? title : DEFAULT_CHAT_TITLE;
 }
 
+function routeForAiKind(kind: string | null) {
+  if (kind === 'QUERY') return 'QUERY';
+  if (kind === 'COMMAND_DRAFT') return 'COMMAND';
+  if (kind === 'RULE_DRAFT') return 'RULE';
+  if (kind === 'NO_ACTION') return 'CHAT';
+  return null;
+}
+
+function namedFolderFromMessage(content: string) {
+  const korean = content.match(/([\p{L}\p{N}_.-]+)\s*폴더(?:의|를|에서|\s|$)/u);
+  if (korean?.[1]) return korean[1];
+  const english = content.match(/(?:folder\s+|in\s+)([\p{L}\p{N}_.-]+)/iu);
+  return english?.[1] ?? null;
+}
+
+function isOperationHistoryRequest(content: string) {
+  return /(작업\s*기록|작업\s*내역|최근\s*작업|operation\s*history|activity\s*log|undo\s*(가능|해)|되돌려|되돌리)/iu.test(content);
+}
+
+function isDocumentExtractionRequest(content: string) {
+  return /(문서|파일).*(내용|읽어|분석|요약)|summari[sz]e|analy[sz]e.*document/iu.test(content);
+}
+
+function isRuleListRequest(content: string) {
+  return /(?:현재|활성|등록된|있는)\s*(?:파일\s*)?규칙|rule\s*(?:list|status)|규칙\s*(?:목록|상태)/iu.test(content);
+}
+
+function documentPathFromMessage(content: string, knownPaths: string[]) {
+  const explicit = content.match(/(?:문서|파일)\s*[`'"“”]?([^\s`'"“”]+\.(?:txt|md|json|csv|tsv|log|pdf|docx|pptx|xlsx))/iu)?.[1];
+  if (explicit && knownPaths.includes(explicit)) return explicit;
+  const mentioned = knownPaths.filter((path) => content.includes(path));
+  return mentioned.length === 1 ? mentioned[0] : null;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function queryResultContent(
   summary: string,
   cacheHitCount: number,
@@ -2257,7 +2676,8 @@ function draftSummaryFromPayload(
     return null;
   }
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.id === 'string' && typeof candidate.status === 'string'
+  return typeof candidate.id === 'string' &&
+    typeof candidate.status === 'string'
     ? { id: candidate.id, status: candidate.status }
     : null;
 }

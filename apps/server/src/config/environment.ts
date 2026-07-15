@@ -32,6 +32,8 @@ const schema = z.object({
   AI_PROVIDER: aiProvider,
   AI_API_KEY: optionalString,
   AI_MODEL: optionalString,
+  AI_CLASSIFIER_MODEL: optionalString,
+  AI_AGENT_MODEL: optionalString,
   AI_TIMEOUT_MS: optionalPositiveInteger,
   AI_MAX_OUTPUT_TOKENS: optionalPositiveInteger,
   JWT_OR_DEVICE_TOKEN_SECRET: z.string().min(32),

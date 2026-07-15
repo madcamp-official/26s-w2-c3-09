@@ -697,6 +697,10 @@ async fn run_background_tick(
         }
         Err(error) => record_busy_skip(status, error),
     }
+    if let Err(error) = crate::agent_tool_processor::process_pending_agent_tools(&agent, &roots).await {
+        activity.had_error = true;
+        update_status(status, |status| status.last_error_message = Some(error));
+    }
     if stop_if_agent_revoked(app, status, &agent) {
         return BackgroundTickOutcome::Stop;
     }

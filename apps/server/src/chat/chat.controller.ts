@@ -1,5 +1,6 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Delete,
   Get,
@@ -12,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   chatMessagesQuerySchema,
+  answerAgentClarificationSchema,
   confirmCommandDraftSchema,
   createChatMessageSchema,
   createChatSessionSchema,
@@ -28,11 +30,77 @@ import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 import { requireIdempotencyKey } from '../connections/idempotency-key';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { ChatService } from './chat.service';
+import { AgentRunsService } from './agent-runs.service';
+import { AgentOnly } from '../auth/agent-only.decorator';
+import { requireAgentDevice } from '../auth/agent-device';
 
 @Controller('v1')
 @UseGuards(FirebaseAuthGuard)
 export class ChatController {
-  constructor(private readonly chat: ChatService) {}
+  constructor(
+    private readonly chat: ChatService,
+    private readonly agentRuns: AgentRunsService,
+  ) {}
+
+  @Get('agent-runs/:runId')
+  getAgentRun(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('runId') runId: string,
+  ) {
+    return this.agentRuns.get(p.userId, runId);
+  }
+
+  @Post('agent-runs/:runId/clarifications')
+  answerAgentClarification(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('runId') runId: string,
+    @Body(new ZodValidationPipe(answerAgentClarificationSchema))
+    body: z.infer<typeof answerAgentClarificationSchema>,
+  ) {
+    return this.agentRuns.answerClarification(
+      p.userId,
+      runId,
+      body.selectedCandidate,
+    );
+  }
+
+  @Get('devices/:deviceId/agent-tools/pending')
+  @AgentOnly()
+  pendingAgentTools(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('deviceId') deviceId: string,
+  ) {
+    requireAgentDevice(p, deviceId);
+    return this.agentRuns.pendingTools(p.userId, deviceId);
+  }
+
+  @Post('agent/agent-tools/:stepId/result')
+  @AgentOnly()
+  completeAgentTool(
+    @CurrentPrincipal() p: AuthPrincipal,
+    @Param('stepId') stepId: string,
+    @Body() body: unknown,
+  ) {
+    const deviceId = requireAgentDevice(p);
+    const parsed = z.object({
+      status: z.enum(['SUCCEEDED', 'FAILED']),
+      resultMetadata: z.record(z.string(), z.unknown()).nullable().optional(),
+      failureCode: z.string().trim().min(1).max(80).nullable().optional(),
+    }).strict().safeParse(body);
+    if (!parsed.success) throw new BadRequestException({ code: 'INVALID_AGENT_TOOL_RESULT' });
+    const metadataBytes = Buffer.byteLength(JSON.stringify(parsed.data.resultMetadata ?? null), 'utf8');
+    if (metadataBytes > 512_000) {
+      throw new BadRequestException({ code: 'AGENT_TOOL_RESULT_TOO_LARGE' });
+    }
+    return this.agentRuns.completeTool(
+      p.userId,
+      deviceId,
+      stepId,
+      parsed.data.status,
+      parsed.data.resultMetadata ?? null,
+      parsed.data.failureCode ?? null,
+    );
+  }
 
   @Get('rooms/:roomId/chat-sessions')
   listSessions(

@@ -8,7 +8,8 @@ declare global {
   }
 }
 
-export type AgentConnectionState = "unconfigured" | "offline" | "connecting" | "online" | "revoked";
+export type AgentConnectionState =
+  "unconfigured" | "offline" | "connecting" | "online" | "revoked";
 
 export type AgentErrorCode =
   | "UNCONFIGURED"
@@ -80,7 +81,13 @@ export type AgentChatMessage = {
   room_id: string;
   session_id: string | null;
   sender_type: "USER" | "ASSISTANT";
-  message_type: "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "PROPOSAL" | "QUERY_RESULT" | "EXECUTION_RESULT";
+  message_type:
+    | "TEXT"
+    | "COMMAND_DRAFT"
+    | "RULE_DRAFT"
+    | "PROPOSAL"
+    | "QUERY_RESULT"
+    | "EXECUTION_RESULT";
   content: string;
   structured_payload: unknown;
   command_id: string | null;
@@ -92,6 +99,8 @@ export type AgentChatSendResult = {
   assistant: AgentChatMessage | null;
   ai_status: string;
   ai: unknown;
+  agent_run_id?: string;
+  agent_run_status?: string;
 };
 
 export type AgentChatQuickPrompt = {
@@ -261,7 +270,8 @@ export type OutboxFlushReport = {
   failed_count: number;
 };
 
-export type CommandProcessingStatus = "submitted_proposal" | "failed" | "skipped";
+export type CommandProcessingStatus =
+  "submitted_proposal" | "failed" | "skipped";
 
 export type CommandProcessingResult = {
   command_id: string;
@@ -421,31 +431,48 @@ export type AgentChatMessageSyncUpdate = {
 };
 
 export function getAgentConnectionStatus() {
-  return invokeAgentCommand<AgentConnectionStatus>("get_agent_connection_status");
+  return invokeAgentCommand<AgentConnectionStatus>(
+    "get_agent_connection_status",
+  );
 }
 
 export function getBackgroundRuntimeStatus() {
-  return invokeAgentCommand<BackgroundRuntimeStatus>("get_background_runtime_status");
+  return invokeAgentCommand<BackgroundRuntimeStatus>(
+    "get_background_runtime_status",
+  );
 }
 
 export function startBackgroundRuntime() {
-  return invokeAgentCommand<BackgroundRuntimeStatus>("start_background_runtime");
+  return invokeAgentCommand<BackgroundRuntimeStatus>(
+    "start_background_runtime",
+  );
 }
 
 export function pauseBackgroundRuntime() {
-  return invokeAgentCommand<BackgroundRuntimeStatus>("pause_background_runtime");
+  return invokeAgentCommand<BackgroundRuntimeStatus>(
+    "pause_background_runtime",
+  );
 }
 
 export function startAgentPairing(deviceName: string) {
-  return invokeAgentCommand<PairingSession>("start_agent_pairing", { deviceName });
+  return invokeAgentCommand<PairingSession>("start_agent_pairing", {
+    deviceName,
+  });
 }
 
 export function pollAgentPairing(sessionId: string, desktopNonce: string) {
-  return invokeAgentCommand<PairingStatus>("poll_agent_pairing", { sessionId, desktopNonce });
+  return invokeAgentCommand<PairingStatus>("poll_agent_pairing", {
+    sessionId,
+    desktopNonce,
+  });
 }
 
-export function sendAgentHeartbeat(presence: HeartbeatResult["presence"] = "ONLINE_IDLE") {
-  return invokeAgentCommand<HeartbeatResult>("send_agent_heartbeat", { presence });
+export function sendAgentHeartbeat(
+  presence: HeartbeatResult["presence"] = "ONLINE_IDLE",
+) {
+  return invokeAgentCommand<HeartbeatResult>("send_agent_heartbeat", {
+    presence,
+  });
 }
 
 export function pollAgentCommands() {
@@ -457,63 +484,77 @@ export function processAgentCommands() {
 }
 
 export function processAgentDecisions() {
-  return invokeAgentCommand<DecisionProcessingReport>("process_agent_decisions");
+  return invokeAgentCommand<DecisionProcessingReport>(
+    "process_agent_decisions",
+  );
 }
 
 export function approveAgentCommandDraftAndExecute(
   draftId: string,
   roomId: string,
-  idempotencyKey: string
+  idempotencyKey: string,
 ) {
   return invokeAgentCommand<ChatCommandDraftExecutionReport>(
     "approve_agent_command_draft_and_execute",
-    { draftId, roomId, idempotencyKey }
+    { draftId, roomId, idempotencyKey },
   );
 }
 
 export function confirmAgentRuleDraft(
   draftId: string,
   roomId: string,
-  idempotencyKey: string
+  idempotencyKey: string,
 ) {
   return invokeAgentCommand<AgentRuleDraftConfirmation>(
     "confirm_agent_rule_draft",
-    { draftId, roomId, idempotencyKey }
+    { draftId, roomId, idempotencyKey },
   );
 }
 
 export function rejectAgentRuleDraft(draftId: string) {
-  return invokeAgentCommand<AgentRuleDraftRejection>("reject_agent_rule_draft", { draftId });
+  return invokeAgentCommand<AgentRuleDraftRejection>(
+    "reject_agent_rule_draft",
+    { draftId },
+  );
 }
 
 export function listAgentOpenProposals(roomId: string) {
-  return invokeAgentCommand<AgentOpenProposal[]>("list_agent_open_proposals", { roomId });
+  return invokeAgentCommand<AgentOpenProposal[]>("list_agent_open_proposals", {
+    roomId,
+  });
 }
 
 export function approveAgentOpenProposalAndExecute(
   proposalId: string,
   roomId: string,
-  idempotencyKey: string
+  idempotencyKey: string,
 ) {
   return invokeAgentCommand<ChatProposalExecutionReport>(
     "approve_agent_open_proposal_and_execute",
-    { proposalId, roomId, idempotencyKey }
+    { proposalId, roomId, idempotencyKey },
   );
 }
 
 export function processAgentFileBrowseRequests() {
-  return invokeAgentCommand<FileBrowseProcessingReport>("process_agent_file_browse_requests");
+  return invokeAgentCommand<FileBrowseProcessingReport>(
+    "process_agent_file_browse_requests",
+  );
 }
 
 export function processAgentFileTransfers() {
-  return invokeAgentCommand<FileTransferProcessingReport>("process_agent_file_transfers");
+  return invokeAgentCommand<FileTransferProcessingReport>(
+    "process_agent_file_transfers",
+  );
 }
 
 export function processSmartCacheForRoom(roomId: string, limit = 25) {
-  return invokeAgentCommand<SmartCacheProcessingReport>("process_smart_cache_for_room", {
-    roomId,
-    limit
-  });
+  return invokeAgentCommand<SmartCacheProcessingReport>(
+    "process_smart_cache_for_room",
+    {
+      roomId,
+      limit,
+    },
+  );
 }
 
 export function flushAgentOutbox() {
@@ -521,50 +562,68 @@ export function flushAgentOutbox() {
 }
 
 export function ensureAgentRoom(rootId: string, displayName: string) {
-  return invokeAgentCommand<AgentRoomSync>("ensure_agent_room", { rootId, displayName });
+  return invokeAgentCommand<AgentRoomSync>("ensure_agent_room", {
+    rootId,
+    displayName,
+  });
 }
 
 export function listAgentChatSessions(roomId: string) {
-  return invokeAgentCommand<AgentChatSession[]>("list_agent_chat_sessions", { roomId });
+  return invokeAgentCommand<AgentChatSession[]>("list_agent_chat_sessions", {
+    roomId,
+  });
 }
 
 export function createAgentChatSession(roomId: string, title?: string) {
   return invokeAgentCommand<AgentChatSession>("create_agent_chat_session", {
     roomId,
-    title: title ?? null
+    title: title ?? null,
   });
 }
 
 export function getAgentChatQuickView(roomId: string) {
-  return invokeAgentCommand<AgentChatQuickView>("get_agent_chat_quick_view", { roomId });
+  return invokeAgentCommand<AgentChatQuickView>("get_agent_chat_quick_view", {
+    roomId,
+  });
 }
 
 export function createAgentChatQuickCleanup(roomId: string) {
-  return invokeAgentCommand<AgentChatQuickCleanupResult>("create_agent_chat_quick_cleanup", { roomId });
+  return invokeAgentCommand<AgentChatQuickCleanupResult>(
+    "create_agent_chat_quick_cleanup",
+    { roomId },
+  );
 }
 
 export function listAgentChatMessages(sessionId: string) {
-  return invokeAgentCommand<AgentChatMessage[]>("list_agent_chat_messages", { sessionId });
+  return invokeAgentCommand<AgentChatMessage[]>("list_agent_chat_messages", {
+    sessionId,
+  });
 }
 
-export function markAgentChatSessionRead(sessionId: string, lastReadMessageId?: string | null) {
+export function markAgentChatSessionRead(
+  sessionId: string,
+  lastReadMessageId?: string | null,
+) {
   return invokeAgentCommand<AgentChatSession>("mark_agent_chat_session_read", {
     sessionId,
-    lastReadMessageId: lastReadMessageId ?? null
+    lastReadMessageId: lastReadMessageId ?? null,
   });
 }
 
 export function sendAgentChatMessage(sessionId: string, content: string) {
   return invokeAgentCommand<AgentChatSendResult>("send_agent_chat_message", {
     sessionId,
-    content
+    content,
   });
 }
 
 export function submitCleanlinessSnapshot(rootId: string) {
-  return invokeAgentCommand<CleanlinessSnapshotSyncReport>("submit_cleanliness_snapshot", {
-    rootId
-  });
+  return invokeAgentCommand<CleanlinessSnapshotSyncReport>(
+    "submit_cleanliness_snapshot",
+    {
+      rootId,
+    },
+  );
 }
 
 export function replayAgentEvents() {
@@ -572,28 +631,36 @@ export function replayAgentEvents() {
 }
 
 export function updateAgentCommandStatus(commandId: string, status: string) {
-  return invokeAgentCommand<AgentCommand>("update_agent_command_status", { commandId, status });
+  return invokeAgentCommand<AgentCommand>("update_agent_command_status", {
+    commandId,
+    status,
+  });
 }
 
 export function revokeAgentDevice(idempotencyKey: string) {
-  return invokeAgentCommand<AgentConnectionStatus>("revoke_agent_device", { idempotencyKey });
+  return invokeAgentCommand<AgentConnectionStatus>("revoke_agent_device", {
+    idempotencyKey,
+  });
 }
 
 export function preflightAgentRoomDisconnect(rootId: string) {
-  return invokeAgentCommand<RoomDisconnectPreflight>("preflight_agent_room_disconnect", {
-    rootId
-  });
+  return invokeAgentCommand<RoomDisconnectPreflight>(
+    "preflight_agent_room_disconnect",
+    {
+      rootId,
+    },
+  );
 }
 
 export function disconnectAgentRoom(
   rootId: string,
   idempotencyKey: string,
-  acknowledgeUndoable: boolean
+  acknowledgeUndoable: boolean,
 ) {
   return invokeAgentCommand<RoomDisconnectReport>("disconnect_agent_room", {
     rootId,
     idempotencyKey,
-    acknowledgeUndoable
+    acknowledgeUndoable,
   });
 }
 
@@ -603,15 +670,19 @@ export function listenForDesktopDeviceRevoked(handler: () => void) {
 }
 
 export function listenForAgentChatMessages(
-  handler: (update: AgentChatMessageSyncUpdate) => void
+  handler: (update: AgentChatMessageSyncUpdate) => void,
 ) {
   ensureTauriRuntime();
-  return listen<AgentChatMessageSyncUpdate>("agent-chat-message-created", (event) =>
-    handler(event.payload)
+  return listen<AgentChatMessageSyncUpdate>(
+    "agent-chat-message-created",
+    (event) => handler(event.payload),
   );
 }
 
-function invokeAgentCommand<T>(command: string, args?: Record<string, unknown>) {
+function invokeAgentCommand<T>(
+  command: string,
+  args?: Record<string, unknown>,
+) {
   ensureTauriRuntime();
   return invoke<T>(command, args);
 }
@@ -619,7 +690,7 @@ function invokeAgentCommand<T>(command: string, args?: Record<string, unknown>) 
 function ensureTauriRuntime() {
   if (!window.__TAURI_INTERNALS__) {
     throw new Error(
-      "Tauri runtime is not available. Run `pnpm --filter @mousekeeper/desktop tauri:dev` from the repository root."
+      "Tauri runtime is not available. Run `pnpm --filter @mousekeeper/desktop tauri:dev` from the repository root.",
     );
   }
 }

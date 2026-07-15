@@ -14,6 +14,8 @@ file-engine-cli = { path = "../../../tools/file-engine-cli" }
 futures-util = { version = "0.3", optional = true }
 keyring = "4.1.4"
 notify = "8.2.0"
+pdf-extract = "0.10"
+quick-xml = "0.38"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "query", "rustls", "stream"] }
 rust_socketio = { version = "0.6.0", features = ["async"], optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -25,6 +27,7 @@ tauri-plugin-autostart = { version = "2", optional = true }
 tauri-plugin-dialog = { version = "2", optional = true }
 tokio = { version = "1.52.3", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

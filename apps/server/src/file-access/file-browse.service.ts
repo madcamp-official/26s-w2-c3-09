@@ -10,6 +10,8 @@ import {
   failFileBrowseSchema,
 } from '@mousekeeper/contracts';
 import {
+  agentRuns,
+  agentSteps,
   devices,
   fileBrowseRequests,
   rooms,
@@ -238,6 +240,12 @@ export class FileBrowseService {
           aggregateId: request.id,
           payload: { requestId: request.id, failureCode: 'TIMED_OUT' },
         });
+        await this.resumeAgentRunForBrowse(
+          tx,
+          requestId,
+          'FAILED',
+          'TIMED_OUT',
+        );
         return expired;
       });
     }
@@ -402,8 +410,48 @@ export class FileBrowseService {
           ...(values.failureCode ? { failureCode: values.failureCode } : {}),
         },
       });
+      await this.resumeAgentRunForBrowse(
+        tx,
+        requestId,
+        values.status,
+        values.failureCode ?? null,
+      );
       return updated;
     });
+  }
+
+  private async resumeAgentRunForBrowse(
+    tx: Transaction,
+    requestId: string,
+    status: string,
+    failureCode: string | null,
+  ) {
+    const step = (
+      await tx
+        .select()
+        .from(agentSteps)
+        .where(eq(agentSteps.externalRequestId, requestId))
+        .for('update')
+        .limit(1)
+    )[0];
+    if (!step || step.status === 'SUCCEEDED' || step.status === 'FAILED')
+      return;
+    const stepStatus = status === 'READY' ? 'SUCCEEDED' : 'FAILED';
+    await tx
+      .update(agentSteps)
+      .set({
+        status: stepStatus,
+        failureCode,
+        resultMetadata: { requestId, status },
+        completedAt: new Date(),
+      })
+      .where(eq(agentSteps.id, step.id));
+    await tx
+      .update(agentRuns)
+      .set({ status: 'QUEUED', updatedAt: new Date() })
+      .where(
+        and(eq(agentRuns.id, step.runId), eq(agentRuns.status, 'WAITING_TOOL')),
+      );
   }
 
   private async lockActiveScope(

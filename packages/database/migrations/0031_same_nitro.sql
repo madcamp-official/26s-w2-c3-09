@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "agent_steps_tool_input_idx" ON "agent_steps" USING btree ("run_id","tool_name","input_hash");

@@ -1,0 +1,1 @@
+ALTER TABLE "rooms" ADD COLUMN "ai_document_analysis_consent" boolean DEFAULT false NOT NULL;

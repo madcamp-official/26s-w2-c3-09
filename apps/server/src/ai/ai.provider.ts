@@ -18,6 +18,7 @@ export const AI_PROVIDER = Symbol('AI_PROVIDER');
 export type RoomContext = {
   roomName: string;
   rootAlias: string;
+  aiDocumentAnalysisConsent?: boolean;
   existingRules: { name: string; destinationTemplate: string | null }[];
 };
 
@@ -74,6 +75,7 @@ export type ChatContext = {
   };
   room?: RoomContext | null;
   fileContext?: FileContext | null;
+  documentChunks?: { relativePath: string; chunks: string[]; modifiedUnixMs: number } | null;
 };
 
 export type RuleTranslationContext = {

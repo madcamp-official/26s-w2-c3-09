@@ -28,6 +28,7 @@ use crate::agent::AgentRuntime;
 use crate::cleanliness::{
     calculate_cleanliness_snapshot as calculate_cleanliness_snapshot_for_root, CleanlinessSnapshot,
 };
+use crate::document_extraction::{extract_document, DocumentExtraction};
 use crate::storage::auto_approval::{
     AutoApprovalPolicyPatch, AutoApprovalPolicyRecord, AutoApprovalStore,
 };
@@ -664,6 +665,47 @@ pub fn list_operation_history(
 ) -> Result<OperationHistoryReport, String> {
     let root = resolve_root_id(&store, &root_id)?;
     list_operation_history_impl(root)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn extract_managed_document(
+    root_id: String,
+    relative_path: String,
+    consent: bool,
+    expected_sha256: Option<String>,
+    roots: tauri::State<'_, ManagedRootStore>,
+) -> Result<DocumentExtraction, String> {
+    let root = roots.get(&root_id)?;
+    if !root.enabled {
+        return Err("MANAGED_ROOT_DISABLED".to_string());
+    }
+    extract_document(
+        &root.root,
+        &relative_path,
+        consent,
+        expected_sha256.as_deref(),
+    )
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn extract_managed_document(
+    root_id: String,
+    relative_path: String,
+    consent: bool,
+    expected_sha256: Option<String>,
+    roots: &ManagedRootStore,
+) -> Result<DocumentExtraction, String> {
+    let root = roots.get(&root_id)?;
+    if !root.enabled {
+        return Err("MANAGED_ROOT_DISABLED".to_string());
+    }
+    extract_document(
+        &root.root,
+        &relative_path,
+        consent,
+        expected_sha256.as_deref(),
+    )
 }
 
 #[cfg(not(feature = "tauri-commands"))]

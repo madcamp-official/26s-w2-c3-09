@@ -5,7 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   approveAutoCleanupProposalFromChat,
   listenForAutoCleanupProposals,
-  listManagedRoots
+  listManagedRoots,
+  undoOperation
 } from "../files/fileEngineApi";
 import type { AutoCleanupProposalEvent, ExecuteReport, ManagedRoot } from "../files/fileEngineApi";
 import {
@@ -666,6 +667,20 @@ export function ChatOverlay() {
     }
   }
 
+  async function approveUndo(operationId: string) {
+    if (!activeRootId) return;
+    setBusy(true);
+    try {
+      const report = await undoOperation(activeRootId, operationId);
+      setNotice(`되돌리기 완료: ${report.undone_count}건`);
+      if (chatSession) setChatMessages(await listAgentChatMessages(chatSession.session_id));
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function approveRuleDraft(draftId: string) {
     if (!activeRoomId) {
       setNotice("관리 폴더를 서버 room과 연결해야 규칙을 추가할 수 있어요.");
@@ -873,6 +888,7 @@ export function ChatOverlay() {
         openProposals={visibleOpenProposals}
         localAutoProposals={visibleLocalAutoProposals}
         roomId={activeRoomId}
+        rootId={activeRootId}
         roomName={activeRoomName}
         messages={displayedMessages}
         loading={chatLoading}
@@ -895,6 +911,7 @@ export function ChatOverlay() {
         skippedLocalProposalKeys={skippedLocalProposalKeys}
         onBeginWindowDrag={beginChatWindowDrag}
         onApproveCommandDraft={(draftId) => void approveCommandDraft(draftId)}
+        onApproveUndo={(operationId) => void approveUndo(operationId)}
         onApproveRuleDraft={(draftId) => void approveRuleDraft(draftId)}
         onApproveOpenProposal={(proposalId) => void approveOpenProposal(proposalId)}
         onApproveLocalAutoProposal={(localKey) => void approveLocalAutoProposal(localKey)}
@@ -1159,6 +1176,20 @@ function ruleDraftPayload(payload: unknown): RuleDraftPayload | null {
     name: typeof record.name === "string" ? record.name : "새 규칙",
     explanation: typeof record.explanation === "string" ? record.explanation : ""
   };
+}
+
+function undoDraftPayload(payload: unknown) {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  return record.kind === "UNDO_DRAFT" && record.requiresApproval === true && typeof record.operationId === "string"
+    ? { operationId: record.operationId, confirmationSummary: typeof record.confirmationSummary === "string" ? record.confirmationSummary : "" }
+    : null;
+}
+
+function UndoDraftActions({ payload, rootId, busy, onUndo }: { payload: unknown; rootId: string | null; busy: boolean; onUndo: (operationId: string) => void }) {
+  const draft = undoDraftPayload(payload);
+  if (!draft) return null;
+  return <button type="button" className="room-chat-draft-approve" disabled={busy || rootId == null} onClick={() => onUndo(draft.operationId)}>되돌리기 승인</button>;
 }
 
 function CommandDraftActions({
@@ -1467,6 +1498,7 @@ function RoomChatPanel({
   rejectedRuleDraftIds,
   rejectingRuleDraftIds,
   roomId,
+  rootId,
   roomName,
   sessionTitle,
   skippedDraftIds,
@@ -1481,6 +1513,7 @@ function RoomChatPanel({
   onQuickCleanup,
   onBeginWindowDrag,
   onApproveCommandDraft,
+  onApproveUndo,
   onApproveRuleDraft,
   onApproveLocalAutoProposal,
   onApproveOpenProposal,
@@ -1508,6 +1541,7 @@ function RoomChatPanel({
   rejectedRuleDraftIds: Set<string>;
   rejectingRuleDraftIds: Set<string>;
   roomId: string | null;
+  rootId: string | null;
   roomName: string;
   sessionTitle: string | null;
   skippedDraftIds: Set<string>;
@@ -1522,6 +1556,7 @@ function RoomChatPanel({
   onQuickCleanup: () => void;
   onBeginWindowDrag: (event: PointerEvent<HTMLElement>) => void;
   onApproveCommandDraft: (draftId: string) => void;
+  onApproveUndo: (operationId: string) => void;
   onApproveRuleDraft: (draftId: string) => void;
   onApproveLocalAutoProposal: (localKey: string) => void;
   onApproveOpenProposal: (proposalId: string) => void;
@@ -1618,6 +1653,12 @@ function RoomChatPanel({
                         submittedDraftIds={submittedDraftIds}
                         onApprove={onApproveCommandDraft}
                       />
+                    </div>
+                  ) : null}
+                  {undoDraftPayload(message.structured_payload) ? (
+                    <div className="room-chat-draft-actions">
+                      <small className="room-chat-draft-hint">되돌리기는 파일을 변경하므로 명시적 승인이 필요합니다.</small>
+                      <UndoDraftActions payload={message.structured_payload} rootId={rootId} busy={busy} onUndo={onApproveUndo} />
                     </div>
                   ) : null}
                   {message.message_type === "RULE_DRAFT" ? (

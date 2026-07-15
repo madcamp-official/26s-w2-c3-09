@@ -5,9 +5,11 @@ pub mod background;
 pub mod cleanliness;
 pub mod command_processor;
 pub mod commands;
+pub mod document_extraction;
 pub mod execution_processor;
 pub mod file_browse_processor;
 pub mod file_transfer_processor;
+pub mod agent_tool_processor;
 pub mod outbox_processor;
 pub mod overlay;
 pub mod smart_cache_crypto;
@@ -159,6 +161,7 @@ pub fn run() {
             commands::file_engine::undo_last_file_operation,
             commands::file_engine::undo_operation,
             commands::file_engine::list_operation_history,
+            commands::file_engine::extract_managed_document,
             commands::file_engine::recover_journal,
             commands::agent::get_agent_connection_status,
             commands::agent::start_agent_pairing,

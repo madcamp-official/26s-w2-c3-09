@@ -790,6 +790,129 @@ export const chatMessageTypeSchema = z.enum([
   "QUERY_RESULT",
   "EXECUTION_RESULT",
 ]);
+
+export const agentRunStatusSchema = z.enum([
+  "QUEUED",
+  "RUNNING",
+  "WAITING_TOOL",
+  "WAITING_USER",
+  "WAITING_APPROVAL",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+  "EXPIRED",
+]);
+export const agentStepStatusSchema = z.enum([
+  "QUEUED",
+  "RUNNING",
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+]);
+export const agentRouteSchema = z.enum([
+  "CHAT",
+  "QUERY",
+  "COMMAND",
+  "RULE",
+  "HISTORY",
+  "TRANSFER",
+  "UNDO",
+  "REFUSE",
+]);
+export const agentToolNameSchema = z.enum([
+  "FILE_BROWSE",
+  "FILE_SEARCH",
+  "FILE_STAT",
+  "DOCUMENT_EXTRACT",
+  "RULE_LIST",
+  "COMMAND_LIST",
+  "PROPOSAL_LIST",
+  "EXECUTION_LIST",
+  "OPERATION_HISTORY",
+  "TRANSFER_LIST",
+]);
+export const agentClarificationSchema = z
+  .object({
+    question: z.string().trim().min(1).max(1000),
+    candidates: z.array(relativePathSchema).max(3),
+  })
+  .strict();
+export const answerAgentClarificationSchema = z
+  .object({ selectedCandidate: relativePathSchema })
+  .strict();
+export const updateRoomAiDocumentConsentSchema = z
+  .object({ enabled: z.boolean() })
+  .strict();
+export const documentExtractionFailureCodeSchema = z.enum([
+  "CONSENT_REQUIRED",
+  "SOURCE_CHANGED",
+  "TOO_LARGE",
+  "ENCRYPTED_DOCUMENT",
+  "UNSUPPORTED_FORMAT",
+  "OUTSIDE_MANAGED_ROOT",
+]);
+export const agentToolRequestSchema = z
+  .object({
+    runId: uuidSchema,
+    stepId: uuidSchema,
+    tool: agentToolNameSchema,
+    input: z.record(z.string(), z.unknown()),
+    idempotencyKey: idempotencyKeySchema,
+  })
+  .strict();
+export const agentToolResultSchema = z
+  .object({
+    runId: uuidSchema,
+    stepId: uuidSchema,
+    status: z.enum(["SUCCEEDED", "FAILED"]),
+    metadata: z.record(z.string(), z.unknown()).nullable(),
+    failureCode: z.string().trim().min(1).max(80).nullable(),
+  })
+  .strict();
+export const documentExtractionRequestSchema = z
+  .object({
+    rootId: z.string().trim().min(1).max(120),
+    relativePath: relativePathSchema,
+    expectedSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/i)
+      .nullable(),
+    maxChars: z.number().int().positive().max(100_000).default(100_000),
+  })
+  .strict();
+export const documentExtractionResultSchema = z
+  .object({
+    relativePath: relativePathSchema,
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    modifiedUnixMs: z.number().int().nonnegative(),
+    chunks: z.array(z.string().max(4_000)).max(25),
+    truncated: z.boolean(),
+  })
+  .strict();
+export const operationHistoryRequestSchema = z
+  .object({
+    rootId: z.string().trim().min(1).max(120),
+    limit: z.number().int().min(1).max(50),
+  })
+  .strict();
+export const undoDraftSchema = z
+  .object({
+    rootId: z.string().trim().min(1).max(120),
+    operationId: z.string().trim().min(1).max(200),
+    requiresApproval: z.literal(true),
+    confirmationSummary: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+export const agentRunSummarySchema = z
+  .object({
+    id: uuidSchema,
+    status: agentRunStatusSchema,
+    route: agentRouteSchema.nullable(),
+    sourceMessageId: uuidSchema,
+    currentStepCount: z.number().int().min(0).max(8),
+    expiresAt: z.iso.datetime(),
+  })
+  .strict();
 export const chatMessageSchema = z
   .object({
     id: uuidSchema,
@@ -976,6 +1099,8 @@ export const createChatMessageResponseSchema = z
     assistant: chatMessageSchema.nullable(),
     aiStatus: z.enum(["UNCONFIGURED", "READY", "INVALID"]),
     ai: chatAiResultSchema,
+    agentRunId: uuidSchema.optional(),
+    agentRunStatus: agentRunStatusSchema.optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -1070,7 +1195,9 @@ export const rejectRuleDraftResponseSchema = z
     draft: ruleDraftSummarySchema,
   })
   .strict();
-const smartCachePatternListSchema = z.array(z.string().min(1).max(255)).max(100);
+const smartCachePatternListSchema = z
+  .array(z.string().min(1).max(255))
+  .max(100);
 
 export const updateSmartCachePolicySchema = z
   .object({

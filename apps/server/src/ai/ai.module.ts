@@ -17,11 +17,12 @@ export function createAiProvider(
   if (
     environment.AI_PROVIDER === 'openai' &&
     environment.AI_API_KEY &&
-    environment.AI_MODEL
+    (environment.AI_AGENT_MODEL || environment.AI_MODEL)
   ) {
     return new OpenAiResponsesProvider({
       apiKey: environment.AI_API_KEY,
-      model: environment.AI_MODEL,
+      model: environment.AI_AGENT_MODEL ?? environment.AI_MODEL!,
+      classifierModel: environment.AI_CLASSIFIER_MODEL,
       timeoutMs: environment.AI_TIMEOUT_MS,
       maxOutputTokens: environment.AI_MAX_OUTPUT_TOKENS,
     });

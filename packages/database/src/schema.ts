@@ -140,6 +140,9 @@ export const rooms = pgTable(
       .references(() => devices.id),
     name: varchar("name", { length: 120 }).notNull(),
     rootAlias: varchar("root_alias", { length: 120 }).notNull(),
+    aiDocumentAnalysisConsent: boolean("ai_document_analysis_consent")
+      .notNull()
+      .default(false),
     status: roomStatus("status").notNull().default("ACTIVE"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -649,6 +652,76 @@ export const chatMessages = pgTable(
   ],
 );
 
+export const agentRuns = pgTable(
+  "agent_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    roomId: uuid("room_id")
+      .notNull()
+      .references(() => rooms.id),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => chatSessions.id),
+    sourceMessageId: uuid("source_message_id")
+      .notNull()
+      .references(() => chatMessages.id),
+    status: varchar("status", { length: 30 }).notNull().default("QUEUED"),
+    route: varchar("route", { length: 30 }),
+    currentStepCount: integer("current_step_count").notNull().default(0),
+    failureCode: varchar("failure_code", { length: 80 }),
+    resumeContext: jsonb("resume_context"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("agent_runs_source_message_idx").on(t.sourceMessageId),
+    index("agent_runs_status_expiry_idx").on(t.status, t.expiresAt),
+    index("agent_runs_session_created_idx").on(t.sessionId, t.createdAt),
+  ],
+);
+
+export const agentSteps = pgTable(
+  "agent_steps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    sequence: integer("sequence").notNull(),
+    toolName: varchar("tool_name", { length: 50 }).notNull(),
+    status: varchar("status", { length: 30 }).notNull().default("QUEUED"),
+    idempotencyKey: varchar("idempotency_key", { length: 128 }).notNull(),
+    inputHash: varchar("input_hash", { length: 64 }).notNull(),
+    input: jsonb("input").notNull(),
+    externalRequestId: uuid("external_request_id"),
+    resultMetadata: jsonb("result_metadata"),
+    failureCode: varchar("failure_code", { length: 80 }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("agent_steps_run_sequence_idx").on(t.runId, t.sequence),
+    uniqueIndex("agent_steps_idempotency_idx").on(t.idempotencyKey),
+    uniqueIndex("agent_steps_tool_input_idx").on(
+      t.runId,
+      t.toolName,
+      t.inputHash,
+    ),
+    index("agent_steps_run_status_idx").on(t.runId, t.status),
+    index("agent_steps_external_request_idx").on(t.externalRequestId),
+  ],
+);
+
 export const chatReadStates = pgTable(
   "chat_read_states",
   {
@@ -662,9 +735,7 @@ export const chatReadStates = pgTable(
     lastReadMessageId: uuid("last_read_message_id").references(
       () => chatMessages.id,
     ),
-    readAt: timestamp("read_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
+    readAt: timestamp("read_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

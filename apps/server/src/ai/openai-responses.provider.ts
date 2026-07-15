@@ -19,6 +19,7 @@ type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>;
 export type OpenAiResponsesProviderOptions = {
   apiKey: string;
   model: string;
+  classifierModel?: string;
   timeoutMs?: number;
   maxOutputTokens?: number;
   endpoint?: string;
@@ -34,6 +35,42 @@ const DEFAULT_ENDPOINT = 'https://api.openai.com/v1/responses';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 3_000;
 const INCOMPLETE_RETRY_MULTIPLIER = 2;
+const classifierJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['route', 'needsTools'],
+  properties: {
+    route: {
+      type: 'string',
+      enum: [
+        'CHAT',
+        'QUERY',
+        'COMMAND',
+        'RULE',
+        'HISTORY',
+        'TRANSFER',
+        'UNDO',
+        'REFUSE',
+      ],
+    },
+    needsTools: { type: 'boolean' },
+  },
+} as const;
+const classifierResultSchema = z
+  .object({
+    route: z.enum([
+      'CHAT',
+      'QUERY',
+      'COMMAND',
+      'RULE',
+      'HISTORY',
+      'TRANSFER',
+      'UNDO',
+      'REFUSE',
+    ]),
+    needsTools: z.boolean(),
+  })
+  .strict();
 
 const rawCommandDraftSchema = z
   .object({
@@ -47,11 +84,14 @@ const rawCommandDraftSchema = z
     reasonCode: z.string().max(100),
     reply: z.string().max(1000),
     intent: z.union([z.literal('NONE'), commandIntentSchema]),
-    argumentsJson: z.string().max(20_000),
+    arguments: z.record(z.string(), z.unknown()).optional(),
+    argumentsJson: z.string().max(20_000).optional(),
     confirmationSummary: z.string().max(1000),
+    browse: z.record(z.string(), z.unknown()).optional(),
     browseJson: z.string().max(20_000).optional(),
     responseSummary: z.string().max(1000).optional(),
     name: z.string().max(120).optional(),
+    definition: z.record(z.string(), z.unknown()).optional(),
     definitionJson: z.string().max(20_000).optional(),
     explanation: z.string().max(2000).optional(),
     ambiguities: z.array(z.string().max(300)).max(10).optional(),
@@ -64,7 +104,8 @@ const rawRuleDraftSchema = z
     reasonCode: z.string().max(100),
     reply: z.string().max(1000),
     name: z.string().max(120),
-    definitionJson: z.string().max(20_000),
+    definition: z.record(z.string(), z.unknown()).optional(),
+    definitionJson: z.string().max(20_000).optional(),
     explanation: z.string().max(2000),
     ambiguities: z.array(z.string().max(300)).max(10),
   })
@@ -78,12 +119,12 @@ const commandDraftJsonSchema = {
     'reasonCode',
     'reply',
     'intent',
-    'argumentsJson',
+    'arguments',
     'confirmationSummary',
-    'browseJson',
+    'browse',
     'responseSummary',
     'name',
-    'definitionJson',
+    'definition',
     'explanation',
     'ambiguities',
   ],
@@ -98,24 +139,12 @@ const commandDraftJsonSchema = {
       type: 'string',
       enum: ['NONE', ...commandIntentSchema.options],
     },
-    argumentsJson: {
-      type: 'string',
-      description:
-        'A JSON object string containing only the payload for the selected command intent. Use "{}" unless kind is COMMAND_DRAFT.',
-    },
+    arguments: { type: 'object', additionalProperties: true },
     confirmationSummary: { type: 'string' },
-    browseJson: {
-      type: 'string',
-      description:
-        'A JSON object string matching createFileBrowseRequestSchema. Use "{}" unless kind is QUERY.',
-    },
+    browse: { type: 'object', additionalProperties: true },
     responseSummary: { type: 'string' },
     name: { type: 'string' },
-    definitionJson: {
-      type: 'string',
-      description:
-        'A JSON object string matching MouseKeeper Rule DSL. Use "{}" unless kind is RULE_DRAFT.',
-    },
+    definition: { type: 'object', additionalProperties: true },
     explanation: { type: 'string' },
     ambiguities: {
       type: 'array',
@@ -132,7 +161,7 @@ const ruleDraftJsonSchema = {
     'reasonCode',
     'reply',
     'name',
-    'definitionJson',
+    'definition',
     'explanation',
     'ambiguities',
   ],
@@ -141,11 +170,7 @@ const ruleDraftJsonSchema = {
     reasonCode: { type: 'string' },
     reply: { type: 'string' },
     name: { type: 'string' },
-    definitionJson: {
-      type: 'string',
-      description:
-        'A JSON object string matching MouseKeeper Rule DSL. Use "{}" unless kind is RULE_DRAFT.',
-    },
+    definition: { type: 'object', additionalProperties: true },
     explanation: { type: 'string' },
     ambiguities: {
       type: 'array',
@@ -170,6 +195,11 @@ export class OpenAiResponsesProvider implements AiProvider {
 
   async classifyAndRespond(input: ChatContext): Promise<AiProviderResult> {
     if (!this.isConfigured()) return this.unconfigured();
+    const classification = await this.classify(input);
+    if (classification?.status === 'INVALID') {
+      return this.invalid(classification.reason);
+    }
+    if (classification?.status === 'UNCONFIGURED') return this.unconfigured();
     const result = await this.callStructured({
       name: 'mousekeeper_command_draft',
       schema: commandDraftJsonSchema,
@@ -179,8 +209,11 @@ export class OpenAiResponsesProvider implements AiProvider {
         sessionId: input.sessionId,
         sourceMessageId: input.sourceMessage.id,
         userMessage: input.sourceMessage.content,
+        classification:
+          classification?.status === 'OK' ? classification.value : null,
         roomContext: input.room,
         fileContext: input.fileContext,
+        documentChunks: input.documentChunks,
       }),
     });
     if (result.status === 'UNCONFIGURED') return this.unconfigured();
@@ -192,12 +225,12 @@ export class OpenAiResponsesProvider implements AiProvider {
       if (
         !parsed.data.name?.trim() ||
         !parsed.data.explanation?.trim() ||
-        parsed.data.definitionJson == null
+        (parsed.data.definition == null && parsed.data.definitionJson == null)
       ) {
         return this.invalid('RULE_DRAFT_FIELDS');
       }
       const definition = ruleDefinitionSchema.safeParse(
-        parseJsonObject(parsed.data.definitionJson),
+        objectField(parsed.data.definition, parsed.data.definitionJson),
       );
       if (!definition.success) return this.invalid('RULE_DEFINITION_SCHEMA');
       return {
@@ -212,11 +245,14 @@ export class OpenAiResponsesProvider implements AiProvider {
       };
     }
     if (parsed.data.kind === 'QUERY') {
-      if (!parsed.data.browseJson || !parsed.data.responseSummary?.trim()) {
+      if (
+        (!parsed.data.browse && !parsed.data.browseJson) ||
+        !parsed.data.responseSummary?.trim()
+      ) {
         return this.invalid('QUERY_FIELDS');
       }
       const browse = createFileBrowseRequestSchema.safeParse(
-        parseJsonObject(parsed.data.browseJson),
+        objectField(parsed.data.browse, parsed.data.browseJson),
       );
       if (!browse.success) return this.invalid('QUERY_BROWSE_SCHEMA');
       return {
@@ -237,7 +273,10 @@ export class OpenAiResponsesProvider implements AiProvider {
     ) {
       return this.invalid('COMMAND_FIELDS');
     }
-    const argumentsObject = parseJsonObject(parsed.data.argumentsJson);
+    const argumentsObject = objectField(
+      parsed.data.arguments,
+      parsed.data.argumentsJson,
+    );
     if (argumentsObject == null) return this.invalid('COMMAND_ARGUMENTS_JSON');
 
     const command = createCommandSchema.safeParse({
@@ -251,6 +290,24 @@ export class OpenAiResponsesProvider implements AiProvider {
       command: command.data,
       confirmationSummary: parsed.data.confirmationSummary,
     };
+  }
+
+  private async classify(input: ChatContext) {
+    const model = this.options.classifierModel?.trim();
+    if (!model) return null;
+    const result = await this.callStructured({
+      name: 'mousekeeper_route',
+      model,
+      schema: classifierJsonSchema,
+      instructions:
+        'Classify the latest request. Return CHAT, QUERY, COMMAND, RULE, HISTORY, TRANSFER, UNDO, or REFUSE. needsTools is true when factual room/file state must be inspected.',
+      input: JSON.stringify({ userMessage: input.sourceMessage.content }),
+    });
+    if (result.status !== 'OK') return result;
+    const parsed = classifierResultSchema.safeParse(result.value);
+    return parsed.success
+      ? ({ status: 'OK', value: parsed.data } as const)
+      : ({ status: 'INVALID', reason: 'CLASSIFIER_SCHEMA' } as const);
   }
 
   async translateRule(input: RuleTranslationContext): Promise<RuleDraftResult> {
@@ -280,7 +337,7 @@ export class OpenAiResponsesProvider implements AiProvider {
       return this.invalid('RULE_DRAFT_FIELDS');
     }
     const definition = ruleDefinitionSchema.safeParse(
-      parseJsonObject(parsed.data.definitionJson),
+      objectField(parsed.data.definition, parsed.data.definitionJson),
     );
     if (!definition.success) return this.invalid('RULE_DEFINITION_SCHEMA');
     return {
@@ -297,6 +354,7 @@ export class OpenAiResponsesProvider implements AiProvider {
 
   private async callStructured(input: {
     name: string;
+    model?: string;
     schema: unknown;
     instructions: string;
     input: string;
@@ -315,6 +373,7 @@ export class OpenAiResponsesProvider implements AiProvider {
   private async callStructuredOnce(
     input: {
       name: string;
+      model?: string;
       schema: unknown;
       instructions: string;
       input: string;
@@ -331,7 +390,7 @@ export class OpenAiResponsesProvider implements AiProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: this.options.model,
+          model: input.model ?? this.options.model,
           instructions: input.instructions,
           input: input.input,
           max_output_tokens: maxOutputTokens,
@@ -339,7 +398,9 @@ export class OpenAiResponsesProvider implements AiProvider {
             format: {
               type: 'json_schema',
               name: input.name,
-              strict: true,
+              // Nested command/rule DTOs are revalidated by authoritative Zod
+              // contracts below, so the provider schema can carry direct objects.
+              strict: false,
               schema: input.schema,
             },
           },
@@ -451,12 +512,19 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
   }
 }
 
+function objectField(
+  direct: Record<string, unknown> | undefined,
+  legacy: string | undefined,
+): Record<string, unknown> | null {
+  return direct ?? (legacy == null ? null : parseJsonObject(legacy));
+}
+
 function commandInstructions() {
   return [
     'You are MouseKeeper chat intent classification and drafting logic.',
     'Return only the requested JSON object.',
     'Do not execute files, do not invent local file contents, and do not include command metadata.',
-    'Always include every schema field; use empty strings, intent NONE, argumentsJson "{}", and [] for irrelevant fields.',
+    'Always include every schema field; use empty strings, intent NONE, empty objects, and [] for irrelevant fields.',
     "Voice: you play a small, friendly house-mouse mascot who tidies the user's files.",
     'Write the `reply` field in Korean with a light squeaky-mouse flavor — a soft "찍!" or "찍찍" now and then, warm and cute, kept short. Use it sparingly (about one squeak per reply), never let the persona distort facts, and drop it entirely for refusals or errors.',
     'Keep confirmationSummary, responseSummary, explanation, and name plain, clear, and squeak-free so approval cards and results stay trustworthy.',
@@ -474,20 +542,21 @@ function commandInstructions() {
     '- When genuinely torn between two kinds, pick the least destructive (QUERY over COMMAND_DRAFT, NO_ACTION over a wrong COMMAND_DRAFT) and record the doubt in ambiguities.',
     'Never emit COMMAND_DRAFT for a write unless the intent is explicit enough for a later approval card; otherwise return NO_ACTION.',
     'Payload contract examples:',
-    '- TRASH: argumentsJson {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"]}. Use only user-provided relative paths. If no concrete path is given, return NO_ACTION and ask which file.',
-    '- MOVE: argumentsJson {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"],"destinationRelativeDirectory":"Archive"}.',
-    '- CREATE folder: argumentsJson {"rootId":"root:<alias>","kind":"DIRECTORY","relativePath":"New Folder"}. CREATE file uses kind "FILE".',
-    '- ORGANIZE: argumentsJson {"rootId":"root:<alias>","scopeRelativePath":"","instruction":"the user request"}.',
-    '- ANALYZE: argumentsJson {}.',
+    '- TRASH: arguments {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"]}. Use only user-provided relative paths. If no concrete path is given, return NO_ACTION and ask which file.',
+    '- MOVE: arguments {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"],"destinationRelativeDirectory":"Archive"}.',
+    '- CREATE folder: arguments {"rootId":"root:<alias>","kind":"DIRECTORY","relativePath":"New Folder"}. CREATE file uses kind "FILE".',
+    '- ORGANIZE: arguments {"rootId":"root:<alias>","scopeRelativePath":"","instruction":"the user request"}.',
+    '- ANALYZE: arguments {}.',
     'Use "root:downloads" as the default rootId unless the user names another connected root alias. Never invent absolute local paths.',
-    'For QUERY, put createFileBrowseRequestSchema JSON in browseJson: {"relativeDirectory":"","cursor":null,"query":"docs","extensions":[],"limit":25,"searchScope":"MANAGED_ROOT"}. Use searchScope MANAGED_ROOT unless the user explicitly asks only for the current folder. For Korean/English broad terms like "문서", "docs", "documents", use query "docs" or the literal search word and omit extensions unless the user specifies file types.',
+    'For QUERY, put a createFileBrowseRequestSchema object in browse: {"relativeDirectory":"","cursor":null,"query":"docs","extensions":[],"limit":25,"searchScope":"MANAGED_ROOT"}. Use searchScope MANAGED_ROOT unless the user explicitly asks only for the current folder.',
     'For listing a named folder such as "img 폴더의 목록을 줘", use kind QUERY with relativeDirectory "img", query null, extensions [], and searchScope CURRENT_DIRECTORY.',
-    'For RULE_DRAFT, put the Rule DSL JSON in definitionJson and leave intent NONE, argumentsJson "{}", confirmationSummary empty, and browseJson "{}". Rule DSL examples: move PDFs => {"match":"ALL","conditions":[{"field":"extension","operator":"IN","value":[".pdf"]}],"action":{"type":"MOVE","destinationTemplate":"Archive/PDF"}}; trash temp files => {"match":"ALL","conditions":[{"field":"name","operator":"ENDS_WITH","value":".tmp"}],"action":{"type":"TRASH"}}.',
-    'For COMMAND_DRAFT ANALYZE, use intent ANALYZE, argumentsJson "{}", and a confirmationSummary that says the PC will analyze and propose cleanup, not execute changes.',
+    'For RULE_DRAFT, put the Rule DSL object in definition and leave intent NONE, arguments {}, confirmationSummary empty, and browse {}.',
+    'For COMMAND_DRAFT ANALYZE, use intent ANALYZE, arguments {}, and a confirmationSummary that says the PC will analyze and propose cleanup, not execute changes.',
     'Valid command intents are the MouseKeeper server contract intents.',
-    'The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is NOT a live filesystem listing - never claim to know what files or folders currently exist from it. Use it only to: prefer the room\'s own rootAlias as the default rootId when set; recognize when a new RULE_DRAFT duplicates or conflicts with an existingRules entry (mention this briefly in explanation/ambiguities rather than silently proceeding); and reuse an existing rule\'s destinationTemplate wording when the user clearly means the same folder.',
+    "The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is NOT a live filesystem listing - never claim to know what files or folders currently exist from it. Use it only to: prefer the room's own rootAlias as the default rootId when set; recognize when a new RULE_DRAFT duplicates or conflicts with an existingRules entry (mention this briefly in explanation/ambiguities rather than silently proceeding); and reuse an existing rule's destinationTemplate wording when the user clearly means the same folder.",
     'The input may include fileContext from the server cache: {topLevelFolders, knownFolders, extensionDistribution, recentFiles, latestBrowse, latestSnapshot, recentProposals}. It is not live filesystem truth. Treat it as stale/partial evidence from cached files, completed browse results, cleanliness snapshots, and proposals. Use it to choose sensible defaults, mention likely existing folders, prefer destinationTemplate names that match knownFolders, and avoid redundant cleanup suggestions. Never claim a folder/file definitely exists unless the user just supplied it; say "I see it in the recent server cache" or draft the rule normally.',
-    'A rule\'s destinationTemplate folder does not need to already exist - never refuse or ask a clarification question just because you cannot confirm a destination folder exists. Only ask a clarification question for genuinely missing information (which file, which condition, which destination) as instructed above.',
+    'If fileContext.latestBrowse is READY and matches the requested relativeDirectory, do not issue another QUERY. Return NO_ACTION with a concise Korean reply that summarizes its directories and files and states that the listing came from the completed desktop browse.',
+    "A rule's destinationTemplate folder does not need to already exist - never refuse or ask a clarification question just because you cannot confirm a destination folder exists. Only ask a clarification question for genuinely missing information (which file, which condition, which destination) as instructed above.",
   ].join('\n');
 }
 
@@ -496,7 +565,7 @@ function ruleInstructions() {
     'You are MouseKeeper rule drafting logic.',
     'Return only the requested JSON object.',
     'Create deterministic Rule DSL only; never claim files were changed or previewed.',
-    'Always include every schema field; use empty strings, definitionJson "{}", and [] for irrelevant fields.',
+    'Always include every schema field; use empty strings, definition {}, and [] for irrelevant fields.',
     'Voice: you play a small, friendly house-mouse mascot. Write the `reply` field in Korean with a light squeaky-mouse flavor (an occasional soft "찍!"/"찍찍"), warm and short, and drop it for refusals. Keep name and explanation plain and precise.',
     'If the request lacks a clear condition or action, return REFUSE.',
     'Use only the MouseKeeper rule definition fields allowed by the server contract.',

@@ -121,6 +121,8 @@ pub struct AgentChatSendResult {
     pub assistant: Option<AgentChatMessage>,
     pub ai_status: String,
     pub ai: Value,
+    pub agent_run_id: Option<String>,
+    pub agent_run_status: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -1552,6 +1554,26 @@ impl AgentRuntime {
         response
     }
 
+    pub async fn pending_agent_tools(&self) -> Result<Vec<AgentToolRequest>, AgentError> {
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self.send_json::<Vec<AgentToolRequest>>(self.http.get(format!(
+            "{base_url}/v1/devices/{}/agent-tools/pending", credential.device_id
+        )).bearer_auth(&credential.device_token)).await;
+        match &result { Ok(_) => self.mark_online(), Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline) }
+        result
+    }
+
+    pub async fn complete_agent_tool(&self, step_id: String, status: &str, result_metadata: Value, failure_code: Option<String>) -> Result<(), AgentError> {
+        validate_opaque_value("agent tool step id", &step_id, 200)?;
+        if !matches!(status, "SUCCEEDED" | "FAILED") { return Err(validation_error("invalid agent tool status")); }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let response = self.send_empty(self.http.post(format!("{base_url}/v1/agent/agent-tools/{step_id}/result"))
+            .bearer_auth(&credential.device_token)
+            .json(&json!({ "status": status, "resultMetadata": result_metadata, "failureCode": failure_code }))).await;
+        match &response { Ok(_) => self.mark_online(), Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline) }
+        response
+    }
+
     pub async fn pending_file_transfers(&self) -> Result<Vec<AgentFileTransfer>, AgentError> {
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
@@ -2177,6 +2199,8 @@ struct ChatSendResponse {
     assistant: Option<ChatMessageResponse>,
     ai_status: String,
     ai: Value,
+    agent_run_id: Option<String>,
+    agent_run_status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2400,6 +2424,23 @@ struct FileBrowseRequestResponse {
     #[serde(default)]
     search_scope: AgentFileSearchScope,
     status: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolRequest {
+    pub step: AgentToolStep,
+    pub run: Value,
+    pub room: Value,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolStep {
+    pub id: String,
+    pub tool_name: String,
+    #[serde(default)]
+    pub input: Value,
 }
 
 fn default_file_browse_limit() -> usize {
@@ -2712,6 +2753,8 @@ fn validate_chat_send_result(
         assistant,
         ai_status: response.ai_status,
         ai: response.ai,
+        agent_run_id: response.agent_run_id,
+        agent_run_status: response.agent_run_status,
     })
 }
 

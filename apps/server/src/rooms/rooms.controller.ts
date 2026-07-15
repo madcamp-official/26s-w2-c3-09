@@ -8,12 +8,14 @@ import {
   Inject,
   NotFoundException,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
 import {
   createRoomSchema,
   roomCreatedEventPayloadSchema,
+  updateRoomAiDocumentConsentSchema,
 } from '@mousekeeper/contracts';
 import { devices, rooms, type Database } from '@mousekeeper/database';
 import { and, eq } from 'drizzle-orm';
@@ -128,6 +130,44 @@ export class RoomsController {
       id,
       requireIdempotencyKey(rawKey),
     );
+  }
+
+  @Patch(':id/ai-document-consent')
+  async updateAiDocumentConsent(
+    @CurrentPrincipal() principal: AuthPrincipal,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(updateRoomAiDocumentConsentSchema))
+    body: z.infer<typeof updateRoomAiDocumentConsentSchema>,
+  ) {
+    if (principal.authType !== 'FIREBASE') {
+      throw new ForbiddenException({ code: 'FORBIDDEN' });
+    }
+    return this.db.transaction(async (tx) => {
+      const updated = (
+        await tx
+          .update(rooms)
+          .set({ aiDocumentAnalysisConsent: body.enabled })
+          .where(
+            and(
+              eq(rooms.id, id),
+              eq(rooms.userId, principal.userId),
+              eq(rooms.status, 'ACTIVE'),
+            ),
+          )
+          .returning()
+      )[0];
+      if (!updated) throw new NotFoundException({ code: 'NOT_FOUND' });
+      await this.sync.append(tx, {
+        userId: principal.userId,
+        deviceId: updated.desktopDeviceId,
+        roomId: updated.id,
+        eventType: 'room.ai_document_consent.updated',
+        aggregateType: 'room',
+        aggregateId: updated.id,
+        payload: { roomId: updated.id, enabled: body.enabled },
+      });
+      return this.publicRoom(updated);
+    });
   }
 
   private publicRoom(room: typeof rooms.$inferSelect) {
