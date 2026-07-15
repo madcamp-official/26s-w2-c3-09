@@ -118,7 +118,7 @@ final _stages = <_Stage>[
     start: const math.Point(1, 1), cheese: const math.Point(6, 5),
     walls: {const math.Point(2, 2), const math.Point(3, 2), const math.Point(4, 2), const math.Point(5, 2), const math.Point(2, 4), const math.Point(3, 4), const math.Point(4, 4), const math.Point(5, 4)},
     boxes: {const math.Point(3, 3)}, turns: 20 + i * 2,
-    requiredPath: [const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0)])),
+    requiredPath: i < 3 ? const [] : [const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0)])),
 ];
 
 class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
