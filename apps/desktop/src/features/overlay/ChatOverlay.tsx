@@ -48,11 +48,132 @@ type LocalAutoProposal = AutoCleanupProposalEvent & {
   receivedAt: number;
 };
 
+type TimedOpenProposal = AgentOpenProposal & {
+  receivedAt: number;
+};
+
+type ChatTimelineItem =
+  | {
+      kind: "message";
+      key: string;
+      timestamp: number;
+      message: AgentChatMessage;
+    }
+  | {
+      kind: "openProposal";
+      key: string;
+      timestamp: number;
+      proposal: TimedOpenProposal;
+    }
+  | {
+      kind: "localProposal";
+      key: string;
+      timestamp: number;
+      proposal: LocalAutoProposal;
+    };
+
+type PersistedChatActionState = {
+  approvedDraftIds: string[];
+  dismissedLocalProposalKeys: string[];
+  proposalReceivedAtByKey: Record<string, number>;
+  skippedDraftIds: string[];
+  skippedLocalProposalKeys: string[];
+  skippedProposalIds: string[];
+  submittedDraftIds: string[];
+  submittedLocalProposalKeys: string[];
+  submittedProposalIds: string[];
+};
+
+const CHAT_ACTION_STATE_STORAGE_KEY = "mousekeeper.chatOverlay.actionState.v1";
+
+const fallbackQuickPrompts = [
+  {
+    id: "find-reports",
+    label: "Find reports",
+    prompt: "최근 보고서나 리포트 파일을 찾아줘."
+  },
+  {
+    id: "clean-downloads",
+    label: "Clean Downloads",
+    prompt: "다운로드 폴더에서 정리할 만한 파일을 제안해줘."
+  },
+  {
+    id: "pdf-rule",
+    label: "PDF rule",
+    prompt: "PDF 파일을 정리하는 규칙을 만들어줘."
+  },
+  {
+    id: "move-screenshots",
+    label: "Move screenshots",
+    prompt: "스크린샷 파일을 한 폴더로 옮기는 제안을 만들어줘."
+  }
+];
+
+const emptyChatActionState: PersistedChatActionState = {
+  approvedDraftIds: [],
+  dismissedLocalProposalKeys: [],
+  proposalReceivedAtByKey: {},
+  skippedDraftIds: [],
+  skippedLocalProposalKeys: [],
+  skippedProposalIds: [],
+  submittedDraftIds: [],
+  submittedLocalProposalKeys: [],
+  submittedProposalIds: []
+};
+
+function setFromArray(values: readonly string[] | undefined) {
+  return new Set(values?.filter((value): value is string => typeof value === "string") ?? []);
+}
+
+function readPersistedChatActionState(): PersistedChatActionState {
+  if (typeof window === "undefined") return emptyChatActionState;
+  try {
+    const raw = window.localStorage.getItem(CHAT_ACTION_STATE_STORAGE_KEY);
+    if (!raw) return emptyChatActionState;
+    const parsed = JSON.parse(raw) as Partial<PersistedChatActionState>;
+    return {
+      approvedDraftIds: arrayField(parsed.approvedDraftIds),
+      dismissedLocalProposalKeys: arrayField(parsed.dismissedLocalProposalKeys),
+      proposalReceivedAtByKey: numberRecordField(parsed.proposalReceivedAtByKey),
+      skippedDraftIds: arrayField(parsed.skippedDraftIds),
+      skippedLocalProposalKeys: arrayField(parsed.skippedLocalProposalKeys),
+      skippedProposalIds: arrayField(parsed.skippedProposalIds),
+      submittedDraftIds: arrayField(parsed.submittedDraftIds),
+      submittedLocalProposalKeys: arrayField(parsed.submittedLocalProposalKeys),
+      submittedProposalIds: arrayField(parsed.submittedProposalIds)
+    };
+  } catch (cause) {
+    console.warn("Failed to read persisted chat action state", cause);
+    return emptyChatActionState;
+  }
+}
+
+function writePersistedChatActionState(state: PersistedChatActionState) {
+  try {
+    window.localStorage.setItem(CHAT_ACTION_STATE_STORAGE_KEY, JSON.stringify(state));
+  } catch (cause) {
+    console.warn("Failed to persist chat action state", cause);
+  }
+}
+
+function arrayField(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function numberRecordField(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]))
+  );
+}
+
 /**
  * The chat lives in its own fixed-size window (`chat-overlay`) instead of resizing the mascot
  * window. It loads its own room context, so the mascot window only has to show/hide it.
  */
 export function ChatOverlay() {
+  const persistedActionStateRef = useRef(readPersistedChatActionState());
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
   const [rooms, setRooms] = useState<ManagedRoot[]>([]);
   const [chatSession, setChatSession] = useState<AgentChatSession | null>(null);
@@ -65,15 +186,42 @@ export function ChatOverlay() {
   const [answerPending, setAnswerPending] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
   const [approvingDraftIds, setApprovingDraftIds] = useState<Set<string>>(new Set());
-  const [approvedDraftIds, setApprovedDraftIds] = useState<Set<string>>(new Set());
-  const [submittedDraftIds, setSubmittedDraftIds] = useState<Set<string>>(new Set());
-  const [openProposals, setOpenProposals] = useState<AgentOpenProposal[]>([]);
+  const [approvedDraftIds, setApprovedDraftIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.approvedDraftIds)
+  );
+  const [submittedDraftIds, setSubmittedDraftIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.submittedDraftIds)
+  );
+  const [skippedDraftIds, setSkippedDraftIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.skippedDraftIds)
+  );
+  const [openProposals, setOpenProposals] = useState<TimedOpenProposal[]>([]);
   const [approvingProposalIds, setApprovingProposalIds] = useState<Set<string>>(new Set());
-  const [submittedProposalIds, setSubmittedProposalIds] = useState<Set<string>>(new Set());
+  const [submittedProposalIds, setSubmittedProposalIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.submittedProposalIds)
+  );
+  const [skippedProposalIds, setSkippedProposalIds] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.skippedProposalIds)
+  );
   const [localAutoProposals, setLocalAutoProposals] = useState<LocalAutoProposal[]>([]);
   const [approvingLocalProposalKeys, setApprovingLocalProposalKeys] = useState<Set<string>>(new Set());
-  const [submittedLocalProposalKeys, setSubmittedLocalProposalKeys] = useState<Set<string>>(new Set());
-  const dismissedLocalProposalKeysRef = useRef(new Set<string>());
+  const [submittedLocalProposalKeys, setSubmittedLocalProposalKeys] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.submittedLocalProposalKeys)
+  );
+  const [skippedLocalProposalKeys, setSkippedLocalProposalKeys] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.skippedLocalProposalKeys)
+  );
+  const [dismissedLocalProposalKeys, setDismissedLocalProposalKeys] = useState<Set<string>>(
+    () => setFromArray(persistedActionStateRef.current.dismissedLocalProposalKeys)
+  );
+  const [proposalReceivedAtByKey, setProposalReceivedAtByKey] = useState<Record<string, number>>(
+    () => persistedActionStateRef.current.proposalReceivedAtByKey
+  );
+  const dismissedLocalProposalKeysRef = useRef(
+    setFromArray(persistedActionStateRef.current.dismissedLocalProposalKeys)
+  );
+  const proposalReceivedAtByKeyRef = useRef(persistedActionStateRef.current.proposalReceivedAtByKey);
+  const suppressedOpenProposalRoomIdsRef = useRef(new Set<string>());
   const [selectedRootId, setSelectedRootId] = useState<string | null>(
     () => readChatRoomSelection().rootId
   );
@@ -86,14 +234,25 @@ export function ChatOverlay() {
   const activeRoomName = activeRoom?.display_name ?? "방 없음";
   const activeRoomId = activeRoom?.room_id ?? null;
   const activeRootId = activeRoom?.root_id ?? null;
-  const latestMatchingAutoProposal = activeRootId
-    ? localAutoProposals.find((proposal) => proposal.root_id === activeRootId)
-    : null;
   const visibleLocalAutoProposals = (
-    latestMatchingAutoProposal ? [latestMatchingAutoProposal] : localAutoProposals.slice(0, 1)
+    activeRootId
+      ? localAutoProposals.filter((proposal) => proposal.root_id === activeRootId)
+      : localAutoProposals
   ).filter((proposal) => proposal.proposal.proposals.length > 0);
   const visibleOpenProposals = visibleLocalAutoProposals.length > 0 ? [] : openProposals;
   const displayedMessages = mergeMessagesByTime(chatMessages, localStatusMessages);
+
+  function receivedAtForProposalKey(storageKey: string) {
+    const current = proposalReceivedAtByKeyRef.current[storageKey];
+    if (current) return current;
+    const receivedAt = Date.now();
+    proposalReceivedAtByKeyRef.current = {
+      ...proposalReceivedAtByKeyRef.current,
+      [storageKey]: receivedAt
+    };
+    setProposalReceivedAtByKey(proposalReceivedAtByKeyRef.current);
+    return receivedAt;
+  }
 
   async function loadRooms() {
     try {
@@ -109,10 +268,10 @@ export function ChatOverlay() {
   function rememberLocalAutoProposal(proposal: AutoCleanupProposalEvent) {
     if (proposal.proposal.proposals.length === 0) return;
     const localKey = localAutoProposalKey(proposal);
-    if (dismissedLocalProposalKeysRef.current.has(localKey)) return;
+    const receivedAt = receivedAtForProposalKey(`local:${localKey}`);
     setLocalAutoProposals((current) =>
       [
-        { ...proposal, localKey, receivedAt: Date.now() },
+        { ...proposal, localKey, receivedAt },
         ...current.filter((item) => item.localKey !== localKey)
       ].slice(0, 20)
     );
@@ -137,10 +296,19 @@ export function ChatOverlay() {
       setOpenProposals([]);
       return;
     }
+    if (suppressedOpenProposalRoomIdsRef.current.has(roomId)) {
+      setOpenProposals([]);
+      return;
+    }
     try {
       const proposals = await listAgentOpenProposals(roomId);
       const open = proposals.filter((proposal) => proposal.status === "OPEN");
-      setOpenProposals(open);
+      setOpenProposals(
+        open.map((proposal) => ({
+          ...proposal,
+          receivedAt: receivedAtForProposalKey(`open:${proposal.proposal_id}`)
+        }))
+      );
     } catch (cause) {
       console.error("Failed to load open chat proposals", cause);
     }
@@ -157,6 +325,38 @@ export function ChatOverlay() {
     void loadRooms();
     void loadLatestAutoCleanupProposals();
   }, []);
+
+  useEffect(() => {
+    dismissedLocalProposalKeysRef.current = dismissedLocalProposalKeys;
+  }, [dismissedLocalProposalKeys]);
+
+  useEffect(() => {
+    proposalReceivedAtByKeyRef.current = proposalReceivedAtByKey;
+  }, [proposalReceivedAtByKey]);
+
+  useEffect(() => {
+    writePersistedChatActionState({
+      approvedDraftIds: Array.from(approvedDraftIds),
+      dismissedLocalProposalKeys: Array.from(dismissedLocalProposalKeys),
+      proposalReceivedAtByKey,
+      skippedDraftIds: Array.from(skippedDraftIds),
+      skippedLocalProposalKeys: Array.from(skippedLocalProposalKeys),
+      skippedProposalIds: Array.from(skippedProposalIds),
+      submittedDraftIds: Array.from(submittedDraftIds),
+      submittedLocalProposalKeys: Array.from(submittedLocalProposalKeys),
+      submittedProposalIds: Array.from(submittedProposalIds)
+    });
+  }, [
+    approvedDraftIds,
+    dismissedLocalProposalKeys,
+    proposalReceivedAtByKey,
+    skippedDraftIds,
+    skippedLocalProposalKeys,
+    skippedProposalIds,
+    submittedDraftIds,
+    submittedLocalProposalKeys,
+    submittedProposalIds
+  ]);
 
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
@@ -196,9 +396,6 @@ export function ChatOverlay() {
       setChatMessages([]);
       setLocalStatusMessages([]);
       setOpenProposals([]);
-      setSubmittedDraftIds(new Set());
-      setSubmittedProposalIds(new Set());
-      setSubmittedLocalProposalKeys(new Set());
       setNotice("먼저 데스크탑에서 관리 폴더를 서버 room과 연결해야 채팅을 이어서 기록할 수 있어요.");
       return;
     }
@@ -218,9 +415,6 @@ export function ChatOverlay() {
         setQuickView(quick);
         setChatMessages(messages);
         setLocalStatusMessages([]);
-        setSubmittedDraftIds(new Set());
-        setSubmittedProposalIds(new Set());
-        setSubmittedLocalProposalKeys(new Set());
         void loadOpenProposals(activeRoomId);
       })
       .catch((cause) => {
@@ -298,6 +492,9 @@ export function ChatOverlay() {
     setBusy(true);
     setAnswerPending(true);
     setDraft("");
+    if (activeRoomId) {
+      suppressedOpenProposalRoomIdsRef.current.delete(activeRoomId);
+    }
     setChatMessages((items) => appendUniqueMessages(items, [optimisticMessage]));
     try {
       const session = chatSession ?? (await ensureRoomChatSession(activeRoomId, activeRoomName));
@@ -329,6 +526,7 @@ export function ChatOverlay() {
       if (!activeRoomId) {
         throw new Error("관리 폴더를 서버 room과 연결해야 빠른 정리 제안을 만들 수 있어요.");
       }
+      suppressedOpenProposalRoomIdsRef.current.delete(activeRoomId);
       const result = await createAgentChatQuickCleanup(activeRoomId);
       setChatSession(result.session);
       const sentMessages = [result.message, result.assistant].filter(isChatMessage);
@@ -359,6 +557,9 @@ export function ChatOverlay() {
       const executed = report.execution_report.executed_item_count;
       const skipped = report.execution_report.skipped_item_count;
       setApprovedDraftIds((current) => new Set(current).add(draftId));
+      if (isDecisionSkippedOnly(report.execution_report)) {
+        setSkippedDraftIds((current) => new Set(current).add(draftId));
+      }
       pushLocalStatusMessage(
         executionStatusMessage({
           roomId: activeRoomId,
@@ -406,6 +607,9 @@ export function ChatOverlay() {
       const report = await approveAgentOpenProposalAndExecute(proposalId, activeRoomId, idempotencyKey);
       const executed = report.execution_report.executed_item_count;
       const skipped = report.execution_report.skipped_item_count;
+      if (isDecisionSkippedOnly(report.execution_report)) {
+        setSkippedProposalIds((current) => new Set(current).add(proposalId));
+      }
       pushLocalStatusMessage(
         executionStatusMessage({
           roomId: activeRoomId,
@@ -445,11 +649,46 @@ export function ChatOverlay() {
     setSubmittedLocalProposalKeys((current) => new Set(current).add(localKey));
     setApprovingLocalProposalKeys((current) => new Set(current).add(localKey));
     try {
+      const serverProposal = activeRoomId ? await singleOpenProposalForRoom(activeRoomId, openProposals) : null;
+      if (serverProposal && activeRoomId) {
+        setSubmittedProposalIds((current) => new Set(current).add(serverProposal.proposal_id));
+        const report = await approveAgentOpenProposalAndExecute(
+          serverProposal.proposal_id,
+          activeRoomId,
+          proposalApprovalKey(serverProposal.proposal_id)
+        );
+        const skippedOnly = isDecisionSkippedOnly(report.execution_report);
+        if (skippedOnly) {
+          setSkippedLocalProposalKeys((current) => new Set(current).add(localKey));
+          setSkippedProposalIds((current) => new Set(current).add(serverProposal.proposal_id));
+        }
+        setOpenProposals([]);
+        const executed = report.execution_report.executed_item_count;
+        const skipped = report.execution_report.skipped_item_count;
+        pushLocalStatusMessage(
+          executionStatusMessage({
+            roomId: activeRoomId,
+            sessionId: chatSession?.session_id ?? null,
+            content: formatDecisionExecutionResult("자동 제안 실행 결과", report.execution_report)
+          })
+        );
+        setNotice(`자동 제안 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
+        const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
+        setQuickView(quick);
+        return;
+      }
+
       const report = await approveAutoCleanupProposalFromChat(proposal.root_id, proposal.proposal);
-      dismissedLocalProposalKeysRef.current.add(localKey);
-      setLocalAutoProposals((current) => current.filter((item) => item.localKey !== localKey));
+      if (activeRoomId) {
+        suppressedOpenProposalRoomIdsRef.current.add(activeRoomId);
+        setOpenProposals([]);
+      }
       const executed = report.execution.executed_count;
       const skipped = report.execution.skipped_count;
+      const skippedOnly = isLocalSkippedOnly(report.execution);
+      if (skippedOnly) {
+        setSkippedLocalProposalKeys((current) => new Set(current).add(localKey));
+      }
       pushLocalStatusMessage(
         executionStatusMessage({
           roomId: activeRoomId ?? "",
@@ -459,7 +698,6 @@ export function ChatOverlay() {
       );
       setNotice(`자동 제안 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
       if (activeRoomId) {
-        await loadOpenProposals(activeRoomId);
         const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
         setQuickView(quick);
       }
@@ -508,6 +746,9 @@ export function ChatOverlay() {
         submittedDraftIds={submittedDraftIds}
         submittedProposalIds={submittedProposalIds}
         submittedLocalProposalKeys={submittedLocalProposalKeys}
+        skippedDraftIds={skippedDraftIds}
+        skippedProposalIds={skippedProposalIds}
+        skippedLocalProposalKeys={skippedLocalProposalKeys}
         onBeginWindowDrag={beginChatWindowDrag}
         onApproveCommandDraft={(draftId) => void approveCommandDraft(draftId)}
         onApproveOpenProposal={(proposalId) => void approveOpenProposal(proposalId)}
@@ -544,6 +785,49 @@ function mergeMessagesByTime(serverMessages: AgentChatMessage[], localMessages: 
   return appendUniqueMessages(serverMessages, localMessages).sort(
     (left, right) => Date.parse(left.created_at) - Date.parse(right.created_at)
   );
+}
+
+function buildChatTimeline(
+  messages: AgentChatMessage[],
+  openProposals: TimedOpenProposal[],
+  localAutoProposals: LocalAutoProposal[]
+): ChatTimelineItem[] {
+  return [
+    ...messages.map((message): ChatTimelineItem => ({
+      kind: "message",
+      key: `message:${message.message_id}`,
+      timestamp: Date.parse(message.created_at),
+      message
+    })),
+    ...openProposals.map((proposal): ChatTimelineItem => ({
+      kind: "openProposal",
+      key: `open:${proposal.proposal_id}`,
+      timestamp: proposal.receivedAt,
+      proposal
+    })),
+    ...localAutoProposals.map((proposal): ChatTimelineItem => ({
+      kind: "localProposal",
+      key: `local:${proposal.localKey}`,
+      timestamp: proposal.receivedAt,
+      proposal
+    }))
+  ].sort((left, right) => {
+    const leftTime = Number.isFinite(left.timestamp) ? left.timestamp : 0;
+    const rightTime = Number.isFinite(right.timestamp) ? right.timestamp : 0;
+    return leftTime - rightTime || left.key.localeCompare(right.key);
+  });
+}
+
+async function singleOpenProposalForRoom(roomId: string, fallback: AgentOpenProposal[]) {
+  try {
+    const open = (await listAgentOpenProposals(roomId)).filter(
+      (proposal) => proposal.status === "OPEN"
+    );
+    return open.length === 1 ? open[0] : null;
+  } catch {
+    const open = fallback.filter((proposal) => proposal.room_id === roomId && proposal.status === "OPEN");
+    return open.length === 1 ? open[0] : null;
+  }
 }
 
 function executionStatusMessage({
@@ -617,6 +901,10 @@ function formatDecisionExecutionResult(title: string, report: DecisionProcessing
   return `${title}\n실행 ${report.executed_item_count}개, 건너뜀 ${report.skipped_item_count}개${failed}`;
 }
 
+function isDecisionSkippedOnly(report: DecisionProcessingReport) {
+  return report.executed_item_count === 0 && report.skipped_item_count > 0 && report.failed_count === 0;
+}
+
 function formatLocalExecutionResult(title: string, report: ExecuteReport) {
   const summary = `${title}\n실행 ${report.executed_count}개, 건너뜀 ${report.skipped_count}개, 거절 ${report.rejected_count}개`;
   const details = report.results
@@ -627,6 +915,10 @@ function formatLocalExecutionResult(title: string, report: ExecuteReport) {
     });
   const more = report.results.length > details.length ? [`- 외 ${report.results.length - details.length}개 더`] : [];
   return [summary, ...details, ...more].join("\n");
+}
+
+function isLocalSkippedOnly(report: ExecuteReport) {
+  return report.executed_count === 0 && report.skipped_count > 0 && report.rejected_count === 0;
 }
 
 function executionStatusLabel(status: string) {
@@ -675,6 +967,7 @@ function CommandDraftActions({
   busy,
   payload,
   roomId,
+  skippedDraftIds,
   submittedDraftIds,
   onApprove
 }: {
@@ -683,12 +976,16 @@ function CommandDraftActions({
   busy: boolean;
   payload: unknown;
   roomId: string | null;
+  skippedDraftIds: Set<string>;
   submittedDraftIds: Set<string>;
   onApprove: (draftId: string) => void;
 }) {
   const draft = commandDraftPayload(payload);
   if (!draft) {
     return <small className="room-chat-draft-hint">명령 상태를 확인할 수 없어요.</small>;
+  }
+  if (skippedDraftIds.has(draft.id)) {
+    return <small className="room-chat-draft-hint">스킵됨</small>;
   }
   if (approvedDraftIds.has(draft.id)) {
     return <small className="room-chat-draft-hint">승인 후 실행 요청을 완료했어요.</small>;
@@ -717,6 +1014,7 @@ function OpenProposalActions({
   busy,
   proposal,
   roomId,
+  skippedProposalIds,
   submittedProposalIds,
   onApprove
 }: {
@@ -724,19 +1022,21 @@ function OpenProposalActions({
   busy: boolean;
   proposal: AgentOpenProposal;
   roomId: string | null;
+  skippedProposalIds: Set<string>;
   submittedProposalIds: Set<string>;
   onApprove: (proposalId: string) => void;
 }) {
   const approving = approvingProposalIds.has(proposal.proposal_id);
   const submitted = submittedProposalIds.has(proposal.proposal_id);
+  const skipped = skippedProposalIds.has(proposal.proposal_id);
   return (
     <button
       type="button"
       className="room-chat-draft-approve"
       onClick={() => onApprove(proposal.proposal_id)}
-      disabled={busy || approving || submitted || roomId == null}
+      disabled={busy || approving || submitted || skipped || roomId == null}
     >
-      {approving ? "실행 중" : submitted ? "실행 요청됨" : "승인하고 실행"}
+      {skipped ? "스킵됨" : approving ? "실행 중" : submitted ? "실행 요청됨" : "승인하고 실행"}
     </button>
   );
 }
@@ -745,25 +1045,28 @@ function LocalAutoProposalActions({
   approvingLocalProposalKeys,
   busy,
   proposal,
+  skippedLocalProposalKeys,
   submittedLocalProposalKeys,
   onApprove
 }: {
   approvingLocalProposalKeys: Set<string>;
   busy: boolean;
   proposal: LocalAutoProposal;
+  skippedLocalProposalKeys: Set<string>;
   submittedLocalProposalKeys: Set<string>;
   onApprove: (localKey: string) => void;
 }) {
   const approving = approvingLocalProposalKeys.has(proposal.localKey);
   const submitted = submittedLocalProposalKeys.has(proposal.localKey);
+  const skipped = skippedLocalProposalKeys.has(proposal.localKey);
   return (
     <button
       type="button"
       className="room-chat-draft-approve"
       onClick={() => onApprove(proposal.localKey)}
-      disabled={busy || approving || submitted}
+      disabled={busy || approving || submitted || skipped}
     >
-      {approving ? "실행 중" : submitted ? "실행 요청됨" : "승인하고 실행"}
+      {skipped ? "스킵됨" : approving ? "실행 중" : submitted ? "실행 요청됨" : "승인하고 실행"}
     </button>
   );
 }
@@ -787,6 +1090,9 @@ function RoomChatPanel({
   roomId,
   roomName,
   sessionTitle,
+  skippedDraftIds,
+  skippedLocalProposalKeys,
+  skippedProposalIds,
   submittedDraftIds,
   submittedLocalProposalKeys,
   submittedProposalIds,
@@ -813,11 +1119,14 @@ function RoomChatPanel({
   localAutoProposals: LocalAutoProposal[];
   messages: AgentChatMessage[];
   notice: string | null;
-  openProposals: AgentOpenProposal[];
+  openProposals: TimedOpenProposal[];
   quickView: AgentChatQuickView | null;
   roomId: string | null;
   roomName: string;
   sessionTitle: string | null;
+  skippedDraftIds: Set<string>;
+  skippedLocalProposalKeys: Set<string>;
+  skippedProposalIds: Set<string>;
   submittedDraftIds: Set<string>;
   submittedLocalProposalKeys: Set<string>;
   submittedProposalIds: Set<string>;
@@ -831,16 +1140,17 @@ function RoomChatPanel({
   onUsePrompt: (value: string) => void;
   onSubmit: () => void;
 }) {
-  const prompts = quickView?.prompts.slice(0, 4) ?? [];
+  const prompts = quickView?.prompts.length ? quickView.prompts.slice(0, 4) : fallbackQuickPrompts;
   const pendingCount = quickView?.pending_action_count ?? 0;
   const unreadCount = quickView?.unread_count ?? 0;
   const threadRef = useRef<HTMLDivElement | null>(null);
+  const timelineItems = buildChatTimeline(messages, openProposals, localAutoProposals);
 
   useEffect(() => {
     const thread = threadRef.current;
     if (!thread) return;
     thread.scrollTop = thread.scrollHeight;
-  }, [answerPending, loading, localAutoProposals.length, messages.length, notice, openProposals.length]);
+  }, [answerPending, loading, notice, timelineItems.length]);
 
   return (
     <div className="room-chat-panel" data-room-id={roomId ?? "unbound"}>
@@ -883,7 +1193,7 @@ function RoomChatPanel({
             </div>
           </article>
         ) : null}
-        {!loading && messages.length === 0 && openProposals.length === 0 && localAutoProposals.length === 0 ? (
+        {!loading && timelineItems.length === 0 ? (
           <article className="room-chat-message is-mouse">
             <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
             <div>
@@ -892,87 +1202,101 @@ function RoomChatPanel({
             </div>
           </article>
         ) : null}
-        {messages.map((message) => (
-          <article
-            className={messageClassName(message)}
-            key={message.message_id}
-          >
-            {message.sender_type === "ASSISTANT" ? (
+        {timelineItems.map((item) => {
+          if (item.kind === "message") {
+            const message = item.message;
+            return (
+              <article
+                className={messageClassName(message)}
+                key={item.key}
+              >
+                {message.sender_type === "ASSISTANT" ? (
+                  <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+                ) : null}
+                <div>
+                  {message.sender_type === "ASSISTANT" ? <strong>MouseKeeper</strong> : null}
+                  <p>{message.content}</p>
+                  {message.message_type === "COMMAND_DRAFT" ? (
+                    <div className="room-chat-draft-actions">
+                      <small className="room-chat-draft-hint">승인 대기 중인 명령 초안이에요.</small>
+                      <CommandDraftActions
+                        payload={message.structured_payload}
+                        roomId={roomId}
+                        busy={busy}
+                        approvedDraftIds={approvedDraftIds}
+                        approvingDraftIds={approvingDraftIds}
+                        skippedDraftIds={skippedDraftIds}
+                        submittedDraftIds={submittedDraftIds}
+                        onApprove={onApproveCommandDraft}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              </article>
+            );
+          }
+
+          if (item.kind === "openProposal") {
+            const proposal = item.proposal;
+            return (
+              <article className="room-chat-message is-mouse is-auto-proposal" key={item.key}>
+                <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+                <div>
+                  <strong>MouseKeeper</strong>
+                  <p>정리할 만한 항목을 찾았어요. 승인하면 바로 확인하고 실행할게요.</p>
+                  <div className="room-chat-draft-actions">
+                    <small className="room-chat-draft-hint">자동 제안 승인 대기 중</small>
+                    <OpenProposalActions
+                      proposal={proposal}
+                      roomId={roomId}
+                      busy={busy}
+                      approvingProposalIds={approvingProposalIds}
+                      skippedProposalIds={skippedProposalIds}
+                      submittedProposalIds={submittedProposalIds}
+                      onApprove={onApproveOpenProposal}
+                    />
+                  </div>
+                </div>
+              </article>
+            );
+          }
+
+          const proposal = item.proposal;
+          return (
+            <article className="room-chat-message is-mouse is-auto-proposal" key={item.key}>
               <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-            ) : null}
-            <div>
-              {message.sender_type === "ASSISTANT" ? <strong>MouseKeeper</strong> : null}
-              <p>{message.content}</p>
-              {message.message_type === "COMMAND_DRAFT" ? (
+              <div>
+                <strong>MouseKeeper</strong>
+                <p>이렇게 바꾸면 좋을 것 같은데요, 찍?</p>
+                <ul className="room-chat-proposal-list">
+                  {proposal.proposal.proposals.slice(0, 5).map((proposalItem) => (
+                    <li key={proposalItem.proposal_id}>
+                      <span>{proposalActionLabel(proposalItem.action)}</span>
+                      <strong>{proposalPathLabel(proposalItem.from)}</strong>
+                      <small>{proposalDestinationLabel(proposalItem.action, proposalItem.to)}</small>
+                    </li>
+                  ))}
+                  {proposal.proposal.proposals.length > 5 ? (
+                    <li className="is-more">외 {proposal.proposal.proposals.length - 5}개 더</li>
+                  ) : null}
+                </ul>
                 <div className="room-chat-draft-actions">
-                  <small className="room-chat-draft-hint">승인 대기 중인 명령 초안이에요.</small>
-                  <CommandDraftActions
-                    payload={message.structured_payload}
-                    roomId={roomId}
+                  <small className="room-chat-draft-hint">
+                    승인하면 사전 점검 후 바로 실행할게요.
+                  </small>
+                  <LocalAutoProposalActions
+                    proposal={proposal}
                     busy={busy}
-                    approvedDraftIds={approvedDraftIds}
-                    approvingDraftIds={approvingDraftIds}
-                    submittedDraftIds={submittedDraftIds}
-                    onApprove={onApproveCommandDraft}
+                    approvingLocalProposalKeys={approvingLocalProposalKeys}
+                    skippedLocalProposalKeys={skippedLocalProposalKeys}
+                    submittedLocalProposalKeys={submittedLocalProposalKeys}
+                    onApprove={onApproveLocalAutoProposal}
                   />
                 </div>
-              ) : null}
-            </div>
-          </article>
-        ))}
-        {openProposals.map((proposal) => (
-          <article className="room-chat-message is-mouse is-auto-proposal" key={proposal.proposal_id}>
-            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-            <div>
-              <strong>MouseKeeper</strong>
-              <p>정리할 만한 항목을 찾았어요. 승인하면 바로 확인하고 실행할게요.</p>
-              <div className="room-chat-draft-actions">
-                <small className="room-chat-draft-hint">자동 제안 승인 대기 중</small>
-                <OpenProposalActions
-                  proposal={proposal}
-                  roomId={roomId}
-                  busy={busy}
-                  approvingProposalIds={approvingProposalIds}
-                  submittedProposalIds={submittedProposalIds}
-                  onApprove={onApproveOpenProposal}
-                />
               </div>
-            </div>
-          </article>
-        ))}
-        {localAutoProposals.map((proposal) => (
-          <article className="room-chat-message is-mouse is-auto-proposal" key={proposal.localKey}>
-            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-            <div>
-              <strong>MouseKeeper</strong>
-              <p>이렇게 바꾸면 좋을 것 같은데요, 찍?</p>
-              <ul className="room-chat-proposal-list">
-                {proposal.proposal.proposals.slice(0, 5).map((item) => (
-                  <li key={item.proposal_id}>
-                    <span>{proposalActionLabel(item.action)}</span>
-                    <strong>{proposalPathLabel(item.from)}</strong>
-                    <small>{proposalDestinationLabel(item.action, item.to)}</small>
-                  </li>
-                ))}
-                {proposal.proposal.proposals.length > 5 ? (
-                  <li className="is-more">외 {proposal.proposal.proposals.length - 5}개 더</li>
-                ) : null}
-              </ul>
-              <div className="room-chat-draft-actions">
-                <small className="room-chat-draft-hint">
-                  승인하면 사전 점검 후 바로 실행할게요.
-                </small>
-                <LocalAutoProposalActions
-                  proposal={proposal}
-                  busy={busy}
-                  approvingLocalProposalKeys={approvingLocalProposalKeys}
-                  submittedLocalProposalKeys={submittedLocalProposalKeys}
-                  onApprove={onApproveLocalAutoProposal}
-                />
-              </div>
-            </div>
-          </article>
-        ))}
+            </article>
+          );
+        })}
       </div>
 
       {answerPending ? <p className="character-thinking">답을 만들고 있어요!</p> : null}

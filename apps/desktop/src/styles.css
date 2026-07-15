@@ -928,10 +928,15 @@ body.overlay-body .room-chat-panel {
 body.overlay-body .room-chat-quickbar {
   grid-row: 2;
   display: flex;
+  align-items: center;
   gap: 6px;
+  min-height: 38px;
+  min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   background: #b7d7ea;
   padding: 7px 8px 2px;
+  scrollbar-gutter: stable;
 }
 
 body.overlay-body .room-chat-quickbar button {
