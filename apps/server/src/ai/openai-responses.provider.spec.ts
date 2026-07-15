@@ -148,6 +148,146 @@ describe('OpenAiResponsesProvider', () => {
     );
   });
 
+  it('carries a validated one-off selector rule in an ORGANIZE command', async () => {
+    const instruction =
+      'KakaoTalk으로 시작하는 이미지들은 모두 카카오톡 이미지 폴더로 옮겨줘';
+    const fetcher = jest.fn(() =>
+      Promise.resolve(
+        okOutput({
+          kind: 'COMMAND_DRAFT',
+          reasonCode: '',
+          reply: '',
+          intent: 'ORGANIZE',
+          arguments: {
+            rootId: 'root:photos',
+            scopeRelativePath: '',
+            instruction,
+            ruleDraft: {
+              match: 'ALL',
+              conditions: [
+                {
+                  field: 'name',
+                  operator: 'STARTS_WITH',
+                  value: 'KakaoTalk',
+                },
+                {
+                  field: 'extension',
+                  operator: 'IN',
+                  value: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic'],
+                },
+              ],
+              action: {
+                type: 'MOVE',
+                destinationTemplate: '카카오톡 이미지',
+              },
+            },
+          },
+          confirmationSummary:
+            'KakaoTalk 이미지 파일을 카카오톡 이미지 폴더로 옮깁니다.',
+          browse: {},
+          responseSummary: '',
+          name: '',
+          definition: {},
+          explanation: '',
+          ambiguities: [],
+        }),
+      ),
+    );
+
+    await expect(
+      providerWith(fetcher).classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: { id: 'message-1', content: instruction },
+        room: {
+          roomName: '사진',
+          rootAlias: 'root:photos',
+          existingRules: [],
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: 'READY',
+      kind: 'COMMAND_DRAFT',
+      command: {
+        intent: 'ORGANIZE',
+        payload: {
+          rootId: 'root:photos',
+          instruction,
+          ruleDraft: {
+            conditions: [
+              {
+                field: 'name',
+                operator: 'STARTS_WITH',
+                value: 'KakaoTalk',
+              },
+              {
+                field: 'extension',
+                operator: 'IN',
+                value: ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic'],
+              },
+            ],
+            action: {
+              type: 'MOVE',
+              destinationTemplate: '카카오톡 이미지',
+            },
+          },
+        },
+      },
+    });
+    const body = JSON.parse(
+      (fetcher.mock.calls[0][1] as RequestInit).body as string,
+    ) as { instructions: string };
+    expect(body.instructions).toContain('ruleDraft is required');
+    expect(body.instructions).toContain('roomContext.rootAlias');
+    expect(body.instructions).toContain(
+      'never hardcode a brand, prefix, extension, or destination',
+    );
+    expect(body.instructions).toContain(
+      'selects files by a property or pattern',
+    );
+  });
+
+  it('fails closed when an ORGANIZE draft has only ignored free-form text', async () => {
+    const fetcher = jest.fn(() =>
+      Promise.resolve(
+        okOutput({
+          kind: 'COMMAND_DRAFT',
+          reasonCode: '',
+          reply: '',
+          intent: 'ORGANIZE',
+          arguments: {
+            rootId: 'root:photos',
+            scopeRelativePath: '',
+            instruction: 'KakaoTalk 이미지를 옮겨줘',
+          },
+          confirmationSummary: 'KakaoTalk 이미지를 옮깁니다.',
+          browse: {},
+          responseSummary: '',
+          name: '',
+          definition: {},
+          explanation: '',
+          ambiguities: [],
+        }),
+      ),
+    );
+
+    await expect(
+      providerWith(fetcher).classifyAndRespond({
+        userId: 'user-1',
+        roomId: 'room-1',
+        sessionId: 'session-1',
+        sourceMessage: {
+          id: 'message-1',
+          content: 'KakaoTalk 이미지를 옮겨줘',
+        },
+      }),
+    ).resolves.toEqual({
+      status: 'INVALID',
+      code: 'AI_OUTPUT_INVALID',
+    });
+  });
+
   it('rejects model output that fails command payload validation', async () => {
     const fetcher = jest.fn(async (_input: string | URL, _init?: RequestInit) =>
       okOutput({

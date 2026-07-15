@@ -6,7 +6,7 @@ use file_engine_cli::proposal::{
     proposal_id, propose_for_root, propose_for_root_with_rule_set, Proposal, ProposalAction,
     ProposalReport, ProposalStatus,
 };
-use file_engine_cli::rules::RuleSet;
+use file_engine_cli::rules::rule_set_from_draft_value;
 use file_engine_cli::{fs_safety::is_link_or_reparse_point, path_guard::PathGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -781,15 +781,20 @@ fn source_file_id_for_path(guard: &PathGuard, source_relative_path: &str) -> Opt
 /// Computes the local proposal for a command. If the command carries an AI/server rule draft, the
 /// draft is treated as untrusted input: it is strictly parsed and validated here before any file
 /// access, so malformed AI output is rejected before the engine reads the disk. The deterministic
-/// Rust engine — never the AI — computes the concrete file targets. Without a draft, the root's own
-/// saved rules are used.
+/// Rust engine — never the AI — computes the concrete file targets. A one-off request carrying
+/// free-form intent must also carry a validated draft; only analysis/root-driven calls without a
+/// one-off intent may fall back to the root's saved rules.
 fn resolve_proposal(root: &str, payload: &OrganizeFilesPayload) -> Result<ProposalReport, String> {
     match &payload.rule_draft {
         Some(draft) => {
-            let rule_set: RuleSet = serde_json::from_value(draft.clone())
+            let rule_set = rule_set_from_draft_value(draft.clone())
                 .map_err(|error| format!("invalid AI rule draft shape: {error}"))?;
             propose_for_root_with_rule_set(root, rule_set).map_err(|error| error.to_string())
         }
+        None if payload.user_intent.is_some() => Err(
+            "ORGANIZE_RULE_DRAFT_REQUIRED: refusing to ignore the requested file selector"
+                .to_string(),
+        ),
         None => propose_for_root(root).map_err(|error| error.to_string()),
     }
 }
@@ -1213,6 +1218,74 @@ mod tests {
             .map(|p| p.from.as_str())
             .collect::<Vec<_>>();
         assert_eq!(froms, vec!["downloads/old.pdf"]);
+    }
+
+    #[test]
+    fn contract_rule_draft_applies_all_requested_selection_conditions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("KakaoTalk_photo.jpg"), "jpg").expect("jpg");
+        std::fs::write(root.join("KakaoTalk_sticker.PNG"), "png").expect("png");
+        std::fs::write(root.join("KakaoTalk_notes.txt"), "txt").expect("txt");
+        std::fs::write(root.join("Other.png"), "other").expect("other");
+
+        let payload = organize_payload(Some(json!({
+            "match": "ALL",
+            "conditions": [
+                { "field": "name", "operator": "STARTS_WITH", "value": "KakaoTalk" },
+                {
+                    "field": "extension",
+                    "operator": "IN",
+                    "value": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"]
+                }
+            ],
+            "action": {
+                "type": "MOVE",
+                "destinationTemplate": "카카오톡 이미지"
+            }
+        })));
+
+        let report = resolve_proposal(&root.to_string_lossy(), &payload).expect("draft proposal");
+        let moves = report
+            .proposals
+            .iter()
+            .map(|proposal| {
+                (
+                    proposal.action.clone(),
+                    proposal.from.as_str(),
+                    proposal.to.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            moves,
+            vec![
+                (
+                    ProposalAction::Move,
+                    "KakaoTalk_photo.jpg",
+                    "카카오톡 이미지/KakaoTalk_photo.jpg",
+                ),
+                (
+                    ProposalAction::Move,
+                    "KakaoTalk_sticker.PNG",
+                    "카카오톡 이미지/KakaoTalk_sticker.PNG",
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn organize_request_is_not_silently_replaced_by_saved_rules() {
+        let mut payload = organize_payload(None);
+        payload.user_intent =
+            Some("KakaoTalk으로 시작하는 이미지들은 카카오톡 이미지 폴더로 옮겨줘".to_string());
+
+        let error = resolve_proposal("C:/unused/root", &payload)
+            .expect_err("free-form request without a rule draft must fail closed");
+
+        assert!(error.contains("ORGANIZE_RULE_DRAFT_REQUIRED"));
     }
 
     #[test]

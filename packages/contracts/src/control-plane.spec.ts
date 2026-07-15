@@ -811,6 +811,43 @@ describe("command contracts", () => {
         },
       }).success,
     ).toBe(true);
+    const organizeCommand = createCommandSchema.parse({
+      intent: "ORGANIZE",
+      payload: {
+        rootId,
+        scopeRelativePath: "",
+        instruction:
+          "KakaoTalk으로 시작하는 이미지들은 카카오톡 이미지 폴더로 옮겨줘",
+        ruleDraft: {
+          match: "ALL",
+          conditions: [
+            { field: "name", operator: "STARTS_WITH", value: "KakaoTalk" },
+            {
+              field: "extension",
+              operator: "IN",
+              value: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"],
+            },
+          ],
+          action: {
+            type: "MOVE",
+            destinationTemplate: "카카오톡 이미지",
+          },
+        },
+      },
+    });
+    expect(organizeCommand.intent).toBe("ORGANIZE");
+    if (organizeCommand.intent !== "ORGANIZE") {
+      throw new Error("expected ORGANIZE command");
+    }
+    expect(organizeCommand.payload.ruleDraft?.conditions).toEqual(
+      expect.arrayContaining([
+        { field: "name", operator: "STARTS_WITH", value: "KakaoTalk" },
+      ]),
+    );
+    expect(organizeCommand.payload.ruleDraft?.action).toEqual({
+      type: "MOVE",
+      destinationTemplate: "카카오톡 이미지",
+    });
     expect(
       createCommandSchema.safeParse({
         intent: "FIND",

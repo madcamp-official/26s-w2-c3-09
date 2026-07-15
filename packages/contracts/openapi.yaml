@@ -1596,6 +1596,7 @@ components:
         scopeRelativePath:
           { $ref: "#/components/schemas/SafeCommandRelativeDirectory" }
         instruction: { type: string, minLength: 1, maxLength: 2000 }
+        ruleDraft: { $ref: "#/components/schemas/RuleDefinition" }
     CreateFileCommandPayload:
       type: object
       additionalProperties: false

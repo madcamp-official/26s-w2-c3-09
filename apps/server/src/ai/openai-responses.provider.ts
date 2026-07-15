@@ -284,6 +284,12 @@ export class OpenAiResponsesProvider implements AiProvider {
       payload: argumentsObject,
     });
     if (!command.success) return this.invalid('COMMAND_PAYLOAD_SCHEMA');
+    if (
+      command.data.intent === 'ORGANIZE' &&
+      command.data.payload.ruleDraft == null
+    ) {
+      return this.invalid('ORGANIZE_RULE_DRAFT_REQUIRED');
+    }
     return {
       status: 'READY',
       kind: 'COMMAND_DRAFT',
@@ -538,6 +544,8 @@ function commandInstructions() {
     'Disambiguation rules:',
     '- "정리해줘", "quick cleanup", "clean this up for me", or "suggest cleanup" => COMMAND_DRAFT with intent ANALYZE and payload {} (the PC analyzes and proposes; it does NOT execute). Only use QUERY if the user asks solely to VIEW already-existing suggestions.',
     '- Read-only lookups ("파일 찾아줘", "어디 있어", "목록 보여줘", "search", "list", "show me") => QUERY. Do NOT emit COMMAND_DRAFT for a lookup that changes nothing, even though a FIND-style intent exists.',
+    '- A bulk request that selects files by a property or pattern and changes them is ORGANIZE, even when the user says "옮겨/move". MOVE is only for an explicit list of concrete relative paths.',
+    '- "폴더를 만들고 조건에 맞는 파일을 그 안으로 옮겨줘" is one ORGANIZE draft with a MOVE action. The approved Desktop executor creates the destination directory safely; do not split it into an unrelated CREATE draft.',
     '- If a request both defines a rule and asks for an action: prefer RULE_DRAFT when they say to remember/automate it, COMMAND_DRAFT when they want it done once now.',
     '- When genuinely torn between two kinds, pick the least destructive (QUERY over COMMAND_DRAFT, NO_ACTION over a wrong COMMAND_DRAFT) and record the doubt in ambiguities.',
     'Never emit COMMAND_DRAFT for a write unless the intent is explicit enough for a later approval card; otherwise return NO_ACTION.',
@@ -545,9 +553,13 @@ function commandInstructions() {
     '- TRASH: arguments {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"]}. Use only user-provided relative paths. If no concrete path is given, return NO_ACTION and ask which file.',
     '- MOVE: arguments {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"],"destinationRelativeDirectory":"Archive"}.',
     '- CREATE folder: arguments {"rootId":"root:<alias>","kind":"DIRECTORY","relativePath":"New Folder"}. CREATE file uses kind "FILE".',
-    '- ORGANIZE: arguments {"rootId":"root:<alias>","scopeRelativePath":"","instruction":"the user request"}.',
+    '- ORGANIZE: arguments must include {"rootId":"root:<alias>","scopeRelativePath":"","instruction":"the user request","ruleDraft":<RuleDefinition>}. ruleDraft is required because Desktop never interprets free-form instruction text.',
+    '- Build every ORGANIZE ruleDraft from the current request; never hardcode a brand, prefix, extension, or destination. Supported conditions are extension IN, name CONTAINS/STARTS_WITH/ENDS_WITH, modifiedAgeDays or createdAgeDays GTE/GT, ageDays GTE, sizeBytes GTE/LTE, relativePath STARTS_WITH, and fileKind EQ. Combine them with match ALL or ANY.',
+    '- Supported ORGANIZE actions are MOVE with destinationTemplate, TRASH, QUARANTINE, and CREATE_DIR. Prefer MOVE when the request both names a destination folder and selects files; the folder may be absent and will be created only after approval.',
+    '- For a one-off set operation, translate the selector and destination into ruleDraft. Example: "KakaoTalk으로 시작하는 이미지들은 모두 카카오톡 이미지 폴더로 옮겨줘" => {"rootId":"root:<alias>","scopeRelativePath":"","instruction":"KakaoTalk으로 시작하는 이미지들은 모두 카카오톡 이미지 폴더로 옮겨줘","ruleDraft":{"match":"ALL","conditions":[{"field":"name","operator":"STARTS_WITH","value":"KakaoTalk"},{"field":"extension","operator":"IN","value":[".jpg",".jpeg",".png",".gif",".webp",".heic"]}],"action":{"type":"MOVE","destinationTemplate":"카카오톡 이미지"}}}.',
+    '- Another valid one-off example is "30일 넘고 10MB 이상인 PDF를 오래된 문서로 정리해줘": match ALL with extension IN [".pdf"], modifiedAgeDays GTE 30, sizeBytes GTE 10485760, and MOVE destinationTemplate "오래된 문서".',
     '- ANALYZE: arguments {}.',
-    'Use "root:downloads" as the default rootId unless the user names another connected root alias. Never invent absolute local paths.',
+    'When roomContext.rootAlias is present, use it exactly as rootId. Only fall back to "root:downloads" when no room rootAlias is available. Never invent absolute local paths.',
     'For QUERY, put a createFileBrowseRequestSchema object in browse: {"relativeDirectory":"","cursor":null,"query":"docs","extensions":[],"limit":25,"searchScope":"MANAGED_ROOT"}. Use searchScope MANAGED_ROOT unless the user explicitly asks only for the current folder.',
     'For listing a named folder such as "img 폴더의 목록을 줘", use kind QUERY with relativeDirectory "img", query null, extensions [], and searchScope CURRENT_DIRECTORY.',
     'For RULE_DRAFT, put the Rule DSL object in definition and leave intent NONE, arguments {}, confirmationSummary empty, and browse {}.',

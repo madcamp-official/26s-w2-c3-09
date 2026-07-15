@@ -307,6 +307,9 @@ export const organizeCommandPayloadSchema = z
     rootId: commandRootIdSchema,
     scopeRelativePath: relativeDirectorySchema,
     instruction: z.string().trim().min(1).max(2000).optional(),
+    // A one-off natural-language organize request must cross the server/Desktop
+    // boundary as validated data. Desktop never interprets the free-form text.
+    ruleDraft: ruleDefinitionSchema.optional(),
   })
   .strict();
 

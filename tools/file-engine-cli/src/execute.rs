@@ -585,8 +585,10 @@ mod tests {
     use crate::decision::{Decision, DecisionEntry};
     use crate::journal::{JournalAction, JournalEntry, JournalStatus, JournalStore};
     use crate::proposal::{
-        proposal_id, propose_for_root, Proposal, ProposalAction, ProposalReport, ProposalStatus,
+        proposal_id, propose_for_root, propose_for_root_with_rule_set, Proposal, ProposalAction,
+        ProposalReport, ProposalStatus,
     };
+    use crate::rules::RuleSet;
 
     use super::{execute_decision_application, execute_proposals, execute_root, ExecuteStatus};
 
@@ -608,6 +610,51 @@ mod tests {
         // The journal recorded the executed move (planned then executed collapse to one op).
         assert_eq!(history.operations.len(), 1);
         assert_eq!(history.operations[0].latest_status, JournalStatus::Executed);
+    }
+
+    #[test]
+    fn creates_requested_destination_and_moves_only_matching_files() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("KakaoTalk_photo.jpg"), "jpg").expect("write jpg");
+        fs::write(root.join("KakaoTalk_sticker.PNG"), "png").expect("write png");
+        fs::write(root.join("KakaoTalk_notes.txt"), "txt").expect("write txt");
+        fs::write(root.join("Other.png"), "other").expect("write other");
+        let rule_set = RuleSet::from_contract_definition(
+            "kakaotalk-images",
+            0,
+            serde_json::json!({
+                "match": "ALL",
+                "conditions": [
+                    { "field": "name", "operator": "STARTS_WITH", "value": "KakaoTalk" },
+                    {
+                        "field": "extension",
+                        "operator": "IN",
+                        "value": [".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic"]
+                    }
+                ],
+                "action": {
+                    "type": "MOVE",
+                    "destinationTemplate": "카카오톡 이미지"
+                }
+            }),
+        )
+        .expect("contract rule");
+        let proposals =
+            propose_for_root_with_rule_set(&root, rule_set).expect("propose image moves");
+
+        assert_eq!(proposals.proposals.len(), 2);
+        let report = execute_proposals(&root, proposals).expect("execute approved proposals");
+        let history = crate::journal::read_operation_history(&root).expect("history");
+
+        assert_eq!(report.executed_count, 2);
+        assert_eq!(report.skipped_count, 0);
+        assert_eq!(history.operations.len(), 2);
+        assert!(root.join("카카오톡 이미지/KakaoTalk_photo.jpg").exists());
+        assert!(root.join("카카오톡 이미지/KakaoTalk_sticker.PNG").exists());
+        assert!(root.join("KakaoTalk_notes.txt").exists());
+        assert!(root.join("Other.png").exists());
     }
 
     #[test]
