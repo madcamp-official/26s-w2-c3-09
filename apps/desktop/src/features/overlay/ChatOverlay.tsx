@@ -490,15 +490,22 @@ export function ChatOverlay() {
   useEffect(() => {
     if (!chatSession || answerPending) return;
     const timer = window.setInterval(() => {
-      void listAgentChatMessages(chatSession.session_id)
-        .then(async (messages) => {
+      void Promise.all([
+        listAgentChatSessions(activeRoomId),
+        listAgentChatMessages(chatSession.session_id)
+      ])
+        .then(async ([sessions, messages]) => {
+          const refreshedSession = sessions.find(
+            (session) => session.session_id === chatSession.session_id
+          );
           await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
+          if (refreshedSession) setChatSession(refreshedSession);
           setChatMessages(messages);
         })
         .catch(() => undefined);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [answerPending, chatSession]);
+  }, [activeRoomId, answerPending, chatSession]);
 
   function pushLocalStatusMessage(message: AgentChatMessage) {
     setLocalStatusMessages((items) => appendUniqueMessages(items, [message]));

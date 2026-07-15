@@ -570,7 +570,8 @@ class ChatPage extends ConsumerStatefulWidget {
   ConsumerState<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends ConsumerState<ChatPage> {
+class _ChatPageState extends ConsumerState<ChatPage>
+    with WidgetsBindingObserver {
   final input = TextEditingController();
   final _inputFocus = FocusNode();
   final _scrollController = ScrollController();
@@ -631,6 +632,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_loadInitial());
     // Socket events are a latency optimization. Keep the open conversation
     // live even when the app resumes from background or a websocket event was
@@ -644,11 +646,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   void dispose() {
     _disposed = true;
     _realtimeFallbackTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _loadVersion++;
     input.dispose();
     _inputFocus.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !_disposed) {
+      unawaited(_refreshSessionsForRealtimeRoom(widget.roomId));
+      unawaited(_refreshVisibleConversationFromServer());
+    }
   }
 
   Future<void> _refreshVisibleConversationFromServer() async {
