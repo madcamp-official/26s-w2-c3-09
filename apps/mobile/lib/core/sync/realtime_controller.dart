@@ -39,6 +39,7 @@ enum RealtimeHomeUpdateKind {
   presence,
   devicePaired,
   deviceRemoved,
+  roomCreated,
   roomRemoved,
   proposalCreated,
   decisionCreated,
@@ -60,6 +61,7 @@ class RealtimeHomeUpdate {
     this.commandId,
     this.executionId,
     this.device,
+    this.room,
     this.decisionType,
     this.proposalStatus,
     this.proposalSummary,
@@ -81,6 +83,7 @@ class RealtimeHomeUpdate {
   final String? commandId;
   final String? executionId;
   final Map<String, dynamic>? device;
+  final Map<String, dynamic>? room;
   final String? decisionType;
   final String? proposalStatus;
   final Map<String, dynamic>? proposalSummary;
@@ -351,6 +354,29 @@ RealtimeHomeUpdate? realtimeHomeUpdateFor(String event, Object? data) {
       deviceId: deviceId,
     );
   }
+  if (event == 'room.created' && roomId != null) {
+    final rawRoom = payload['room'];
+    if (rawRoom is Map) {
+      final room = Map<String, dynamic>.from(rawRoom);
+      if (room['id'] == roomId &&
+          room['status'] == 'ACTIVE' &&
+          room['desktopDeviceId'] is String &&
+          room['name'] is String &&
+          room['rootAlias'] is String &&
+          room['createdAt'] is String) {
+        return RealtimeHomeUpdate(
+          kind: RealtimeHomeUpdateKind.roomCreated,
+          eventType: event,
+          roomId: roomId,
+          room: room,
+        );
+      }
+    }
+    return RealtimeHomeUpdate(
+      kind: RealtimeHomeUpdateKind.refreshSummary,
+      eventType: event,
+    );
+  }
   if (event == 'room.removed' && roomId != null) {
     return RealtimeHomeUpdate(
       kind: RealtimeHomeUpdateKind.roomRemoved,
@@ -522,6 +548,7 @@ bool realtimeUpdateSuppressesGenericRevision(
     RealtimeHomeUpdateKind.presence ||
     RealtimeHomeUpdateKind.devicePaired ||
     RealtimeHomeUpdateKind.deviceRemoved ||
+    RealtimeHomeUpdateKind.roomCreated ||
     RealtimeHomeUpdateKind.roomRemoved ||
     RealtimeHomeUpdateKind.proposalCreated ||
     RealtimeHomeUpdateKind.decisionCreated ||

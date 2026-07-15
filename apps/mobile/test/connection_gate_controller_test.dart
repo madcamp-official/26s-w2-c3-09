@@ -305,6 +305,54 @@ void main() {
     },
   );
 
+  test(
+    'created room event upserts the active device gate immediately',
+    () async {
+      api.devices = [
+        {'id': 'device-a', 'status': 'ACTIVE', 'deviceName': 'Desktop'},
+      ];
+      startGate();
+      await container.read(connectionGateControllerProvider.future);
+      final initialRoomListCalls = api.roomListCalls;
+
+      container
+          .read(connectionLifecycleEventProvider.notifier)
+          .emit(
+            const ConnectionLifecycleEvent(
+              eventId: 'created-room-event',
+              eventType: 'room.created',
+              roomId: 'room-a',
+              room: {
+                'id': 'room-a',
+                'desktopDeviceId': 'device-a',
+                'name': 'Reports',
+                'rootAlias': 'reports',
+                'status': 'ACTIVE',
+                'createdAt': '2026-07-15T01:02:03.000Z',
+              },
+            ),
+          );
+
+      for (var attempt = 0; attempt < 20; attempt++) {
+        if (container
+            .read(connectionGateControllerProvider)
+            .requireValue
+            .rooms
+            .isNotEmpty) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+
+      final gate = container
+          .read(connectionGateControllerProvider)
+          .requireValue;
+      expect(gate.rooms.single['name'], 'Reports');
+      expect(api.roomListCalls, initialRoomListCalls);
+      expect((await cache.rooms()).single['name'], 'Reports');
+    },
+  );
+
   test('incomplete paired device event falls back to one reconcile', () async {
     startGate();
     await container.read(connectionGateControllerProvider.future);

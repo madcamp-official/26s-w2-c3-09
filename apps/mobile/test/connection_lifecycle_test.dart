@@ -54,6 +54,31 @@ void main() {
     expect(event?.sequence, 14);
   });
 
+  test('created room envelope carries a complete active room projection', () {
+    final event = connectionLifecycleEventFor('room.created', {
+      'eventId': _eventId,
+      'eventType': 'room.created',
+      'aggregateId': _roomA,
+      'sequence': 15,
+      'payload': {
+        'roomId': _roomA,
+        'status': 'ACTIVE',
+        'room': {
+          'id': _roomA,
+          'desktopDeviceId': _deviceA,
+          'name': 'Reports',
+          'rootAlias': 'reports',
+          'status': 'ACTIVE',
+          'createdAt': '2026-07-15T01:02:03.000Z',
+        },
+      },
+    });
+
+    expect(event?.roomId, _roomA);
+    expect(event?.room?['name'], 'Reports');
+    expect(event?.eventType, 'room.created');
+  });
+
   test('unrelated realtime events do not enter the connection reducer', () {
     expect(
       connectionLifecycleEventFor('execution.updated', {

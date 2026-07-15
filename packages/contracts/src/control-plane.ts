@@ -676,6 +676,23 @@ export const devicePairedEventPayloadSchema = z
     }
   });
 
+export const roomCreatedEventPayloadSchema = z
+  .object({
+    roomId: uuidSchema,
+    status: z.literal("ACTIVE"),
+    room: connectionSummaryRoomSchema,
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.room.id !== value.roomId) {
+      context.addIssue({
+        code: "custom",
+        path: ["room", "id"],
+        message: "room must describe the created roomId",
+      });
+    }
+  });
+
 export const deviceRevokedEventPayloadSchema = z
   .object({
     deviceId: uuidSchema,

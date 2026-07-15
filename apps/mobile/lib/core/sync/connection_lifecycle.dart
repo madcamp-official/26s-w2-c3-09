@@ -7,6 +7,7 @@ class ConnectionLifecycleEvent {
     this.deviceId,
     this.device,
     this.roomId,
+    this.room,
     this.sequence,
   });
 
@@ -15,6 +16,7 @@ class ConnectionLifecycleEvent {
   final String? deviceId;
   final Map<String, dynamic>? device;
   final String? roomId;
+  final Map<String, dynamic>? room;
   final int? sequence;
 }
 
@@ -31,6 +33,7 @@ ConnectionLifecycleEvent? connectionLifecycleEventFor(
   if (!const {
     'device.paired',
     'device.revoked',
+    'room.created',
     'room.removed',
   }.contains(eventType)) {
     return null;
@@ -51,6 +54,7 @@ ConnectionLifecycleEvent? connectionLifecycleEventFor(
   final expectedStatus = switch (eventType) {
     'device.paired' => 'ACTIVE',
     'device.revoked' => 'REVOKED',
+    'room.created' => 'ACTIVE',
     'room.removed' => 'REMOVED',
     _ => null,
   };
@@ -67,9 +71,14 @@ ConnectionLifecycleEvent? connectionLifecycleEventFor(
       if (device == null) return null;
     }
   }
-  final roomId = eventType == 'room.removed'
+  final roomId = eventType.startsWith('room.')
       ? _requiredId(payload['roomId'])
       : null;
+  Map<String, dynamic>? room;
+  if (eventType == 'room.created') {
+    room = _activeRoomPayload(payload['room'], roomId);
+    if (room == null) return null;
+  }
   final payloadAggregateId = deviceId ?? roomId;
   if (payloadAggregateId == null || payloadAggregateId != aggregateId) {
     return null;
@@ -80,6 +89,7 @@ ConnectionLifecycleEvent? connectionLifecycleEventFor(
     deviceId: deviceId,
     device: device,
     roomId: roomId,
+    room: room,
     sequence: sequence,
   );
 }
@@ -104,6 +114,19 @@ Map<String, dynamic>? _activeDevicePayload(Object? value, String? deviceId) {
     return null;
   }
   return device;
+}
+
+Map<String, dynamic>? _activeRoomPayload(Object? value, String? roomId) {
+  if (roomId == null || value is! Map) return null;
+  final room = Map<String, dynamic>.from(value);
+  if (room['id'] != roomId || room['status'] != 'ACTIVE') return null;
+  if (_requiredId(room['desktopDeviceId']) == null ||
+      room['name'] is! String ||
+      room['rootAlias'] is! String ||
+      room['createdAt'] is! String) {
+    return null;
+  }
+  return room;
 }
 
 final connectionLifecycleEventProvider =

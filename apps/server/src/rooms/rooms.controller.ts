@@ -11,7 +11,10 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { createRoomSchema } from '@mousekeeper/contracts';
+import {
+  createRoomSchema,
+  roomCreatedEventPayloadSchema,
+} from '@mousekeeper/contracts';
 import { devices, rooms, type Database } from '@mousekeeper/database';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -27,6 +30,8 @@ import {
 } from '../connections/connection-lifecycle.service';
 import { requireIdempotencyKey } from '../connections/idempotency-key';
 import { DATABASE } from '../database/database.module';
+import { RealtimeDispatcher } from '../realtime/realtime-dispatcher.service';
+import { SyncService } from '../sync/sync.service';
 
 @Controller('v1/rooms')
 @UseGuards(FirebaseAuthGuard)
@@ -34,6 +39,8 @@ export class RoomsController {
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly lifecycle: ConnectionLifecycleService,
+    private readonly sync: SyncService,
+    private readonly realtime: RealtimeDispatcher,
   ) {}
 
   @Get()
@@ -55,7 +62,7 @@ export class RoomsController {
     body: z.infer<typeof createRoomSchema>,
   ) {
     requireAgentDevice(principal, body.desktopDeviceId);
-    return this.db.transaction(async (tx) => {
+    const outcome = await this.db.transaction(async (tx) => {
       const device = (
         await tx
           .select()
@@ -82,8 +89,29 @@ export class RoomsController {
           .values({ userId: principal.userId, ...body })
           .returning()
       )[0];
-      return this.publicRoom(created);
+      const room = this.publicRoom(created);
+      const event = await this.sync.append(tx, {
+        userId: principal.userId,
+        deviceId: created.desktopDeviceId,
+        roomId: created.id,
+        eventType: 'room.created',
+        aggregateType: 'room',
+        aggregateId: created.id,
+        payload: roomCreatedEventPayloadSchema.parse({
+          roomId: created.id,
+          status: 'ACTIVE',
+          room,
+        }),
+      });
+      return { room, eventId: event.id };
     });
+    try {
+      await this.realtime.publishNow([outcome.eventId]);
+    } catch {
+      // The durable sync event remains available to the dispatcher and replay.
+      console.error('ROOM_CREATED_IMMEDIATE_PUBLISH_FAILED');
+    }
+    return outcome.room;
   }
 
   @Delete(':id')
@@ -104,6 +132,6 @@ export class RoomsController {
 
   private publicRoom(room: typeof rooms.$inferSelect) {
     const { userId: _, ...safe } = room;
-    return safe;
+    return { ...safe, createdAt: safe.createdAt.toISOString() };
   }
 }

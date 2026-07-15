@@ -110,6 +110,22 @@ void main() {
       'eventType': 'device.paired',
       'payload': {'deviceId': 'device-b', 'status': 'ACTIVE'},
     });
+    final roomCreated = realtimeHomeUpdateFor('room.created', {
+      'eventType': 'room.created',
+      'roomId': 'room-a',
+      'payload': {
+        'roomId': 'room-a',
+        'status': 'ACTIVE',
+        'room': {
+          'id': 'room-a',
+          'desktopDeviceId': 'device-a',
+          'name': 'Reports',
+          'rootAlias': 'reports',
+          'status': 'ACTIVE',
+          'createdAt': '2026-07-15T01:02:03.000Z',
+        },
+      },
+    });
 
     expect(execution?.kind, RealtimeHomeUpdateKind.executionStatus);
     expect(execution?.roomId, 'room-a');
@@ -118,6 +134,8 @@ void main() {
     expect(paired?.kind, RealtimeHomeUpdateKind.devicePaired);
     expect(paired?.device?['deviceName'], 'Desktop');
     expect(legacyPaired?.kind, RealtimeHomeUpdateKind.refreshSummary);
+    expect(roomCreated?.kind, RealtimeHomeUpdateKind.roomCreated);
+    expect(roomCreated?.room?['name'], 'Reports');
   });
 
   test('file transfer updates become transfer-scoped realtime patches', () {
@@ -333,6 +351,19 @@ void main() {
     final roomRemoved = realtimeHomeUpdateFor('room.removed', {
       'payload': {'roomId': 'room-a'},
     });
+    final roomCreated = realtimeHomeUpdateFor('room.created', {
+      'payload': {
+        'roomId': 'room-b',
+        'room': {
+          'id': 'room-b',
+          'desktopDeviceId': 'device-a',
+          'name': 'Reports',
+          'rootAlias': 'reports',
+          'status': 'ACTIVE',
+          'createdAt': '2026-07-15T01:02:03.000Z',
+        },
+      },
+    });
     final fileTransfer = realtimeFileTransferUpdateFor(
       'file.transfer.updated',
       {
@@ -366,6 +397,7 @@ void main() {
       ('execution.updated', execution),
       ('device.paired', devicePaired),
       ('device.revoked', deviceRemoved),
+      ('room.created', roomCreated),
       ('room.removed', roomRemoved),
     ]) {
       expect(realtimeUpdateSuppressesGenericRevision(entry.$1, entry.$2), true);

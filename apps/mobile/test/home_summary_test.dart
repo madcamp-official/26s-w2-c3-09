@@ -116,6 +116,32 @@ void main() {
     expect(patched, same(current));
   });
 
+  test('created room event appends the newly authoritative room', () {
+    final current = _homeData();
+    final patched = reduceHomeDataForRealtimeUpdate(
+      current: current,
+      update: const RealtimeHomeUpdate(
+        kind: RealtimeHomeUpdateKind.roomCreated,
+        eventType: 'room.created',
+        roomId: 'room-b',
+        room: {
+          'id': 'room-b',
+          'desktopDeviceId': 'device-a',
+          'name': 'Reports',
+          'rootAlias': 'reports',
+          'status': 'ACTIVE',
+          'createdAt': '2026-07-15T01:02:03.000Z',
+        },
+      ),
+      activeDeviceIds: const {'device-a', 'device-b'},
+      activeRoomIds: const {'room-a', 'room-b'},
+    )!;
+
+    expect(patched.rooms.map((room) => room['id']), ['room-a', 'room-b']);
+    expect(patched.rooms.last['name'], 'Reports');
+    expect(patched.rooms.last['pendingProposalCount'], 0);
+  });
+
   test(
     'targeted lifecycle and execution updates avoid summary invalidation',
     () {
