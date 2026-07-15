@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mousekeeper_character_assets/character_assets.dart';
 
 import '../../core/network/api_client.dart';
 import '../../core/theme/pixel_theme.dart';
@@ -11,6 +10,9 @@ import '../../core/widgets/cheese_loading.dart';
 import 'auth_controller.dart';
 
 typedef PairingClaim = Future<void> Function(String code);
+
+const _pairingWaitingMouseAsset = 'assets/images/pairing_mouse_icon.png';
+const _pairingCodeValidityMinutes = 10;
 
 class PairingPage extends ConsumerStatefulWidget {
   const PairingPage({super.key, this.onClaim, this.gateMode = false});
@@ -70,9 +72,9 @@ class _PairingPageState extends ConsumerState<PairingPage> {
             child: ConstrainedBox(
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 34,
-                  vertical: 28,
+                padding: EdgeInsets.symmetric(
+                  horizontal: constraints.maxWidth < 360 ? 18 : 34,
+                  vertical: constraints.maxHeight < 600 ? 18 : 28,
                 ),
                 child: PixelPanel(
                   child: Column(
@@ -81,31 +83,28 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                     children: [
                       const Center(child: PixelLabel('PAIR MODE')),
                       const SizedBox(height: 18),
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          'MOUSEKEEPER',
-                          maxLines: 1,
-                          softWrap: false,
-                          style: Theme.of(context).textTheme.displaySmall
-                              ?.copyWith(
-                                color: PixelColors.ink,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.2,
-                              ),
-                        ),
+                      _SingleLineScaleDownText(
+                        'MOUSEKEEPER',
+                        style: Theme.of(context).textTheme.displaySmall
+                            ?.copyWith(
+                              color: PixelColors.ink,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.2,
+                            ),
                       ),
                       const SizedBox(height: 34),
-                      Image.asset(
-                        mousekeeperPairingIconAsset,
-                        package: mousekeeperMascotPackage,
-                        width: 86,
-                        height: 86,
-                        fit: BoxFit.contain,
-                        filterQuality: FilterQuality.none,
+                      Center(
+                        child: Image.asset(
+                          _pairingWaitingMouseAsset,
+                          key: const ValueKey('pairing-waiting-mouse-icon'),
+                          width: 104,
+                          height: 104,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.none,
+                        ),
                       ),
                       const SizedBox(height: 12),
-                      Text(
+                      _SingleLineScaleDownText(
                         '기기를 연결해주세요',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.headlineMedium
@@ -116,7 +115,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                             ),
                       ),
                       const SizedBox(height: 4),
-                      Text(
+                      _SingleLineScaleDownText(
                         'Desktop의 코드를 입력해주세요',
                         textAlign: TextAlign.center,
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -198,30 +197,35 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                       AnimatedSwitcher(
                         duration: const Duration(milliseconds: 160),
                         child: submitting
-                            ? Row(
+                            ? FittedBox(
                                 key: const ValueKey('pairing-submitting'),
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const SizedBox.square(
-                                    dimension: 16,
-                                    child: CheeseLoadingIndicator(size: 16),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '연결 확인 중입니다',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(
-                                          color: const Color(0xFF7A685C),
-                                          fontWeight: FontWeight.w400,
-                                        ),
-                                  ),
-                                ],
+                                fit: BoxFit.scaleDown,
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const SizedBox.square(
+                                      dimension: 16,
+                                      child: CheeseLoadingIndicator(size: 16),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '연결 확인 중입니다',
+                                      maxLines: 1,
+                                      softWrap: false,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.copyWith(
+                                            color: const Color(0xFF7A685C),
+                                            fontWeight: FontWeight.w400,
+                                          ),
+                                    ),
+                                  ],
+                                ),
                               )
-                            : Text(
+                            : _SingleLineScaleDownText(
                                 key: const ValueKey('pairing-expiry-notice'),
-                                '코드는 데스크톱 화면에 표시된 시간 후 만료됩니다',
+                                '코드는 $_pairingCodeValidityMinutes분 후 만료됩니다',
                                 textAlign: TextAlign.center,
                                 style: Theme.of(context).textTheme.bodyMedium
                                     ?.copyWith(
@@ -248,11 +252,7 @@ class _PairingPageState extends ConsumerState<PairingPage> {
                               fontWeight: FontWeight.w400,
                             ),
                           ),
-                          child: const Text(
-                            '다른 계정으로 로그인',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          child: const _SingleLineScaleDownText('다른 계정으로 로그인'),
                         ),
                       ],
                     ],
@@ -263,6 +263,36 @@ class _PairingPageState extends ConsumerState<PairingPage> {
           ),
         ),
       ),
+    ),
+  );
+}
+
+class _SingleLineScaleDownText extends StatelessWidget {
+  const _SingleLineScaleDownText(
+    this.text, {
+    super.key,
+    this.style,
+    this.textAlign,
+  });
+
+  final String text;
+  final TextStyle? style;
+  final TextAlign? textAlign;
+
+  @override
+  Widget build(BuildContext context) => FittedBox(
+    fit: BoxFit.scaleDown,
+    alignment: switch (textAlign) {
+      TextAlign.left || TextAlign.start => Alignment.centerLeft,
+      TextAlign.right || TextAlign.end => Alignment.centerRight,
+      _ => Alignment.center,
+    },
+    child: Text(
+      text,
+      maxLines: 1,
+      softWrap: false,
+      textAlign: textAlign,
+      style: style,
     ),
   );
 }
