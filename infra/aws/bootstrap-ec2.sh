@@ -6,6 +6,7 @@ REPOSITORY_URL="${MOUSEKEEPER_REPOSITORY_URL:-https://github.com/madcamp-officia
 BRANCH="${MOUSEKEEPER_BRANCH:-B}"
 APP_DIR=/opt/mousekeeper
 CONFIG_DIR=/etc/mousekeeper
+STATE_DIR=/var/lib/mousekeeper
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 NODE_VERSION=v24.18.0
 
@@ -48,7 +49,11 @@ corepack prepare pnpm@11.11.0 --activate
 
 systemctl enable --now docker nginx
 if ! id mousekeeper >/dev/null 2>&1; then
-  useradd --system --home-dir "${APP_DIR}" --shell /usr/sbin/nologin mousekeeper
+  useradd --system --home-dir "${STATE_DIR}" --shell /usr/sbin/nologin mousekeeper
+fi
+install -d -o mousekeeper -g mousekeeper -m 0750 "${STATE_DIR}"
+if [[ "$(getent passwd mousekeeper | cut -d: -f6)" != "${STATE_DIR}" ]]; then
+  usermod --home "${STATE_DIR}" mousekeeper
 fi
 
 if [[ ! -d "${APP_DIR}/.git" ]]; then
