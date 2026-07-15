@@ -1,5 +1,19 @@
 # MOUSEKEEPER
 
+## 2026-07 현재 구현 반영 메모
+
+- 데스크톱은 `MOUSEKEEPER_SERVER_BASE_URL`을 우선 사용하고, 배포 실행 환경에 값이 없으면 운영 API `https://mousekeeper.madcamp-kaist.org`를 기본값으로 사용합니다.
+- 페어링은 사용자가 PC 연결 화면에서 시작하며, 휴대폰 없이도 데스크톱 로컬 파일 기능은 유지됩니다.
+- 모바일 채팅은 realtime, 앱 복귀 재조회, 5초 fallback 재조회를 사용합니다. 데스크톱은 realtime/replay와 세션·메시지 재조회를 사용합니다.
+- 승인·거절 결과는 `DECISION` 채팅 메시지와 `decision.created` sync event로 저장되며 데스크톱은 `PROPOSAL`과 `DECISION` 타입을 검증합니다.
+- 파일 변경은 proposal/approval/precheck/journal/execute 흐름을 유지하고 provider 미설정은 `UNCONFIGURED`로 표시합니다.
+- 집 이미지 참조는 `house_1.png`~`house_5.png`로 정정했고 통합 배경은 `packages/character-assets/house/house_background.png`입니다.
+
+### 최근 검증 및 제한
+
+- 운영 `/health`, `/ready` 200 확인, 데스크톱 Tauri Windows 번들 및 Android 운영 APK 빌드·설치 완료.
+- OCR, 역방향 upload, 일부 문서 분석·smart-cache provider는 계획대로 미구현 또는 `UNCONFIGURED` 상태입니다.
+
 MOUSEKEEPER는 데스크톱의 관리 폴더를 안전하게 분석하고, 모바일과 데스크톱에서 같은 AI 채팅을 이어가며, 사용자의 승인을 받은 파일 작업만 실행하는 local-first 크로스플랫폼 파일 관리 서비스입니다.
 
 > 현황 기준일: 2026-07-15

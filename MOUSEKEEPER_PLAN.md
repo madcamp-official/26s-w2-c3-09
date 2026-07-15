@@ -1,5 +1,16 @@
 # 집쥐인(MOUSEKEEPER) MVP 전체 개발 계획서
 
+## 2026-07 현재 구현 반영 메모
+
+기존 단계별 계획을 대체하지 않고 최근 실제 적용 상태를 기록한다.
+
+- 데스크톱 운영 번들은 실행 환경변수가 없어도 운영 서버 기본 URL을 사용하며 개발 환경변수가 우선한다.
+- 페어링은 사용자 시작 방식이고 모바일 연결 없이 데스크톱 로컬 파일 기능을 사용할 수 있다.
+- 모바일은 realtime·resume 재조회·5초 fallback, 데스크톱은 realtime/replay·세션/메시지 polling으로 채팅을 동기화한다.
+- 승인/거절은 `DECISION` chat message와 `decision.created` event로 저장하고 `PROPOSAL`/`DECISION` 타입을 검증한다.
+- 로컬 자동정리 제안을 서버 chat/proposal 이벤트로 승격하는 작업은 아직 고위험 미완료 단계다.
+- OCR, 역방향 upload, 일부 문서 분석·smart-cache provider는 명시적 미설정 상태를 유지한다.
+
 - 문서 버전: 1.4
 - 기준일: 2026-07-13
 - 개발 인원: 2명
