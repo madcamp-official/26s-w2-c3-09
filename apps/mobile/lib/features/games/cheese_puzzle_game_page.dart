@@ -18,6 +18,8 @@ class _Stage {
     required this.boxes,
     required this.turns,
     this.requiredPath = const [],
+    this.key,
+    this.door,
   });
   final List<String> rows;
   final math.Point<int> start;
@@ -26,7 +28,75 @@ class _Stage {
   final Set<math.Point<int>> boxes;
   final int turns;
   final List<math.Point<int>> requiredPath;
+  final math.Point<int>? key;
+  final math.Point<int>? door;
 }
+
+const _lateLayouts = <List<String>>[
+  [
+    '########',
+    '#......#',
+    '#.####.#',
+    '#......#',
+    '#.####.#',
+    '#......#',
+    '########',
+  ],
+  [
+    '########',
+    '#......#',
+    '#..##..#',
+    '#......#',
+    '#..##..#',
+    '#......#',
+    '########',
+  ],
+  [
+    '########',
+    '#...#..#',
+    '#...#..#',
+    '###...##',
+    '#..#...#',
+    '#..#...#',
+    '########',
+  ],
+  [
+    '########',
+    '#..#...#',
+    '#..#.#.#',
+    '#....#.#',
+    '#.##...#',
+    '#......#',
+    '########',
+  ],
+  [
+    '########',
+    '#......#',
+    '###....#',
+    '#..###.#',
+    '#......#',
+    '#.####.#',
+    '########',
+  ],
+  [
+    '########',
+    '#..#...#',
+    '#..#.#.#',
+    '#....#.#',
+    '#.##.#.#',
+    '#....#.#',
+    '########',
+  ],
+  [
+    '########',
+    '#......#',
+    '#.####.#',
+    '#.#....#',
+    '#.#.##.#',
+    '#......#',
+    '########',
+  ],
+];
 
 final _stages = <_Stage>[
   _Stage(
@@ -113,12 +183,41 @@ final _stages = <_Stage>[
     boxes: {math.Point(4, 3), math.Point(3, 5), math.Point(6, 7)},
     turns: 32,
   ),
-  ...List.generate(7, (i) => _Stage(
-    rows: ['########', '#......#', '#.####.#', '#......#', '#.####.#', '#......#', '########'],
-    start: const math.Point(1, 1), cheese: const math.Point(6, 5),
-    walls: {const math.Point(2, 2), const math.Point(3, 2), const math.Point(4, 2), const math.Point(5, 2), const math.Point(2, 4), const math.Point(3, 4), const math.Point(4, 4), const math.Point(5, 4)},
-    boxes: {const math.Point(3, 3)}, turns: 20 + i * 2,
-    requiredPath: i < 3 ? const [] : [const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(0, 1), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0), const math.Point(1, 0)])),
+  ...List.generate(
+    7,
+    (i) => _Stage(
+      rows: _lateLayouts[i],
+      start: const math.Point(1, 1),
+      cheese: const math.Point(6, 5),
+      walls: {
+        const math.Point(2, 2),
+        const math.Point(3, 2),
+        const math.Point(4, 2),
+        const math.Point(5, 2),
+        const math.Point(2, 4),
+        const math.Point(3, 4),
+        const math.Point(4, 4),
+        const math.Point(5, 4),
+      },
+      boxes: {const math.Point(3, 3)},
+      turns: 20 + i * 2,
+      requiredPath: i < 3
+          ? const []
+          : [
+              const math.Point(0, 1),
+              const math.Point(0, 1),
+              const math.Point(0, 1),
+              const math.Point(0, 1),
+              const math.Point(1, 0),
+              const math.Point(1, 0),
+              const math.Point(1, 0),
+              const math.Point(1, 0),
+              const math.Point(1, 0),
+            ],
+      key: math.Point(3 + (i % 3), 1 + (i % 4)),
+      door: const math.Point(6, 5),
+    ),
+  ),
 ];
 
 class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
@@ -129,6 +228,7 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
   bool _failed = false;
   late Set<math.Point<int>> _boxes;
   int _pathIndex = 0;
+  bool _hasKey = false;
 
   _Stage get _current => _stages[_stage];
 
@@ -145,12 +245,19 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
     _failed = false;
     _boxes = {..._current.boxes};
     _pathIndex = 0;
+    _hasKey = false;
   });
 
   void _move(math.Point<int> delta) {
     if (_won || _failed) return;
     final next = math.Point(_player.x + delta.x, _player.y + delta.y);
-    if (_current.requiredPath.isNotEmpty && (_pathIndex >= _current.requiredPath.length || delta != _current.requiredPath[_pathIndex])) { setState(() => _failed = true); return; }
+    if (_current.door == next && !_hasKey) return;
+    if (_current.requiredPath.isNotEmpty &&
+        (_pathIndex >= _current.requiredPath.length ||
+            delta != _current.requiredPath[_pathIndex])) {
+      setState(() => _failed = true);
+      return;
+    }
     if (next.x < 0 ||
         next.y < 0 ||
         next.y >= _current.rows.length ||
@@ -159,12 +266,29 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
         _current.walls.contains(next) ||
         _boxes.contains(next)) {
       final beyond = math.Point(next.x + delta.x, next.y + delta.y);
-      if (!_boxes.contains(next) || beyond.x < 0 || beyond.y < 0 || beyond.y >= _current.rows.length || beyond.x >= _current.rows[beyond.y].length || _current.rows[beyond.y][beyond.x] == '#' || _current.walls.contains(beyond) || _boxes.contains(beyond)) return;
-      setState(() { _boxes..remove(next)..add(beyond); _turns--; if (_current.requiredPath.isNotEmpty) _pathIndex++; if (_turns <= 0) _failed = true; }); return;
+      if (!_boxes.contains(next) ||
+          beyond.x < 0 ||
+          beyond.y < 0 ||
+          beyond.y >= _current.rows.length ||
+          beyond.x >= _current.rows[beyond.y].length ||
+          _current.rows[beyond.y][beyond.x] == '#' ||
+          _current.walls.contains(beyond) ||
+          _boxes.contains(beyond))
+        return;
+      setState(() {
+        _boxes
+          ..remove(next)
+          ..add(beyond);
+        _turns--;
+        if (_current.requiredPath.isNotEmpty) _pathIndex++;
+        if (_turns <= 0) _failed = true;
+      });
+      return;
     }
     setState(() {
       _player = next;
       _turns--;
+      if (_current.key == next) _hasKey = true;
       if (_player == _current.cheese)
         _won = true;
       else if (_turns <= 0)
@@ -185,6 +309,7 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
       _failed = false;
       _boxes = {..._current.boxes};
       _pathIndex = 0;
+      _hasKey = false;
     });
   }
 
@@ -265,9 +390,7 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
                   ElevatedButton(
                     onPressed: _won ? _next : _reset,
                     child: Text(
-                      _won && _stage < _stages.length - 1
-                          ? '다음 스테이지'
-                          : '다시 시작',
+                      _won && _stage < _stages.length - 1 ? '다음 스테이지' : '다시 시작',
                     ),
                   ),
                 ],
@@ -314,7 +437,11 @@ class _DPad extends StatelessWidget {
 }
 
 class _BoardPainter extends CustomPainter {
-  const _BoardPainter({required this.stage, required this.player, required this.boxes});
+  const _BoardPainter({
+    required this.stage,
+    required this.player,
+    required this.boxes,
+  });
   final _Stage stage;
   final math.Point<int> player;
   final Set<math.Point<int>> boxes;
@@ -344,6 +471,14 @@ class _BoardPainter extends CustomPainter {
         if (point == stage.cheese) {
           p.color = const Color(0xFFFFC857);
           canvas.drawCircle(r.center, cell * .28, p);
+        }
+        if (stage.key == point) {
+          p.color = const Color(0xFFFFD54F);
+          canvas.drawCircle(r.center, cell * .2, p);
+        }
+        if (stage.door == point) {
+          p.color = const Color(0xFF6D4C41);
+          canvas.drawRect(r.deflate(cell * .2), p);
         }
         if (boxes.contains(point)) {
           p.color = const Color(0xFF9A5B27);
