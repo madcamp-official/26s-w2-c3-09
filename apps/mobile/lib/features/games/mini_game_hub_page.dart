@@ -24,8 +24,8 @@ class MiniGameHubPage extends StatelessWidget {
         const SizedBox(height: 24),
         _GameCard(
           key: const ValueKey('game-card-maze'),
-          title: '미로 찾기',
-          description: '10×10 미로를 빠져나가 치즈를 찾으세요.',
+          title: '치즈 탈출 퍼즐',
+          description: '3개의 짧은 턴제 퍼즐에서 치즈를 찾으세요.',
           glyph: PixelGlyph.cheese,
           color: const Color(0xFFFFC857),
           onTap: () =>
