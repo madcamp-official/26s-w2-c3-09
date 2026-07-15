@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { AutoCleanupProposalEvent } from "../files/fileEngineApi";
 
 declare global {
   interface Window {
@@ -46,7 +47,9 @@ export const HOUSE_DROP_TARGET_EVENT = "house-drop-target";
  * state in sync, regardless of which window initiated the close. */
 export const CHAT_OVERLAY_CLOSED_EVENT = "chat-overlay:closed";
 export const CHAT_ROOM_SELECTED_EVENT = "chat-overlay:room-selected";
+export const CHAT_AUTO_PROPOSAL_EVENT = "chat-overlay:auto-proposal";
 const CHAT_ROOM_SELECTION_STORAGE_KEY = "mousekeeper.chatOverlay.selectedRootId";
+const CHAT_AUTO_PROPOSALS_STORAGE_KEY = "mousekeeper.chatOverlay.autoProposals";
 /// Fired by the overlay chat input. This is the ONLY thing overlay chat can do: hand a bounded
 /// text draft to the app for the draft/proposal flow (plan item 12). It never runs a file op.
 export const OVERLAY_DRAFT_REQUEST_EVENT = "overlay:draft-request";
@@ -109,6 +112,34 @@ export function readChatRoomSelection(): ChatRoomSelection {
 
 export function listenForChatRoomSelection(handler: (selection: ChatRoomSelection) => void) {
   return listen<ChatRoomSelection>(CHAT_ROOM_SELECTED_EVENT, (event) => handler(event.payload));
+}
+
+export async function publishChatAutoProposal(proposal: AutoCleanupProposalEvent) {
+  if (proposal.proposal.proposals.length === 0) return;
+  persistChatAutoProposal(proposal);
+  if (window.__TAURI_INTERNALS__) {
+    await emit(CHAT_AUTO_PROPOSAL_EVENT, proposal).catch(() => undefined);
+  }
+}
+
+export function readChatAutoProposals(): AutoCleanupProposalEvent[] {
+  try {
+    const raw = window.localStorage.getItem(CHAT_AUTO_PROPOSALS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isAutoCleanupProposalEvent);
+  } catch {
+    return [];
+  }
+}
+
+export function listenForChatAutoProposals(handler: (proposal: AutoCleanupProposalEvent) => void) {
+  return listen<AutoCleanupProposalEvent>(CHAT_AUTO_PROPOSAL_EVENT, (event) => {
+    if (isAutoCleanupProposalEvent(event.payload)) {
+      handler(event.payload);
+    }
+  });
 }
 
 export function setHouseOverlayLocked(locked: boolean) {
@@ -176,6 +207,50 @@ function persistChatRoomSelection(selection: ChatRoomSelection) {
   } catch {
     /* localStorage may be unavailable in tests or restricted browser previews */
   }
+}
+
+function persistChatAutoProposal(proposal: AutoCleanupProposalEvent) {
+  try {
+    const localKey = JSON.stringify({
+      rootId: proposal.root_id,
+      items: proposal.proposal.proposals.map((item) => [
+        item.proposal_id,
+        item.action,
+        item.from,
+        item.to
+      ])
+    });
+    const next = [
+      proposal,
+      ...readChatAutoProposals().filter((item) => {
+        const itemKey = JSON.stringify({
+          rootId: item.root_id,
+          items: item.proposal.proposals.map((proposalItem) => [
+            proposalItem.proposal_id,
+            proposalItem.action,
+            proposalItem.from,
+            proposalItem.to
+          ])
+        });
+        return itemKey !== localKey;
+      })
+    ].slice(0, 20);
+    window.localStorage.setItem(CHAT_AUTO_PROPOSALS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    /* localStorage may be unavailable in tests or restricted browser previews */
+  }
+}
+
+function isAutoCleanupProposalEvent(value: unknown): value is AutoCleanupProposalEvent {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.root_id !== "string") return false;
+  const proposal = record.proposal as Record<string, unknown> | undefined;
+  return (
+    !!proposal &&
+    typeof proposal.root === "string" &&
+    Array.isArray(proposal.proposals)
+  );
 }
 
 function invokeOverlayCommand<T>(command: string, args?: Record<string, unknown>) {

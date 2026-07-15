@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { AutoCleanupProposalEvent } from "../files/fileEngineApi";
 
 declare global {
   interface Window {
@@ -220,6 +221,7 @@ export type BackgroundRuntimeStatus = {
   last_auto_cleanup_approved_count: number;
   last_auto_cleanup_executed_count: number;
   last_auto_cleanup_failed_count: number;
+  last_auto_cleanup_proposals: AutoCleanupProposalEvent[];
   last_auto_submitted_proposal_count: number;
   last_outbox_flush_unix_ms: number | null;
   last_outbox_sent_count: number;
@@ -293,6 +295,30 @@ export type ChatCommandDraftExecutionReport = {
   };
   execution_report: DecisionProcessingReport;
   proposal_outbox_report: OutboxFlushReport;
+  execution_outbox_report: OutboxFlushReport;
+};
+
+export type AgentOpenProposal = {
+  proposal_id: string;
+  command_id: string;
+  room_id: string;
+  status: string;
+};
+
+export type ChatProposalExecutionReport = {
+  proposal: {
+    proposal_id: string;
+    command_id: string;
+    room_id: string;
+    status: string;
+    item_ids: string[];
+  };
+  decision: {
+    decision_id: string;
+    proposal_id: string;
+    decision_type: string;
+  };
+  execution_report: DecisionProcessingReport;
   execution_outbox_report: OutboxFlushReport;
 };
 
@@ -411,6 +437,21 @@ export function approveAgentCommandDraftAndExecute(
   return invokeAgentCommand<ChatCommandDraftExecutionReport>(
     "approve_agent_command_draft_and_execute",
     { draftId, roomId, idempotencyKey }
+  );
+}
+
+export function listAgentOpenProposals(roomId: string) {
+  return invokeAgentCommand<AgentOpenProposal[]>("list_agent_open_proposals", { roomId });
+}
+
+export function approveAgentOpenProposalAndExecute(
+  proposalId: string,
+  roomId: string,
+  idempotencyKey: string
+) {
+  return invokeAgentCommand<ChatProposalExecutionReport>(
+    "approve_agent_open_proposal_and_execute",
+    { proposalId, roomId, idempotencyKey }
   );
 }
 

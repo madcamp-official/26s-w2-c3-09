@@ -1,8 +1,8 @@
 use crate::agent::{
     AgentChatMessage, AgentChatQuickCleanupResult, AgentChatQuickView, AgentChatSendResult,
     AgentChatSession, AgentCommand, AgentCommandDraftConfirmation, AgentConnectionStatus,
-    AgentDecision, AgentProposalDetails, AgentRoomSnapshot, AgentRoomSync, AgentRuntime,
-    HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
+    AgentDecision, AgentOpenProposal, AgentProposalDetails, AgentRoomSnapshot, AgentRoomSync,
+    AgentRuntime, HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
 };
 use crate::cleanliness::{calculate_cleanliness_snapshot, CleanlinessSnapshot};
 use crate::command_processor::{
@@ -65,6 +65,14 @@ pub struct ChatCommandDraftExecutionReport {
     pub decision: AgentDecision,
     pub execution_report: DecisionProcessingReport,
     pub proposal_outbox_report: crate::outbox_processor::OutboxFlushReport,
+    pub execution_outbox_report: crate::outbox_processor::OutboxFlushReport,
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct ChatProposalExecutionReport {
+    pub proposal: AgentProposalDetails,
+    pub decision: AgentDecision,
+    pub execution_report: DecisionProcessingReport,
     pub execution_outbox_report: crate::outbox_processor::OutboxFlushReport,
 }
 
@@ -349,6 +357,104 @@ async fn approve_agent_command_draft_and_execute_impl(
     ensure_chat_command_submitted(&command_report, &command.command_id)?;
     let proposal_outbox_report = crate::outbox_processor::flush_outbox(runtime, outbox).await?;
     let proposal = proposal_for_command(runtime, room_id, command.command_id.clone()).await?;
+    let executed = approve_proposal_details_and_execute(
+        proposal.clone(),
+        decision_key,
+        runtime,
+        roots,
+        outbox,
+        limiter,
+    )
+    .await?;
+
+    Ok(ChatCommandDraftExecutionReport {
+        draft,
+        command_report,
+        proposal,
+        decision: executed.decision,
+        execution_report: executed.execution_report,
+        proposal_outbox_report,
+        execution_outbox_report: executed.execution_outbox_report,
+    })
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn list_agent_open_proposals(
+    room_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<Vec<AgentOpenProposal>, String> {
+    runtime
+        .open_proposals_for_room(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn list_agent_open_proposals(
+    runtime: &AgentRuntime,
+    room_id: String,
+) -> Result<Vec<AgentOpenProposal>, String> {
+    runtime
+        .open_proposals_for_room(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn approve_agent_open_proposal_and_execute(
+    proposal_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+    outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
+) -> Result<ChatProposalExecutionReport, String> {
+    approve_agent_open_proposal_and_execute_impl(
+        proposal_id,
+        room_id,
+        idempotency_key,
+        &runtime,
+        &roots,
+        &outbox,
+        &limiter,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn approve_agent_open_proposal_and_execute_impl(
+    proposal_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    limiter: &WorkLimiter,
+) -> Result<ChatProposalExecutionReport, String> {
+    let proposal = runtime
+        .get_proposal(proposal_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if proposal.room_id != room_id {
+        return Err("PROPOSAL_ROOM_MISMATCH: proposal belongs to a different room".to_string());
+    }
+    let decision_key = scoped_chat_approval_key("decision", &idempotency_key)?;
+    approve_proposal_details_and_execute(proposal, decision_key, runtime, roots, outbox, limiter)
+        .await
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn approve_proposal_details_and_execute(
+    proposal: AgentProposalDetails,
+    decision_key: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    limiter: &WorkLimiter,
+) -> Result<ChatProposalExecutionReport, String> {
     let decision = runtime
         .create_decision(
             proposal.proposal_id.clone(),
@@ -363,13 +469,10 @@ async fn approve_agent_command_draft_and_execute_impl(
     };
     let execution_outbox_report = crate::outbox_processor::flush_outbox(runtime, outbox).await?;
 
-    Ok(ChatCommandDraftExecutionReport {
-        draft,
-        command_report,
+    Ok(ChatProposalExecutionReport {
         proposal,
         decision,
         execution_report,
-        proposal_outbox_report,
         execution_outbox_report,
     })
 }

@@ -75,6 +75,7 @@ pub struct BackgroundRuntimeStatus {
     pub last_auto_cleanup_approved_count: usize,
     pub last_auto_cleanup_executed_count: usize,
     pub last_auto_cleanup_failed_count: usize,
+    pub last_auto_cleanup_proposals: Vec<crate::auto_cleanup_processor::AutoCleanupProposalEvent>,
     pub last_auto_submitted_proposal_count: usize,
     pub last_outbox_flush_unix_ms: Option<i64>,
     pub last_outbox_sent_count: usize,
@@ -143,6 +144,7 @@ impl Default for BackgroundRuntime {
                 last_auto_cleanup_approved_count: 0,
                 last_auto_cleanup_executed_count: 0,
                 last_auto_cleanup_failed_count: 0,
+                last_auto_cleanup_proposals: Vec::new(),
                 last_auto_submitted_proposal_count: 0,
                 last_outbox_flush_unix_ms: None,
                 last_outbox_sent_count: 0,
@@ -573,6 +575,7 @@ async fn run_background_tick(
                             status.last_auto_cleanup_approved_count = report.approved_count;
                             status.last_auto_cleanup_executed_count = report.executed_count;
                             status.last_auto_cleanup_failed_count = report.failed_count;
+                            status.last_auto_cleanup_proposals = report.proposals.clone();
                             if report.failed_count > 0 {
                                 status.last_error_message = Some(format!(
                                     "{} auto cleanup root(s) failed",
@@ -619,8 +622,8 @@ async fn run_background_tick(
             match crate::command_processor::process_pending_commands(&agent, &roots, &outbox).await
             {
                 Ok(report) => {
-                    activity.processed_command_count = report.processed_count;
-                    activity.submitted_proposal_count = report.submitted_proposal_count;
+                    activity.processed_command_count += report.processed_count;
+                    activity.submitted_proposal_count += report.submitted_proposal_count;
                     if report.failed_count > 0 {
                         activity.had_error = true;
                     }

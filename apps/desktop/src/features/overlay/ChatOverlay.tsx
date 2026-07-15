@@ -2,24 +2,39 @@ import { useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import { listManagedRoots } from "../files/fileEngineApi";
-import type { ManagedRoot } from "../files/fileEngineApi";
+import {
+  approveAutoCleanupProposalFromChat,
+  listenForAutoCleanupProposals,
+  listManagedRoots
+} from "../files/fileEngineApi";
+import type { AutoCleanupProposalEvent, ExecuteReport, ManagedRoot } from "../files/fileEngineApi";
 import {
   approveAgentCommandDraftAndExecute,
+  approveAgentOpenProposalAndExecute,
   createAgentChatQuickCleanup,
   createAgentChatSession,
+  getBackgroundRuntimeStatus,
   getAgentChatQuickView,
+  listAgentOpenProposals,
   listAgentChatMessages,
   listAgentChatSessions,
   markAgentChatSessionRead,
   sendAgentChatMessage
 } from "../agent/agentApi";
-import type { AgentChatMessage, AgentChatQuickView, AgentChatSession } from "../agent/agentApi";
+import type {
+  AgentChatMessage,
+  AgentChatQuickView,
+  AgentChatSession,
+  DecisionProcessingReport,
+  AgentOpenProposal
+} from "../agent/agentApi";
 import {
   CharacterEvent,
   hideChatOverlay,
+  listenForChatAutoProposals,
   listenForCharacterEvents,
   listenForChatRoomSelection,
+  readChatAutoProposals,
   readChatRoomSelection
 } from "./overlayApi";
 
@@ -27,6 +42,11 @@ const chatAvatarUrl = new URL(
   "../../../../../packages/character-assets/new_mouse/mouse_walk_clean.png",
   import.meta.url
 ).href;
+
+type LocalAutoProposal = AutoCleanupProposalEvent & {
+  localKey: string;
+  receivedAt: number;
+};
 
 /**
  * The chat lives in its own fixed-size window (`chat-overlay`) instead of resizing the mascot
@@ -38,6 +58,7 @@ export function ChatOverlay() {
   const [chatSession, setChatSession] = useState<AgentChatSession | null>(null);
   const [quickView, setQuickView] = useState<AgentChatQuickView | null>(null);
   const [chatMessages, setChatMessages] = useState<AgentChatMessage[]>([]);
+  const [localStatusMessages, setLocalStatusMessages] = useState<AgentChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,6 +66,14 @@ export function ChatOverlay() {
   const [chatLoading, setChatLoading] = useState(false);
   const [approvingDraftIds, setApprovingDraftIds] = useState<Set<string>>(new Set());
   const [approvedDraftIds, setApprovedDraftIds] = useState<Set<string>>(new Set());
+  const [submittedDraftIds, setSubmittedDraftIds] = useState<Set<string>>(new Set());
+  const [openProposals, setOpenProposals] = useState<AgentOpenProposal[]>([]);
+  const [approvingProposalIds, setApprovingProposalIds] = useState<Set<string>>(new Set());
+  const [submittedProposalIds, setSubmittedProposalIds] = useState<Set<string>>(new Set());
+  const [localAutoProposals, setLocalAutoProposals] = useState<LocalAutoProposal[]>([]);
+  const [approvingLocalProposalKeys, setApprovingLocalProposalKeys] = useState<Set<string>>(new Set());
+  const [submittedLocalProposalKeys, setSubmittedLocalProposalKeys] = useState<Set<string>>(new Set());
+  const dismissedLocalProposalKeysRef = useRef(new Set<string>());
   const [selectedRootId, setSelectedRootId] = useState<string | null>(
     () => readChatRoomSelection().rootId
   );
@@ -56,6 +85,15 @@ export function ChatOverlay() {
     selectedRoom ?? rooms.find((root) => root.room_binding_status === "active") ?? rooms[0] ?? null;
   const activeRoomName = activeRoom?.display_name ?? "방 없음";
   const activeRoomId = activeRoom?.room_id ?? null;
+  const activeRootId = activeRoom?.root_id ?? null;
+  const latestMatchingAutoProposal = activeRootId
+    ? localAutoProposals.find((proposal) => proposal.root_id === activeRootId)
+    : null;
+  const visibleLocalAutoProposals = (
+    latestMatchingAutoProposal ? [latestMatchingAutoProposal] : localAutoProposals.slice(0, 1)
+  ).filter((proposal) => proposal.proposal.proposals.length > 0);
+  const visibleOpenProposals = visibleLocalAutoProposals.length > 0 ? [] : openProposals;
+  const displayedMessages = mergeMessagesByTime(chatMessages, localStatusMessages);
 
   async function loadRooms() {
     try {
@@ -68,6 +106,46 @@ export function ChatOverlay() {
     }
   }
 
+  function rememberLocalAutoProposal(proposal: AutoCleanupProposalEvent) {
+    if (proposal.proposal.proposals.length === 0) return;
+    const localKey = localAutoProposalKey(proposal);
+    if (dismissedLocalProposalKeysRef.current.has(localKey)) return;
+    setLocalAutoProposals((current) =>
+      [
+        { ...proposal, localKey, receivedAt: Date.now() },
+        ...current.filter((item) => item.localKey !== localKey)
+      ].slice(0, 20)
+    );
+  }
+
+  async function loadLatestAutoCleanupProposals() {
+    try {
+      for (const proposal of readChatAutoProposals()) {
+        rememberLocalAutoProposal(proposal);
+      }
+      const status = await getBackgroundRuntimeStatus();
+      for (const proposal of status.last_auto_cleanup_proposals) {
+        rememberLocalAutoProposal(proposal);
+      }
+    } catch (cause) {
+      console.error("Failed to load latest auto cleanup proposals", cause);
+    }
+  }
+
+  async function loadOpenProposals(roomId = activeRoomId) {
+    if (!roomId) {
+      setOpenProposals([]);
+      return;
+    }
+    try {
+      const proposals = await listAgentOpenProposals(roomId);
+      const open = proposals.filter((proposal) => proposal.status === "OPEN");
+      setOpenProposals(open);
+    } catch (cause) {
+      console.error("Failed to load open chat proposals", cause);
+    }
+  }
+
   useEffect(() => {
     const unlisten = listenForCharacterEvents(setEvent);
     return () => {
@@ -77,6 +155,7 @@ export function ChatOverlay() {
 
   useEffect(() => {
     void loadRooms();
+    void loadLatestAutoCleanupProposals();
   }, []);
 
   useEffect(() => {
@@ -95,6 +174,8 @@ export function ChatOverlay() {
     const unlisten = getCurrentWindow().onFocusChanged((focusEvent) => {
       if (focusEvent.payload) {
         void loadRooms();
+        void loadLatestAutoCleanupProposals();
+        void loadOpenProposals();
       }
     });
     return () => {
@@ -113,6 +194,11 @@ export function ChatOverlay() {
       setChatSession(null);
       setQuickView(null);
       setChatMessages([]);
+      setLocalStatusMessages([]);
+      setOpenProposals([]);
+      setSubmittedDraftIds(new Set());
+      setSubmittedProposalIds(new Set());
+      setSubmittedLocalProposalKeys(new Set());
       setNotice("먼저 데스크탑에서 관리 폴더를 서버 room과 연결해야 채팅을 이어서 기록할 수 있어요.");
       return;
     }
@@ -131,6 +217,11 @@ export function ChatOverlay() {
         setChatSession(session);
         setQuickView(quick);
         setChatMessages(messages);
+        setLocalStatusMessages([]);
+        setSubmittedDraftIds(new Set());
+        setSubmittedProposalIds(new Set());
+        setSubmittedLocalProposalKeys(new Set());
+        void loadOpenProposals(activeRoomId);
       })
       .catch((cause) => {
         if (cancelled) return;
@@ -148,6 +239,27 @@ export function ChatOverlay() {
   }, [activeRoomId, activeRoomName]);
 
   useEffect(() => {
+    if (event.kind === "WAITING_APPROVAL") {
+      void loadOpenProposals();
+    }
+  }, [event.kind, activeRoomId]);
+
+  useEffect(() => {
+    const unlistenBridge = listenForChatAutoProposals((proposal) => {
+      rememberLocalAutoProposal(proposal);
+    });
+    const unlisten = listenForAutoCleanupProposals((proposal) => {
+      rememberLocalAutoProposal(proposal);
+      window.setTimeout(() => void loadOpenProposals(), 1000);
+      window.setTimeout(() => void loadOpenProposals(), 3500);
+    });
+    return () => {
+      void unlistenBridge.then((off) => off());
+      void unlisten.then((off) => off());
+    };
+  }, [activeRoomId]);
+
+  useEffect(() => {
     if (!chatSession || answerPending) return;
     const timer = window.setInterval(() => {
       void listAgentChatMessages(chatSession.session_id)
@@ -159,6 +271,10 @@ export function ChatOverlay() {
     }, 5000);
     return () => window.clearInterval(timer);
   }, [answerPending, chatSession]);
+
+  function pushLocalStatusMessage(message: AgentChatMessage) {
+    setLocalStatusMessages((items) => appendUniqueMessages(items, [message]));
+  }
 
   async function submitDraft() {
     const trimmed = draft.trim();
@@ -236,12 +352,20 @@ export function ChatOverlay() {
     const idempotencyKey = commandDraftApprovalKey(draftId);
     setNotice(null);
     setBusy(true);
+    setSubmittedDraftIds((current) => new Set(current).add(draftId));
     setApprovingDraftIds((current) => new Set(current).add(draftId));
     try {
       const report = await approveAgentCommandDraftAndExecute(draftId, activeRoomId, idempotencyKey);
       const executed = report.execution_report.executed_item_count;
       const skipped = report.execution_report.skipped_item_count;
       setApprovedDraftIds((current) => new Set(current).add(draftId));
+      pushLocalStatusMessage(
+        executionStatusMessage({
+          roomId: activeRoomId,
+          sessionId: chatSession?.session_id ?? null,
+          content: formatDecisionExecutionResult("요청한 작업 실행 결과", report.execution_report)
+        })
+      );
       setNotice(`승인 후 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
       if (chatSession) {
         const messages = await listAgentChatMessages(chatSession.session_id);
@@ -250,6 +374,7 @@ export function ChatOverlay() {
       }
       const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
       setQuickView(quick);
+      await loadOpenProposals(activeRoomId);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       setNotice(
@@ -262,6 +387,89 @@ export function ChatOverlay() {
       setApprovingDraftIds((current) => {
         const next = new Set(current);
         next.delete(draftId);
+        return next;
+      });
+    }
+  }
+
+  async function approveOpenProposal(proposalId: string) {
+    if (!activeRoomId) {
+      setNotice("관리 폴더를 서버 room과 연결해야 제안을 실행할 수 있어요.");
+      return;
+    }
+    const idempotencyKey = proposalApprovalKey(proposalId);
+    setNotice(null);
+    setBusy(true);
+    setSubmittedProposalIds((current) => new Set(current).add(proposalId));
+    setApprovingProposalIds((current) => new Set(current).add(proposalId));
+    try {
+      const report = await approveAgentOpenProposalAndExecute(proposalId, activeRoomId, idempotencyKey);
+      const executed = report.execution_report.executed_item_count;
+      const skipped = report.execution_report.skipped_item_count;
+      pushLocalStatusMessage(
+        executionStatusMessage({
+          roomId: activeRoomId,
+          sessionId: chatSession?.session_id ?? null,
+          content: formatDecisionExecutionResult("자동 제안 실행 결과", report.execution_report)
+        })
+      );
+      setNotice(`자동 제안 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
+      if (activeRootId) {
+        setLocalAutoProposals((current) =>
+          current.filter((proposal) => proposal.root_id !== activeRootId)
+        );
+      }
+      await loadOpenProposals(activeRoomId);
+      const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
+      setQuickView(quick);
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+      setApprovingProposalIds((current) => {
+        const next = new Set(current);
+        next.delete(proposalId);
+        return next;
+      });
+    }
+  }
+
+  async function approveLocalAutoProposal(localKey: string) {
+    const proposal = localAutoProposals.find((item) => item.localKey === localKey);
+    if (!proposal) {
+      setNotice("실행할 자동 제안을 찾을 수 없어요. 다음 자동 점검을 기다려 주세요.");
+      return;
+    }
+    setNotice(null);
+    setBusy(true);
+    setSubmittedLocalProposalKeys((current) => new Set(current).add(localKey));
+    setApprovingLocalProposalKeys((current) => new Set(current).add(localKey));
+    try {
+      const report = await approveAutoCleanupProposalFromChat(proposal.root_id, proposal.proposal);
+      dismissedLocalProposalKeysRef.current.add(localKey);
+      setLocalAutoProposals((current) => current.filter((item) => item.localKey !== localKey));
+      const executed = report.execution.executed_count;
+      const skipped = report.execution.skipped_count;
+      pushLocalStatusMessage(
+        executionStatusMessage({
+          roomId: activeRoomId ?? "",
+          sessionId: chatSession?.session_id ?? null,
+          content: formatLocalExecutionResult("자동 제안 실행 결과", report.execution)
+        })
+      );
+      setNotice(`자동 제안 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
+      if (activeRoomId) {
+        await loadOpenProposals(activeRoomId);
+        const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
+        setQuickView(quick);
+      }
+    } catch (cause) {
+      setNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+      setApprovingLocalProposalKeys((current) => {
+        const next = new Set(current);
+        next.delete(localKey);
         return next;
       });
     }
@@ -285,16 +493,25 @@ export function ChatOverlay() {
         draft={draft}
         event={event}
         notice={notice}
+        openProposals={visibleOpenProposals}
+        localAutoProposals={visibleLocalAutoProposals}
         roomId={activeRoomId}
         roomName={activeRoomName}
-        messages={chatMessages}
+        messages={displayedMessages}
         loading={chatLoading}
         sessionTitle={chatSession?.title ?? null}
         quickView={quickView}
         approvedDraftIds={approvedDraftIds}
         approvingDraftIds={approvingDraftIds}
+        approvingProposalIds={approvingProposalIds}
+        approvingLocalProposalKeys={approvingLocalProposalKeys}
+        submittedDraftIds={submittedDraftIds}
+        submittedProposalIds={submittedProposalIds}
+        submittedLocalProposalKeys={submittedLocalProposalKeys}
         onBeginWindowDrag={beginChatWindowDrag}
         onApproveCommandDraft={(draftId) => void approveCommandDraft(draftId)}
+        onApproveOpenProposal={(proposalId) => void approveOpenProposal(proposalId)}
+        onApproveLocalAutoProposal={(localKey) => void approveLocalAutoProposal(localKey)}
         onChangeDraft={setDraft}
         onClose={() => {
           void hideChatOverlay();
@@ -323,6 +540,34 @@ function appendUniqueMessages(current: AgentChatMessage[], next: AgentChatMessag
   return merged;
 }
 
+function mergeMessagesByTime(serverMessages: AgentChatMessage[], localMessages: AgentChatMessage[]) {
+  return appendUniqueMessages(serverMessages, localMessages).sort(
+    (left, right) => Date.parse(left.created_at) - Date.parse(right.created_at)
+  );
+}
+
+function executionStatusMessage({
+  content,
+  roomId,
+  sessionId
+}: {
+  content: string;
+  roomId: string;
+  sessionId: string | null;
+}): AgentChatMessage {
+  return {
+    message_id: `local-exec-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
+    room_id: roomId,
+    session_id: sessionId,
+    sender_type: "ASSISTANT",
+    message_type: "EXECUTION_RESULT",
+    content,
+    structured_payload: null,
+    command_id: null,
+    created_at: new Date().toISOString()
+  };
+}
+
 function lastAgentChatMessageId(messages: AgentChatMessage[]) {
   return messages.length > 0 ? messages[messages.length - 1].message_id : null;
 }
@@ -333,6 +578,72 @@ function isChatMessage(message: AgentChatMessage | null): message is AgentChatMe
 
 function commandDraftApprovalKey(draftId: string) {
   return `chatdraft-${draftId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`;
+}
+
+function proposalApprovalKey(proposalId: string) {
+  return `chatproposal-${proposalId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`;
+}
+
+function localAutoProposalKey(event: AutoCleanupProposalEvent) {
+  const items = event.proposal.proposals
+    .map((item) => `${item.proposal_id}:${item.from}:${item.to}:${item.action}`)
+    .join("|");
+  return `${event.root_id}:${items}`;
+}
+
+function proposalActionLabel(action: string) {
+  if (action === "trash") return "버리기";
+  if (action === "move") return "이동";
+  if (action === "create_dir") return "폴더";
+  if (action === "create_file") return "파일";
+  if (action === "readme_write") return "README";
+  return action;
+}
+
+function proposalPathLabel(path: string) {
+  const normalized = path.replace(/\\/g, "/");
+  const parts = normalized.split("/").filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : normalized;
+}
+
+function proposalDestinationLabel(action: string, to: string) {
+  if (action === "trash") return "휴지통으로";
+  if (!to.trim()) return "";
+  return `→ ${to}`;
+}
+
+function formatDecisionExecutionResult(title: string, report: DecisionProcessingReport) {
+  const failed = report.failed_count > 0 ? `, 실패 ${report.failed_count}개` : "";
+  return `${title}\n실행 ${report.executed_item_count}개, 건너뜀 ${report.skipped_item_count}개${failed}`;
+}
+
+function formatLocalExecutionResult(title: string, report: ExecuteReport) {
+  const summary = `${title}\n실행 ${report.executed_count}개, 건너뜀 ${report.skipped_count}개, 거절 ${report.rejected_count}개`;
+  const details = report.results
+    .slice(0, 4)
+    .map((result) => {
+      const target = result.status === "executed" ? proposalDestinationLabel(result.action, result.to) : result.reason ?? "";
+      return `- ${executionStatusLabel(result.status)}: ${proposalPathLabel(result.from)} ${target}`.trim();
+    });
+  const more = report.results.length > details.length ? [`- 외 ${report.results.length - details.length}개 더`] : [];
+  return [summary, ...details, ...more].join("\n");
+}
+
+function executionStatusLabel(status: string) {
+  if (status === "executed") return "완료";
+  if (status === "skipped") return "건너뜀";
+  if (status === "rejected") return "거절";
+  return status;
+}
+
+function messageClassName(message: AgentChatMessage) {
+  return [
+    "room-chat-message",
+    message.sender_type === "USER" ? "is-user" : "is-mouse",
+    message.message_type === "EXECUTION_RESULT" ? "is-execution-result" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function aiNotice(status: string) {
@@ -364,6 +675,7 @@ function CommandDraftActions({
   busy,
   payload,
   roomId,
+  submittedDraftIds,
   onApprove
 }: {
   approvedDraftIds: Set<string>;
@@ -371,6 +683,7 @@ function CommandDraftActions({
   busy: boolean;
   payload: unknown;
   roomId: string | null;
+  submittedDraftIds: Set<string>;
   onApprove: (draftId: string) => void;
 }) {
   const draft = commandDraftPayload(payload);
@@ -379,6 +692,9 @@ function CommandDraftActions({
   }
   if (approvedDraftIds.has(draft.id)) {
     return <small className="room-chat-draft-hint">승인 후 실행 요청을 완료했어요.</small>;
+  }
+  if (submittedDraftIds.has(draft.id)) {
+    return <small className="room-chat-draft-hint">실행 요청을 보냈어요.</small>;
   }
   if (draft.status !== "DRAFT") {
     return <small className="room-chat-draft-hint">명령 상태: {draft.status}</small>;
@@ -396,26 +712,91 @@ function CommandDraftActions({
   );
 }
 
+function OpenProposalActions({
+  approvingProposalIds,
+  busy,
+  proposal,
+  roomId,
+  submittedProposalIds,
+  onApprove
+}: {
+  approvingProposalIds: Set<string>;
+  busy: boolean;
+  proposal: AgentOpenProposal;
+  roomId: string | null;
+  submittedProposalIds: Set<string>;
+  onApprove: (proposalId: string) => void;
+}) {
+  const approving = approvingProposalIds.has(proposal.proposal_id);
+  const submitted = submittedProposalIds.has(proposal.proposal_id);
+  return (
+    <button
+      type="button"
+      className="room-chat-draft-approve"
+      onClick={() => onApprove(proposal.proposal_id)}
+      disabled={busy || approving || submitted || roomId == null}
+    >
+      {approving ? "실행 중" : submitted ? "실행 요청됨" : "승인하고 실행"}
+    </button>
+  );
+}
+
+function LocalAutoProposalActions({
+  approvingLocalProposalKeys,
+  busy,
+  proposal,
+  submittedLocalProposalKeys,
+  onApprove
+}: {
+  approvingLocalProposalKeys: Set<string>;
+  busy: boolean;
+  proposal: LocalAutoProposal;
+  submittedLocalProposalKeys: Set<string>;
+  onApprove: (localKey: string) => void;
+}) {
+  const approving = approvingLocalProposalKeys.has(proposal.localKey);
+  const submitted = submittedLocalProposalKeys.has(proposal.localKey);
+  return (
+    <button
+      type="button"
+      className="room-chat-draft-approve"
+      onClick={() => onApprove(proposal.localKey)}
+      disabled={busy || approving || submitted}
+    >
+      {approving ? "실행 중" : submitted ? "실행 요청됨" : "승인하고 실행"}
+    </button>
+  );
+}
+
 function RoomChatPanel({
   avatarUrl,
   answerPending,
   approvedDraftIds,
   approvingDraftIds,
+  approvingLocalProposalKeys,
+  approvingProposalIds,
   busy,
   draft,
   event,
   loading,
+  localAutoProposals,
   messages,
   notice,
+  openProposals,
   quickView,
   roomId,
   roomName,
   sessionTitle,
+  submittedDraftIds,
+  submittedLocalProposalKeys,
+  submittedProposalIds,
   onChangeDraft,
   onClose,
   onQuickCleanup,
   onBeginWindowDrag,
   onApproveCommandDraft,
+  onApproveLocalAutoProposal,
+  onApproveOpenProposal,
   onUsePrompt,
   onSubmit
 }: {
@@ -423,21 +804,30 @@ function RoomChatPanel({
   answerPending: boolean;
   approvedDraftIds: Set<string>;
   approvingDraftIds: Set<string>;
+  approvingLocalProposalKeys: Set<string>;
+  approvingProposalIds: Set<string>;
   busy: boolean;
   draft: string;
   event: CharacterEvent;
   loading: boolean;
+  localAutoProposals: LocalAutoProposal[];
   messages: AgentChatMessage[];
   notice: string | null;
+  openProposals: AgentOpenProposal[];
   quickView: AgentChatQuickView | null;
   roomId: string | null;
   roomName: string;
   sessionTitle: string | null;
+  submittedDraftIds: Set<string>;
+  submittedLocalProposalKeys: Set<string>;
+  submittedProposalIds: Set<string>;
   onChangeDraft: (value: string) => void;
   onClose: () => void;
   onQuickCleanup: () => void;
   onBeginWindowDrag: (event: PointerEvent<HTMLElement>) => void;
   onApproveCommandDraft: (draftId: string) => void;
+  onApproveLocalAutoProposal: (localKey: string) => void;
+  onApproveOpenProposal: (proposalId: string) => void;
   onUsePrompt: (value: string) => void;
   onSubmit: () => void;
 }) {
@@ -450,7 +840,7 @@ function RoomChatPanel({
     const thread = threadRef.current;
     if (!thread) return;
     thread.scrollTop = thread.scrollHeight;
-  }, [answerPending, loading, messages.length, notice]);
+  }, [answerPending, loading, localAutoProposals.length, messages.length, notice, openProposals.length]);
 
   return (
     <div className="room-chat-panel" data-room-id={roomId ?? "unbound"}>
@@ -493,7 +883,7 @@ function RoomChatPanel({
             </div>
           </article>
         ) : null}
-        {!loading && messages.length === 0 ? (
+        {!loading && messages.length === 0 && openProposals.length === 0 && localAutoProposals.length === 0 ? (
           <article className="room-chat-message is-mouse">
             <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
             <div>
@@ -504,7 +894,7 @@ function RoomChatPanel({
         ) : null}
         {messages.map((message) => (
           <article
-            className={`room-chat-message ${message.sender_type === "USER" ? "is-user" : "is-mouse"}`}
+            className={messageClassName(message)}
             key={message.message_id}
           >
             {message.sender_type === "ASSISTANT" ? (
@@ -522,10 +912,64 @@ function RoomChatPanel({
                     busy={busy}
                     approvedDraftIds={approvedDraftIds}
                     approvingDraftIds={approvingDraftIds}
+                    submittedDraftIds={submittedDraftIds}
                     onApprove={onApproveCommandDraft}
                   />
                 </div>
               ) : null}
+            </div>
+          </article>
+        ))}
+        {openProposals.map((proposal) => (
+          <article className="room-chat-message is-mouse is-auto-proposal" key={proposal.proposal_id}>
+            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+            <div>
+              <strong>MouseKeeper</strong>
+              <p>정리할 만한 항목을 찾았어요. 승인하면 바로 확인하고 실행할게요.</p>
+              <div className="room-chat-draft-actions">
+                <small className="room-chat-draft-hint">자동 제안 승인 대기 중</small>
+                <OpenProposalActions
+                  proposal={proposal}
+                  roomId={roomId}
+                  busy={busy}
+                  approvingProposalIds={approvingProposalIds}
+                  submittedProposalIds={submittedProposalIds}
+                  onApprove={onApproveOpenProposal}
+                />
+              </div>
+            </div>
+          </article>
+        ))}
+        {localAutoProposals.map((proposal) => (
+          <article className="room-chat-message is-mouse is-auto-proposal" key={proposal.localKey}>
+            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
+            <div>
+              <strong>MouseKeeper</strong>
+              <p>이렇게 바꾸면 좋을 것 같은데요, 찍?</p>
+              <ul className="room-chat-proposal-list">
+                {proposal.proposal.proposals.slice(0, 5).map((item) => (
+                  <li key={item.proposal_id}>
+                    <span>{proposalActionLabel(item.action)}</span>
+                    <strong>{proposalPathLabel(item.from)}</strong>
+                    <small>{proposalDestinationLabel(item.action, item.to)}</small>
+                  </li>
+                ))}
+                {proposal.proposal.proposals.length > 5 ? (
+                  <li className="is-more">외 {proposal.proposal.proposals.length - 5}개 더</li>
+                ) : null}
+              </ul>
+              <div className="room-chat-draft-actions">
+                <small className="room-chat-draft-hint">
+                  승인하면 사전 점검 후 바로 실행할게요.
+                </small>
+                <LocalAutoProposalActions
+                  proposal={proposal}
+                  busy={busy}
+                  approvingLocalProposalKeys={approvingLocalProposalKeys}
+                  submittedLocalProposalKeys={submittedLocalProposalKeys}
+                  onApprove={onApproveLocalAutoProposal}
+                />
+              </div>
             </div>
           </article>
         ))}

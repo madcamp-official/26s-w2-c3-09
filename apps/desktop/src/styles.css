@@ -817,6 +817,25 @@ body.overlay-body .character-motion {
   -webkit-user-drag: none;
 }
 
+body.overlay-body .character-attention-badge {
+  position: absolute;
+  top: 4px;
+  right: 16px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #171717;
+  border-radius: 50%;
+  background: #fee500;
+  color: #171717;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 2px 2px 0 rgba(23, 23, 23, 0.34);
+  pointer-events: none;
+}
+
 body.chat-overlay-body .chat-overlay {
   display: grid;
   width: 100vw;
@@ -1058,6 +1077,75 @@ body.overlay-body .room-chat-message.is-user p {
   border-top-right-radius: 3px;
   background: #fee500;
   color: #2d2500;
+}
+
+body.overlay-body .room-chat-message.is-auto-proposal p {
+  border: 1px solid rgba(47, 127, 206, 0.22);
+  background: #fffbe2;
+}
+
+body.overlay-body .room-chat-message.is-execution-result p {
+  border: 1px solid rgba(25, 164, 91, 0.18);
+  background: #eefbf2;
+  white-space: pre-line;
+}
+
+body.overlay-body .room-chat-proposal-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(32, 40, 48, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  list-style: none;
+}
+
+body.overlay-body .room-chat-proposal-list li {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  column-gap: 6px;
+  row-gap: 2px;
+  min-width: 0;
+  color: #26313b;
+}
+
+body.overlay-body .room-chat-proposal-list li span {
+  align-self: start;
+  border-radius: 8px;
+  background: rgba(47, 127, 206, 0.12);
+  color: #2f6ca8;
+  padding: 2px 5px;
+  text-align: center;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+body.overlay-body .room-chat-proposal-list li strong,
+body.overlay-body .room-chat-proposal-list li small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.overlay-body .room-chat-proposal-list li strong {
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+body.overlay-body .room-chat-proposal-list li small {
+  grid-column: 2;
+  color: rgba(32, 40, 48, 0.62);
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+body.overlay-body .room-chat-proposal-list li.is-more {
+  display: block;
+  color: rgba(32, 40, 48, 0.62);
+  font-size: 10px;
+  font-weight: 700;
 }
 
 body.overlay-body .room-chat-draft-actions {

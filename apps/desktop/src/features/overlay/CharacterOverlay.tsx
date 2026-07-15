@@ -15,8 +15,11 @@ import {
   HOUSE_OVERLAY_WINDOW_LABEL,
   hideChatOverlay,
   listenForCharacterEvents,
+  publishChatAutoProposal,
   showChatOverlay
 } from "./overlayApi";
+import { listenForAutoCleanupProposals } from "../files/fileEngineApi";
+import type { AutoCleanupProposalEvent } from "../files/fileEngineApi";
 import { useCharacterWander } from "./characterWander";
 
 const wanderMotionUrls = {
@@ -91,6 +94,7 @@ const DRAG_THRESHOLD_PX = 10;
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
   const [chatOpen, setChatOpen] = useState(false);
+  const [hasChatAttention, setHasChatAttention] = useState(false);
   const [isDraggingOverlay, setIsDraggingOverlay] = useState(false);
   const [pointerHeld, setPointerHeld] = useState(false);
   const [dragReleaseTick, setDragReleaseTick] = useState(0);
@@ -102,9 +106,15 @@ export function CharacterOverlay() {
   const suppressClick = useRef(false);
   const pointerStartedWithChatOpen = useRef(false);
   const houseDropActive = useRef(false);
+  const latestAutoProposal = useRef<AutoCleanupProposalEvent | null>(null);
 
   useEffect(() => {
-    const unlisten = listenForCharacterEvents(setEvent);
+    const unlisten = listenForCharacterEvents((nextEvent) => {
+      setEvent(nextEvent);
+      if (nextEvent.kind === "WAITING_APPROVAL") {
+        setHasChatAttention(true);
+      }
+    });
     return () => {
       void unlisten.then((off) => off());
     };
@@ -113,6 +123,18 @@ export function CharacterOverlay() {
   // Any window may hide chat (close button, house menu, drag start); keep wander/toggle in sync.
   useEffect(() => {
     const unlisten = listen(CHAT_OVERLAY_CLOSED_EVENT, () => setChatOpen(false));
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listenForAutoCleanupProposals((proposal) => {
+      if (proposal.proposal.proposals.length === 0) return;
+      latestAutoProposal.current = proposal;
+      setHasChatAttention(true);
+      void publishChatAutoProposal(proposal);
+    });
     return () => {
       void unlisten.then((off) => off());
     };
@@ -302,7 +324,13 @@ export function CharacterOverlay() {
       return;
     }
     void showChatOverlay()
-      .then(() => setChatOpen(true))
+      .then(() => {
+        setChatOpen(true);
+        setHasChatAttention(false);
+        if (latestAutoProposal.current) {
+          void publishChatAutoProposal(latestAutoProposal.current);
+        }
+      })
       .catch((cause) => {
         console.error("Failed to show chat overlay", cause);
         setChatOpen(false);
@@ -329,6 +357,11 @@ export function CharacterOverlay() {
           draggable={false}
           style={{ transform: spriteFlip }}
         />
+        {hasChatAttention && !chatOpen ? (
+          <span className="character-attention-badge" aria-hidden="true">
+            !
+          </span>
+        ) : null}
       </button>
     </div>
   );

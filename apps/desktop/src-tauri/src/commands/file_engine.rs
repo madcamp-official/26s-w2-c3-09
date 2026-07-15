@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use file_engine_cli::analyzer::{analyze_root as analyze_file_root, AnalyzeReport};
 use file_engine_cli::auto_approval::auto_approve_decisions;
 use file_engine_cli::browse::{browse_root, BrowseReport};
-use file_engine_cli::decision::{apply_decisions, DecisionApplication, DecisionEntry};
+use file_engine_cli::decision::{apply_decisions, Decision, DecisionApplication, DecisionEntry};
 use file_engine_cli::execute::{execute_decision_application, ExecuteReport};
 use file_engine_cli::file_index::{list_index, reindex_root, search_index, FileIndexReport};
 use file_engine_cli::file_ops::{
@@ -48,6 +48,14 @@ pub struct UnregisterManagedRootReport {
     pub root_id: String,
     pub server_room_removed: bool,
     pub server_message: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct ChatAutoCleanupExecutionReport {
+    pub root_id: String,
+    pub approved_count: usize,
+    pub precheck: PrecheckReport,
+    pub execution: ExecuteReport,
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -500,6 +508,31 @@ pub fn execute_file_changes(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub fn approve_auto_cleanup_proposal_from_chat(
+    root_id: String,
+    proposal: ProposalReport,
+    window: tauri::Window,
+    store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
+) -> Result<ChatAutoCleanupExecutionReport, String> {
+    crate::commands::permissions::require_chat_approval_window(&window)?;
+    let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
+    approve_auto_cleanup_proposal_from_chat_impl(root_id, root, proposal)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn approve_auto_cleanup_proposal_from_chat(
+    root_id: String,
+    proposal: ProposalReport,
+    store: &ManagedRootStore,
+) -> Result<ChatAutoCleanupExecutionReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    approve_auto_cleanup_proposal_from_chat_impl(root_id, root, proposal)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub fn trash_file(
     root_id: String,
     path: String,
@@ -855,6 +888,38 @@ fn execute_file_changes_impl(
 ) -> Result<ExecuteReport, String> {
     apply_decisions_for_command(proposal, decisions).and_then(|application| {
         execute_decision_application(root, application).map_err(command_error)
+    })
+}
+
+fn approve_auto_cleanup_proposal_from_chat_impl(
+    root_id: String,
+    root: String,
+    proposal: ProposalReport,
+) -> Result<ChatAutoCleanupExecutionReport, String> {
+    if proposal.root != root {
+        return Err("proposal root does not match the selected managed root".to_string());
+    }
+    if proposal.proposals.is_empty() {
+        return Err("auto cleanup proposal has no items to approve".to_string());
+    }
+
+    let decisions = proposal
+        .proposals
+        .iter()
+        .map(|item| DecisionEntry {
+            proposal_id: item.proposal_id.clone(),
+            decision: Decision::Approved,
+            reason: None,
+        })
+        .collect::<Vec<_>>();
+    let precheck = precheck_file_changes_impl(root.clone(), proposal.clone(), decisions.clone())?;
+    let execution = execute_file_changes_impl(root, proposal, decisions)?;
+
+    Ok(ChatAutoCleanupExecutionReport {
+        root_id,
+        approved_count: precheck.checks.len(),
+        precheck,
+        execution,
     })
 }
 
