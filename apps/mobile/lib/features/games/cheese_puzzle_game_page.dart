@@ -163,8 +163,11 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
     }
     setState(() {
       _stage++;
+      _player = _current.start;
+      _turns = _current.turns;
+      _won = false;
+      _failed = false;
     });
-    _reset();
   }
 
   @override
@@ -236,7 +239,20 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
           if (_won || _failed)
             Padding(
               padding: const EdgeInsets.all(8),
-              child: Text(_won ? '클리어!' : '실패!'),
+              child: Column(
+                children: [
+                  Text(_won ? '클리어!' : '실패!'),
+                  const SizedBox(height: 6),
+                  ElevatedButton(
+                    onPressed: _won ? _next : _reset,
+                    child: Text(
+                      _won && _stage < _stages.length - 1
+                          ? '다음 스테이지'
+                          : '다시 시작',
+                    ),
+                  ),
+                ],
+              ),
             ),
           _DPad(onMove: _move),
           const SizedBox(height: 16),
