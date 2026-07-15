@@ -2087,7 +2087,14 @@ components:
           {
             type: string,
             enum:
-              [TEXT, COMMAND_DRAFT, RULE_DRAFT, QUERY_RESULT, EXECUTION_RESULT],
+              [
+                TEXT,
+                COMMAND_DRAFT,
+                RULE_DRAFT,
+                PROPOSAL,
+                QUERY_RESULT,
+                EXECUTION_RESULT,
+              ],
           }
         content: { type: string, minLength: 1, maxLength: 2000 }
         createdAt: { type: string, format: date-time }
@@ -2109,7 +2116,8 @@ components:
         messageId: { type: string, format: uuid }
         sessionId: { type: string, format: uuid }
         sessionTitle: { type: string, minLength: 1, maxLength: 120 }
-        messageType: { type: string, enum: [COMMAND_DRAFT, RULE_DRAFT] }
+        messageType:
+          { type: string, enum: [COMMAND_DRAFT, RULE_DRAFT, PROPOSAL] }
         content: { type: string, minLength: 1, maxLength: 2000 }
         draftId: { type: string, format: uuid }
         status: { type: string, minLength: 1, maxLength: 40 }
@@ -2194,7 +2202,14 @@ components:
           {
             type: string,
             enum:
-              [TEXT, COMMAND_DRAFT, RULE_DRAFT, QUERY_RESULT, EXECUTION_RESULT],
+              [
+                TEXT,
+                COMMAND_DRAFT,
+                RULE_DRAFT,
+                PROPOSAL,
+                QUERY_RESULT,
+                EXECUTION_RESULT,
+              ],
           }
         content: { type: string, minLength: 1 }
         structuredPayload: { type: [object, "null"] }

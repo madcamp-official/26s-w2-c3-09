@@ -27,7 +27,7 @@ const DEVICE_REVOKED_REASON: &str = "desktop device pairing was revoked; pair th
 /// Each one only wakes the REST loop; the events themselves are never treated as the source of
 /// truth (that stays `/v1/sync/events` replay and command/decision polling).
 #[cfg(feature = "tauri-commands")]
-const REALTIME_WAKE_EVENTS: [&str; 9] = [
+const REALTIME_WAKE_EVENTS: [&str; 11] = [
     "command.available",
     "command.updated",
     "proposal.created",
@@ -37,6 +37,8 @@ const REALTIME_WAKE_EVENTS: [&str; 9] = [
     "smart-cache.updated",
     "device.revoked",
     "room.removed",
+    "rule.created",
+    "rule.draft.updated",
 ];
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -971,6 +973,9 @@ async fn replay_events(
                     let _ = app.emit("managed-root-binding-changed", report.root_id);
                 }
             }
+        }
+        if event.event_type == "rule.created" {
+            let _ = crate::commands::agent::apply_rule_created_event(agent, roots, event).await?;
         }
         if event.event_type == "device.revoked"
             && (event.device_id.as_deref() == Some(device_id)

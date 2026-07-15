@@ -639,6 +639,147 @@ describeDatabase('ChatService PostgreSQL integration', () => {
     ).rejects.toMatchObject({ response: { code: 'IDEMPOTENCY_CONFLICT' } });
   });
 
+  it('reflects confirmed/rejected draft status on re-read without client-side patching', async () => {
+    const session = await service.createSession(userId, roomId);
+    const confirmedSource = await service.createMessage(
+      userId,
+      session.id,
+      'Rename old report',
+    );
+    const confirmedDraft = await service.createCommandDraft(
+      userId,
+      session.id,
+      {
+        sourceMessageId: confirmedSource.message.id,
+        command: {
+          intent: 'RENAME',
+          payload: {
+            rootId: 'root:downloads',
+            sourceRelativePath: 'reports/old.pdf',
+            newName: 'final.pdf',
+          },
+        },
+        confirmationSummary: 'Rename reports/old.pdf to final.pdf',
+      },
+    );
+    const rejectedSource = await service.createMessage(
+      userId,
+      session.id,
+      'Rename another report',
+    );
+    const rejectedDraft = await service.createCommandDraft(
+      userId,
+      session.id,
+      {
+        sourceMessageId: rejectedSource.message.id,
+        command: {
+          intent: 'RENAME',
+          payload: {
+            rootId: 'root:downloads',
+            sourceRelativePath: 'reports/older.pdf',
+            newName: 'older-final.pdf',
+          },
+        },
+        confirmationSummary: 'Rename reports/older.pdf to older-final.pdf',
+      },
+    );
+
+    const pendingBefore = await service.quickView(userId, roomId);
+    expect(
+      pendingBefore.pendingSuggestions.map((suggestion) => suggestion.draftId),
+    ).toEqual(
+      expect.arrayContaining([confirmedDraft.draft.id, rejectedDraft.draft.id]),
+    );
+
+    await service.confirmCommandDraft(
+      userId,
+      confirmedDraft.draft.id,
+      'confirm-key',
+    );
+    await service.rejectCommandDraft(userId, rejectedDraft.draft.id);
+
+    // A fresh listMessages() call (e.g. after an app restart) must not still
+    // show these cards as pending DRAFTs — the stored structuredPayload is
+    // never rewritten on confirm/reject, so this only passes if the read
+    // path hydrates live status from `commandDrafts`.
+    const messages = await service.listMessages(userId, session.id);
+    const confirmedCard = messages.find(
+      (message) =>
+        message.messageType === 'COMMAND_DRAFT' &&
+        (message.structuredPayload as { id?: string })?.id ===
+          confirmedDraft.draft.id,
+    );
+    const rejectedCard = messages.find(
+      (message) =>
+        message.messageType === 'COMMAND_DRAFT' &&
+        (message.structuredPayload as { id?: string })?.id ===
+          rejectedDraft.draft.id,
+    );
+    expect(confirmedCard?.structuredPayload).toMatchObject({
+      status: 'MATERIALIZED',
+    });
+    expect(rejectedCard?.structuredPayload).toMatchObject({
+      status: 'REJECTED',
+    });
+
+    const pendingAfter = await service.quickView(userId, roomId);
+    expect(
+      pendingAfter.pendingSuggestions.map((suggestion) => suggestion.draftId),
+    ).not.toEqual(
+      expect.arrayContaining([confirmedDraft.draft.id, rejectedDraft.draft.id]),
+    );
+  });
+
+  it('materializes a TRASH command draft with its chat session on the command metadata', async () => {
+    // TRASH has no dedicated materialize branch in confirmCommandDraft (unlike
+    // FIND/DOWNLOAD/UPLOAD) — it falls through to the generic command-creation
+    // path, so this is the one place that proves TRASH specifically carries
+    // metadata.sessionId through to the queued command. Downstream, this is
+    // exactly what lets ProposalsService/ExecutionsService attach the
+    // resulting PROPOSAL/EXECUTION_RESULT chat messages to the same session.
+    const session = await service.createSession(userId, roomId);
+    const source = await service.createMessage(
+      userId,
+      session.id,
+      'Trash the noisy log',
+    );
+    const draftResult = await service.createCommandDraft(userId, session.id, {
+      sourceMessageId: source.message.id,
+      command: {
+        intent: 'TRASH',
+        payload: {
+          rootId: 'root:downloads',
+          sourceRelativePaths: ['tmp/noise.log'],
+        },
+      },
+      confirmationSummary: 'Move tmp/noise.log to trash',
+    });
+
+    const materialized = await service.confirmCommandDraft(
+      userId,
+      draftResult.draft.id,
+      'trash-confirm-key',
+    );
+    const command = materialized.command;
+    if (!command) throw new Error('TRASH draft did not create a command');
+
+    expect(command).toMatchObject({
+      roomId,
+      targetDeviceId: deviceId,
+      intent: 'TRASH',
+      status: 'QUEUED',
+      payload: {
+        rootId: 'root:downloads',
+        sourceRelativePaths: ['tmp/noise.log'],
+      },
+      metadata: expect.objectContaining({
+        sessionId: session.id,
+        sourceMessageId: source.message.id,
+        commandDraftId: draftResult.draft.id,
+      }),
+    });
+  });
+
   it('materializes FIND drafts as file browse requests without creating commands', async () => {
     const session = await service.createSession(userId, roomId);
     const source = await service.createMessage(

@@ -198,6 +198,35 @@ pub struct AgentCommandDraftConfirmation {
     pub command: Option<AgentCommand>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentRuleDraftSummary {
+    pub draft_id: String,
+    pub status: String,
+    pub rule_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentRule {
+    pub rule_id: String,
+    pub room_id: String,
+    pub name: String,
+    pub definition: Value,
+    pub priority: i64,
+    pub enabled: bool,
+    pub version: i64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentRuleDraftConfirmation {
+    pub draft: AgentRuleDraftSummary,
+    pub rule: AgentRule,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentRuleDraftRejection {
+    pub draft: AgentRuleDraftSummary,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AgentOpenProposal {
     pub proposal_id: String,
@@ -971,6 +1000,75 @@ impl AgentRuntime {
             )
             .await
             .and_then(validate_command_draft_confirmation);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn confirm_rule_draft(
+        &self,
+        draft_id: String,
+        idempotency_key: String,
+    ) -> Result<AgentRuleDraftConfirmation, AgentError> {
+        validate_opaque_value("rule draft id", &draft_id, 200)?;
+        validate_opaque_value(
+            "rule draft confirmation idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<RuleDraftConfirmationResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/rule-drafts/{draft_id}/confirm"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({})),
+            )
+            .await
+            .and_then(validate_rule_draft_confirmation);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn reject_rule_draft(
+        &self,
+        draft_id: String,
+    ) -> Result<AgentRuleDraftRejection, AgentError> {
+        validate_opaque_value("rule draft id", &draft_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<RuleDraftRejectionResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/rule-drafts/{draft_id}/reject"))
+                    .bearer_auth(&credential.device_token)
+                    .json(&json!({})),
+            )
+            .await
+            .and_then(validate_rule_draft_rejection);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn list_rules(&self, room_id: String) -> Result<Vec<AgentRule>, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<RuleResponse>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/rules"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(validate_rules);
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -2154,6 +2252,39 @@ struct CommandDraftConfirmationResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RuleDraftSummaryResponse {
+    id: String,
+    status: String,
+    rule_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuleResponse {
+    id: String,
+    room_id: String,
+    name: String,
+    definition: Value,
+    priority: i64,
+    enabled: bool,
+    version: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuleDraftConfirmationResponse {
+    draft: RuleDraftSummaryResponse,
+    rule: RuleResponse,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuleDraftRejectionResponse {
+    draft: RuleDraftSummaryResponse,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenProposalResponse {
     id: String,
     command_id: String,
@@ -2769,6 +2900,74 @@ fn validate_command_draft_confirmation(
     Ok(AgentCommandDraftConfirmation {
         draft_id: response.draft.id,
         command,
+    })
+}
+
+fn validate_rule_draft_summary(
+    response: RuleDraftSummaryResponse,
+) -> Result<AgentRuleDraftSummary, AgentError> {
+    if response.id.trim().is_empty()
+        || response.status.trim().is_empty()
+        || response
+            .rule_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+    {
+        return Err(invalid_response_error(
+            "rule draft summary failed response validation",
+        ));
+    }
+    Ok(AgentRuleDraftSummary {
+        draft_id: response.id,
+        status: response.status,
+        rule_id: response.rule_id,
+    })
+}
+
+fn validate_rule(response: RuleResponse) -> Result<AgentRule, AgentError> {
+    if response.id.trim().is_empty()
+        || response.room_id.trim().is_empty()
+        || response.name.trim().is_empty()
+        || response.name.chars().count() > 120
+        || !response.definition.is_object()
+        || response.priority < 0
+        || response.version <= 0
+    {
+        return Err(invalid_response_error("rule failed response validation"));
+    }
+    Ok(AgentRule {
+        rule_id: response.id,
+        room_id: response.room_id,
+        name: response.name,
+        definition: response.definition,
+        priority: response.priority,
+        enabled: response.enabled,
+        version: response.version,
+    })
+}
+
+fn validate_rules(responses: Vec<RuleResponse>) -> Result<Vec<AgentRule>, AgentError> {
+    responses.into_iter().map(validate_rule).collect()
+}
+
+fn validate_rule_draft_confirmation(
+    response: RuleDraftConfirmationResponse,
+) -> Result<AgentRuleDraftConfirmation, AgentError> {
+    let draft = validate_rule_draft_summary(response.draft)?;
+    let rule = validate_rule(response.rule)?;
+    if draft.rule_id.as_ref() != Some(&rule.rule_id) {
+        return Err(invalid_response_error(
+            "confirmed rule did not match rule draft summary",
+        ));
+    }
+    Ok(AgentRuleDraftConfirmation { draft, rule })
+}
+
+fn validate_rule_draft_rejection(
+    response: RuleDraftRejectionResponse,
+) -> Result<AgentRuleDraftRejection, AgentError> {
+    Ok(AgentRuleDraftRejection {
+        draft: validate_rule_draft_summary(response.draft)?,
     })
 }
 

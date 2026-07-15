@@ -61,6 +61,7 @@ pub struct CommandProcessingResult {
 #[serde(rename_all = "snake_case")]
 pub enum CommandProcessingStatus {
     SubmittedProposal,
+    NoProposal,
     Failed,
     Skipped,
 }
@@ -277,6 +278,16 @@ pub async fn process_commands(
         };
         match result {
             Ok(item_count) => {
+                if item_count == 0 {
+                    report.results.push(CommandProcessingResult {
+                        command_id: command.command_id,
+                        command_type: command.command_type,
+                        status: CommandProcessingStatus::NoProposal,
+                        message: Some("already clean; no proposal items were found".to_string()),
+                        proposal_item_count: 0,
+                    });
+                    continue;
+                }
                 report.submitted_proposal_count += 1;
                 report.results.push(CommandProcessingResult {
                     command_id: command.command_id,
@@ -510,7 +521,8 @@ async fn process_organize_command(
         build_agent_proposal_submission(command, local_report, payload.max_proposals())?;
     let item_count = submission.items.len();
     if item_count == 0 {
-        return Err("proposal command produced no proposal items".to_string());
+        let _ = enqueue_command_status(outbox, &command.command_id, "SUCCEEDED");
+        return Ok(0);
     }
 
     // The proposal is the durable result of this command. Enqueue it rather than POSTing inline:

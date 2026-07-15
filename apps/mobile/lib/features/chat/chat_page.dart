@@ -242,6 +242,8 @@ String chatSendNotice(Map<String, dynamic> result) {
     return switch (ai['kind']) {
       'COMMAND_DRAFT' => '확인 카드가 생성되었습니다. 내용을 보고 수락 또는 거절해 주세요.',
       'RULE_DRAFT' => '정리 규칙 초안이 생성되었습니다. 내용을 보고 수락 또는 거절해 주세요.',
+      'PROPOSAL' => '정리 제안이 도착했습니다. 카드를 눌러 검토해 주세요.',
+      'EXECUTION_RESULT' => '실행 결과가 도착했습니다.',
       'QUERY' => 'AI가 파일 조회 요청을 만들었습니다. 결과가 채팅에 표시됩니다.',
       _ => '',
     };
@@ -265,10 +267,23 @@ String chatErrorMessage(Object error) {
 
 bool isActionDraftMessage(Map<String, dynamic> message) =>
     message['messageType'] == 'COMMAND_DRAFT' ||
-    message['messageType'] == 'RULE_DRAFT';
+    message['messageType'] == 'RULE_DRAFT' ||
+    message['messageType'] == 'PROPOSAL';
 
 bool isRuleDraftMessage(Map<String, dynamic> message) =>
     message['messageType'] == 'RULE_DRAFT';
+
+bool isProposalMessage(Map<String, dynamic> message) =>
+    message['messageType'] == 'PROPOSAL';
+
+bool isExecutionResultMessage(Map<String, dynamic> message) =>
+    message['messageType'] == 'EXECUTION_RESULT';
+
+/// The status value that means "still needs a decision" for a given action
+/// draft message type. COMMAND_DRAFT/RULE_DRAFT start at 'DRAFT'; PROPOSAL
+/// starts at 'OPEN'.
+String pendingActionDraftStatus(Map<String, dynamic> message) =>
+    isProposalMessage(message) ? 'OPEN' : 'DRAFT';
 
 String? actionDraftIdFromMessage(Map<String, dynamic> message) {
   if (!isActionDraftMessage(message)) return null;
@@ -1180,6 +1195,32 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     });
   }
 
+  Future<void> _openProposal(String proposalId) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            ProposalPage(proposalId: proposalId, roomId: widget.roomId),
+      ),
+    );
+    if (_disposed) return;
+    final sessionId = _conversation.selectedSessionId;
+    if (sessionId != null) unawaited(_reloadMessagesForSession(sessionId));
+    unawaited(_refreshPendingProposals());
+  }
+
+  Future<void> _reloadMessagesForSession(String sessionId) async {
+    try {
+      final messages = await _listInitialMessages(sessionId);
+      if (_disposed || _conversation.selectedSessionId != sessionId) return;
+      setState(() {
+        _conversation = _conversation.withLoadedMessages(messages);
+      });
+    } catch (_) {
+      // Best-effort refresh after returning from the proposal review page;
+      // the periodic/realtime paths will catch up if this fails.
+    }
+  }
+
   Future<void> _refreshPendingProposals() async {
     try {
       final pendingProposals = await _listPendingProposals();
@@ -1467,6 +1508,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     unawaited(_confirmRuleDraft(draftId)),
                 onRejectRuleDraft: (draftId) =>
                     unawaited(_rejectRuleDraft(draftId)),
+                onOpenProposal: (proposalId) =>
+                    unawaited(_openProposal(proposalId)),
               );
             },
           ),
@@ -2113,6 +2156,7 @@ class _ChatBubble extends StatelessWidget {
     required this.onRejectDraft,
     required this.onConfirmRuleDraft,
     required this.onRejectRuleDraft,
+    required this.onOpenProposal,
   });
 
   final Map<String, dynamic> message;
@@ -2121,21 +2165,30 @@ class _ChatBubble extends StatelessWidget {
   final ValueChanged<String> onRejectDraft;
   final ValueChanged<String> onConfirmRuleDraft;
   final ValueChanged<String> onRejectRuleDraft;
+  final ValueChanged<String> onOpenProposal;
 
   @override
   Widget build(BuildContext context) {
     final fromUser = message['senderType'] == 'USER';
     final isDraft = isActionDraftMessage(message);
     final isRuleDraft = isRuleDraftMessage(message);
+    final isProposal = isProposalMessage(message);
+    final isExecutionResult = isExecutionResultMessage(message);
     final draftId = actionDraftIdFromMessage(message);
     final draftStatus = actionDraftStatusFromMessage(message);
+    final pendingStatus = pendingActionDraftStatus(message);
     final draftBusy = draftId != null && busyDraftIds.contains(draftId);
-    final keyPrefix = isRuleDraft ? 'chat-rule-draft' : 'chat-command-draft';
+    final keyPrefix = isProposal
+        ? 'chat-proposal'
+        : isRuleDraft
+        ? 'chat-rule-draft'
+        : 'chat-command-draft';
+    final highlighted = isDraft || isExecutionResult;
     final bubble = DecoratedBox(
       decoration: BoxDecoration(
         color: fromUser
             ? _desktopChatYellow
-            : isDraft
+            : highlighted
             ? const Color(0xFFEAF5FF)
             : Colors.white,
         borderRadius: BorderRadius.only(
@@ -2144,7 +2197,7 @@ class _ChatBubble extends StatelessWidget {
           bottomLeft: const Radius.circular(15),
           bottomRight: const Radius.circular(15),
         ),
-        border: isDraft
+        border: highlighted
             ? Border.all(color: const Color(0xFF7DAFC8), width: 1.2)
             : null,
       ),
@@ -2156,10 +2209,22 @@ class _ChatBubble extends StatelessWidget {
               : CrossAxisAlignment.start,
           children: [
             if (isDraft)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  isProposal ? '정리 제안' : '확인 카드',
+                  style: const TextStyle(
+                    color: Color(0xFF436577),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            if (isExecutionResult)
               const Padding(
                 padding: EdgeInsets.only(bottom: 4),
                 child: Text(
-                  '확인 카드',
+                  '실행 결과',
                   style: TextStyle(
                     color: Color(0xFF436577),
                     fontSize: 11,
@@ -2171,42 +2236,61 @@ class _ChatBubble extends StatelessWidget {
               message['content'] as String? ?? '',
               style: const TextStyle(color: Color(0xFF2D2500), height: 1.35),
             ),
+            if (isExecutionResult) ...[
+              const SizedBox(height: 6),
+              _ExecutionResultSummary(
+                payload: message['structuredPayload'],
+              ),
+            ],
             if (isDraft && draftId != null) ...[
               const SizedBox(height: 8),
-              if (draftStatus == 'DRAFT')
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    FilledButton(
-                      key: ValueKey('$keyPrefix-confirm-$draftId'),
-                      onPressed: draftBusy
-                          ? null
-                          : () => isRuleDraft
-                                ? onConfirmRuleDraft(draftId)
-                                : onConfirmDraft(draftId),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF436577),
-                        foregroundColor: Colors.white,
-                      ),
-                      child: draftBusy
-                          ? const SizedBox.square(
-                              dimension: 16,
-                              child: CheeseLoadingIndicator(size: 16),
-                            )
-                          : const Text('승인'),
-                    ),
-                    TextButton(
-                      key: ValueKey('$keyPrefix-reject-$draftId'),
-                      onPressed: draftBusy
-                          ? null
-                          : () => isRuleDraft
-                                ? onRejectRuleDraft(draftId)
-                                : onRejectDraft(draftId),
-                      child: const Text('거절'),
-                    ),
-                  ],
-                )
+              if (draftStatus == pendingStatus)
+                isProposal
+                    ? Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton(
+                          key: ValueKey('chat-proposal-review-$draftId'),
+                          onPressed: () => onOpenProposal(draftId),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF436577),
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('제안 검토'),
+                        ),
+                      )
+                    : Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        children: [
+                          FilledButton(
+                            key: ValueKey('$keyPrefix-confirm-$draftId'),
+                            onPressed: draftBusy
+                                ? null
+                                : () => isRuleDraft
+                                      ? onConfirmRuleDraft(draftId)
+                                      : onConfirmDraft(draftId),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF436577),
+                              foregroundColor: Colors.white,
+                            ),
+                            child: draftBusy
+                                ? const SizedBox.square(
+                                    dimension: 16,
+                                    child: CheeseLoadingIndicator(size: 16),
+                                  )
+                                : const Text('승인'),
+                          ),
+                          TextButton(
+                            key: ValueKey('$keyPrefix-reject-$draftId'),
+                            onPressed: draftBusy
+                                ? null
+                                : () => isRuleDraft
+                                      ? onRejectRuleDraft(draftId)
+                                      : onRejectDraft(draftId),
+                            child: const Text('거절'),
+                          ),
+                        ],
+                      )
               else
                 Chip(
                   key: ValueKey('$keyPrefix-status-$draftId'),
@@ -2255,6 +2339,36 @@ class _ChatBubble extends StatelessWidget {
                 ),
         ),
       ),
+    );
+  }
+}
+
+/// Read-only summary for an EXECUTION_RESULT message. No actions — the
+/// underlying proposal/decision was already resolved by the time this
+/// message exists.
+class _ExecutionResultSummary extends StatelessWidget {
+  const _ExecutionResultSummary({required this.payload});
+
+  final Object? payload;
+
+  @override
+  Widget build(BuildContext context) {
+    final data = payload;
+    if (data is! Map) return const SizedBox.shrink();
+    final status = data['status'];
+    final executed = data['executedCount'];
+    final skipped = data['skippedCount'];
+    final rejected = data['rejectedCount'];
+    final parts = <String>[
+      if (status is String) status,
+      if (executed is int) '완료 $executed',
+      if (skipped is int) '건너뜀 $skipped',
+      if (rejected is int) '거부 $rejected',
+    ];
+    if (parts.isEmpty) return const SizedBox.shrink();
+    return Chip(
+      label: Text(parts.join(' · ')),
+      visualDensity: VisualDensity.compact,
     );
   }
 }

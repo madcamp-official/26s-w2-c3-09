@@ -7,6 +7,20 @@ import type { z } from 'zod';
 
 export const AI_PROVIDER = Symbol('AI_PROVIDER');
 
+/**
+ * Cheap, best-effort room context the server already has in its own DB -
+ * NOT a live snapshot of the managed root's actual folder/file state (the
+ * server has no synchronous way to ask desktop for that; see the rule
+ * preview dry-run gap). Existing rule destinations are useful precedent for
+ * "does a folder like this already exist / get used" without claiming to
+ * know the filesystem.
+ */
+export type RoomContext = {
+  roomName: string;
+  rootAlias: string;
+  existingRules: { name: string; destinationTemplate: string | null }[];
+};
+
 export type ChatContext = {
   userId: string;
   roomId: string;
@@ -15,12 +29,14 @@ export type ChatContext = {
     id: string;
     content: string;
   };
+  room?: RoomContext | null;
 };
 
 export type RuleTranslationContext = {
   userId: string;
   roomId: string;
   instruction: string;
+  room?: RoomContext | null;
 };
 
 export type AiUnavailableResult = {

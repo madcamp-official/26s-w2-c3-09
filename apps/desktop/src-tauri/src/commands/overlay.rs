@@ -63,6 +63,17 @@ pub fn show_overlay_window(
             .to_string()
     })?;
     let _ = window.set_focus();
+    // Keep chat ready for the character tap without allowing it to steal focus at startup.
+    match app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
+        Some(chat_window) => {
+            let _ = chat_window.hide();
+        }
+        None => {
+            if let Err(error) = build_chat_overlay_window(app) {
+                eprintln!("failed to preload chat overlay: {error}");
+            }
+        }
+    }
     let status = runtime.mark_visible().map_err(|error| error.to_string())?;
 
     // The house/quick-view surface is secondary. It should never prevent the mouse character from
@@ -80,17 +91,6 @@ pub fn show_overlay_window(
         Err(error) => eprintln!("failed to create secondary house overlay: {error}"),
     }
 
-    // Keep chat ready for the character tap without allowing it to steal focus at startup.
-    match app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
-        Some(chat_window) => {
-            let _ = chat_window.hide();
-        }
-        None => {
-            if let Err(error) = build_chat_overlay_window(app) {
-                eprintln!("failed to preload chat overlay: {error}");
-            }
-        }
-    }
     Ok(status)
 }
 
@@ -264,9 +264,8 @@ fn position_house_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow)
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
-/// The chat panel lives in its own fixed-size window instead of resizing the mascot window. That
-/// removes the clipping/off-screen bugs that came from growing a `resizable(false)` overlay while
-/// the mascot was perched high on the house.
+/// The chat panel lives in its own window instead of resizing the mascot window. It starts at a
+/// comfortable default size, then stays user-resizable without affecting the mascot overlay.
 #[cfg(feature = "tauri-commands")]
 fn build_chat_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
     tauri::WebviewWindowBuilder::new(
@@ -276,7 +275,8 @@ fn build_chat_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWin
     )
     .title("MouseKeeper Chat")
     .inner_size(CHAT_OVERLAY_WIDTH as f64, CHAT_OVERLAY_HEIGHT as f64)
-    .resizable(false)
+    .min_inner_size(360.0, 280.0)
+    .resizable(true)
     .decorations(false)
     .transparent(false)
     .shadow(false)

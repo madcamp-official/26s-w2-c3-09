@@ -49,7 +49,6 @@ export const CHAT_OVERLAY_CLOSED_EVENT = "chat-overlay:closed";
 export const CHAT_ROOM_SELECTED_EVENT = "chat-overlay:room-selected";
 export const CHAT_AUTO_PROPOSAL_EVENT = "chat-overlay:auto-proposal";
 const CHAT_ROOM_SELECTION_STORAGE_KEY = "mousekeeper.chatOverlay.selectedRootId";
-const CHAT_AUTO_PROPOSALS_STORAGE_KEY = "mousekeeper.chatOverlay.autoProposals";
 /// Fired by the overlay chat input. This is the ONLY thing overlay chat can do: hand a bounded
 /// text draft to the app for the draft/proposal flow (plan item 12). It never runs a file op.
 export const OVERLAY_DRAFT_REQUEST_EVENT = "overlay:draft-request";
@@ -116,22 +115,13 @@ export function listenForChatRoomSelection(handler: (selection: ChatRoomSelectio
 
 export async function publishChatAutoProposal(proposal: AutoCleanupProposalEvent) {
   if (proposal.proposal.proposals.length === 0) return;
-  persistChatAutoProposal(proposal);
   if (window.__TAURI_INTERNALS__) {
     await emit(CHAT_AUTO_PROPOSAL_EVENT, proposal).catch(() => undefined);
   }
 }
 
 export function readChatAutoProposals(): AutoCleanupProposalEvent[] {
-  try {
-    const raw = window.localStorage.getItem(CHAT_AUTO_PROPOSALS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isAutoCleanupProposalEvent);
-  } catch {
-    return [];
-  }
+  return [];
 }
 
 export function listenForChatAutoProposals(handler: (proposal: AutoCleanupProposalEvent) => void) {
@@ -204,38 +194,6 @@ function persistChatRoomSelection(selection: ChatRoomSelection) {
     } else {
       window.localStorage.removeItem(CHAT_ROOM_SELECTION_STORAGE_KEY);
     }
-  } catch {
-    /* localStorage may be unavailable in tests or restricted browser previews */
-  }
-}
-
-function persistChatAutoProposal(proposal: AutoCleanupProposalEvent) {
-  try {
-    const localKey = JSON.stringify({
-      rootId: proposal.root_id,
-      items: proposal.proposal.proposals.map((item) => [
-        item.proposal_id,
-        item.action,
-        item.from,
-        item.to
-      ])
-    });
-    const next = [
-      proposal,
-      ...readChatAutoProposals().filter((item) => {
-        const itemKey = JSON.stringify({
-          rootId: item.root_id,
-          items: item.proposal.proposals.map((proposalItem) => [
-            proposalItem.proposal_id,
-            proposalItem.action,
-            proposalItem.from,
-            proposalItem.to
-          ])
-        });
-        return itemKey !== localKey;
-      })
-    ].slice(0, 20);
-    window.localStorage.setItem(CHAT_AUTO_PROPOSALS_STORAGE_KEY, JSON.stringify(next));
   } catch {
     /* localStorage may be unavailable in tests or restricted browser previews */
   }

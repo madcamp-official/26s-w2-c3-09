@@ -928,10 +928,15 @@ body.overlay-body .room-chat-panel {
 body.overlay-body .room-chat-quickbar {
   grid-row: 2;
   display: flex;
+  align-items: center;
   gap: 6px;
+  min-height: 38px;
+  min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   background: #b7d7ea;
   padding: 7px 8px 2px;
+  scrollbar-gutter: stable;
 }
 
 body.overlay-body .room-chat-quickbar button {
@@ -1180,6 +1185,34 @@ body.overlay-body .room-chat-draft-hint {
   line-height: 1.25;
 }
 
+body.overlay-body .room-chat-rule-summary {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(32, 40, 48, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 7px 8px;
+}
+
+body.overlay-body .room-chat-rule-summary strong {
+  color: #26313b;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+body.overlay-body .room-chat-rule-summary span {
+  color: rgba(32, 40, 48, 0.72);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+body.overlay-body .room-chat-rule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 body.overlay-body .room-chat-draft-approve {
   min-height: 28px;
   border: 0;
@@ -1194,6 +1227,24 @@ body.overlay-body .room-chat-draft-approve {
 }
 
 body.overlay-body .room-chat-draft-approve:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+body.overlay-body .room-chat-draft-reject {
+  min-height: 28px;
+  border: 1px solid rgba(32, 40, 48, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.88);
+  color: rgba(32, 40, 48, 0.72);
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 800;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+body.overlay-body .room-chat-draft-reject:disabled {
   cursor: default;
   opacity: 0.55;
 }

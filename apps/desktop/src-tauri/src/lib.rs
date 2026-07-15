@@ -168,6 +168,8 @@ pub fn run() {
             commands::agent::process_agent_commands,
             commands::agent::process_agent_decisions,
             commands::agent::approve_agent_command_draft_and_execute,
+            commands::agent::confirm_agent_rule_draft,
+            commands::agent::reject_agent_rule_draft,
             commands::agent::list_agent_open_proposals,
             commands::agent::approve_agent_open_proposal_and_execute,
             commands::agent::process_agent_file_browse_requests,

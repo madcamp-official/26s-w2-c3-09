@@ -332,7 +332,7 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use super::{build_local_proposal_report, summarize_execution};
+    use super::{build_local_proposal_report, summarize_execution, TRASH_DIR};
     use crate::agent::AgentProposalItemRecord;
 
     fn move_item(order: i64, from: &str, to: &str) -> AgentProposalItemRecord {
@@ -378,6 +378,68 @@ mod tests {
             }),
             conflict_state: "NONE".to_string(),
         }
+    }
+
+    /// Builds a QUARANTINE (server wire name for the local Trash action, see
+    /// command_processor::proposal_item()) item whose precondition matches the file's actual
+    /// on-disk state, mirroring a chat- or rule-originated TRASH command by the time it reaches
+    /// delegated execution.
+    fn quarantine_item_matching_disk(
+        root: &std::path::Path,
+        order: i64,
+        from: &str,
+    ) -> AgentProposalItemRecord {
+        let metadata = fs::metadata(root.join(from)).expect("seeded file metadata");
+        let modified_unix_ms = metadata
+            .modified()
+            .expect("mtime")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("mtime after epoch")
+            .as_millis() as u64;
+        let source_file_id =
+            file_engine_cli::file_identity::file_id_for_path(&root.join(from)).expect("file id");
+        AgentProposalItemRecord {
+            item_order: order,
+            action_type: "QUARANTINE".to_string(),
+            source_relative_path: Some(from.to_string()),
+            destination_relative_path: None,
+            reason_code: "USER_REQUESTED_TRASH_REASON".to_string(),
+            precondition: json!({
+                "sourceSizeBytes": metadata.len(),
+                "sourceModifiedUnixMs": modified_unix_ms,
+                "sourceFileId": source_file_id
+            }),
+            conflict_state: "NONE".to_string(),
+        }
+    }
+
+    #[test]
+    fn approved_decision_executes_trash_and_moves_file_into_mousekeeper_trash() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::write(root.join("a.pdf"), b"pdf").expect("seed file");
+
+        let items = vec![quarantine_item_matching_disk(root, 0, "a.pdf")];
+        let report = build_local_proposal_report(root, &items).expect("local trash proposal");
+
+        let application = DecisionApplication {
+            approved: report,
+            rejected: Vec::new(),
+        };
+        let execute_report =
+            execute_decision_application(root, application).expect("execute trash");
+
+        assert_eq!(execute_report.executed_count, 1);
+        assert!(!root.join("a.pdf").exists());
+        // Trash nests each trashed file under a per-operation subfolder of TRASH_DIR
+        // (file_engine_cli::trash::trash_file), so assert against the reported destination
+        // rather than a fixed TRASH_DIR/<name> path.
+        let trashed_to = &execute_report.results[0].to;
+        assert!(trashed_to.starts_with(TRASH_DIR));
+        assert!(root.join(trashed_to).is_file());
+
+        let (status, _) = summarize_execution(&execute_report);
+        assert_eq!(status, "SUCCEEDED");
     }
 
     #[test]

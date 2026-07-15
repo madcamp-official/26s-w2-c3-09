@@ -176,6 +176,7 @@ export class OpenAiResponsesProvider implements AiProvider {
         sessionId: input.sessionId,
         sourceMessageId: input.sourceMessage.id,
         userMessage: input.sourceMessage.content,
+        roomContext: input.room,
       }),
     });
     if (result.status === 'UNCONFIGURED') return this.unconfigured();
@@ -257,6 +258,7 @@ export class OpenAiResponsesProvider implements AiProvider {
       input: JSON.stringify({
         roomId: input.roomId,
         instruction: input.instruction,
+        roomContext: input.room,
       }),
     });
     if (result.status === 'UNCONFIGURED') return this.unconfigured();
@@ -425,10 +427,19 @@ function commandInstructions() {
     '- If a request both defines a rule and asks for an action: prefer RULE_DRAFT when they say to remember/automate it, COMMAND_DRAFT when they want it done once now.',
     '- When genuinely torn between two kinds, pick the least destructive (QUERY over COMMAND_DRAFT, NO_ACTION over a wrong COMMAND_DRAFT) and record the doubt in ambiguities.',
     'Never emit COMMAND_DRAFT for a write unless the intent is explicit enough for a later approval card; otherwise return NO_ACTION.',
-    'For QUERY, put createFileBrowseRequestSchema JSON in browseJson. Use relativeDirectory "" for the managed root, cursor null, and searchScope MANAGED_ROOT unless the user names a subfolder.',
-    'For RULE_DRAFT, put the Rule DSL JSON in definitionJson and leave intent NONE, argumentsJson "{}", confirmationSummary empty, and browseJson "{}".',
+    'Payload contract examples:',
+    '- TRASH: argumentsJson {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"]}. Use only user-provided relative paths. If no concrete path is given, return NO_ACTION and ask which file.',
+    '- MOVE: argumentsJson {"rootId":"root:<alias>","sourceRelativePaths":["relative/file.ext"],"destinationRelativeDirectory":"Archive"}.',
+    '- CREATE folder: argumentsJson {"rootId":"root:<alias>","kind":"DIRECTORY","relativePath":"New Folder"}. CREATE file uses kind "FILE".',
+    '- ORGANIZE: argumentsJson {"rootId":"root:<alias>","scopeRelativePath":"","instruction":"the user request"}.',
+    '- ANALYZE: argumentsJson {}.',
+    'Use "root:downloads" as the default rootId unless the user names another connected root alias. Never invent absolute local paths.',
+    'For QUERY, put createFileBrowseRequestSchema JSON in browseJson: {"relativeDirectory":"","cursor":null,"query":"docs","extensions":[],"limit":25,"searchScope":"MANAGED_ROOT"}. Use searchScope MANAGED_ROOT unless the user explicitly asks only for the current folder. For Korean/English broad terms like "문서", "docs", "documents", use query "docs" or the literal search word and omit extensions unless the user specifies file types.',
+    'For RULE_DRAFT, put the Rule DSL JSON in definitionJson and leave intent NONE, argumentsJson "{}", confirmationSummary empty, and browseJson "{}". Rule DSL examples: move PDFs => {"match":"ALL","conditions":[{"field":"extension","operator":"IN","value":[".pdf"]}],"action":{"type":"MOVE","destinationTemplate":"Archive/PDF"}}; trash temp files => {"match":"ALL","conditions":[{"field":"name","operator":"ENDS_WITH","value":".tmp"}],"action":{"type":"TRASH"}}.',
     'For COMMAND_DRAFT ANALYZE, use intent ANALYZE, argumentsJson "{}", and a confirmationSummary that says the PC will analyze and propose cleanup, not execute changes.',
     'Valid command intents are the MouseKeeper server contract intents.',
+    'The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is NOT a live filesystem listing - never claim to know what files or folders currently exist from it. Use it only to: prefer the room\'s own rootAlias as the default rootId when set; recognize when a new RULE_DRAFT duplicates or conflicts with an existingRules entry (mention this briefly in explanation/ambiguities rather than silently proceeding); and reuse an existing rule\'s destinationTemplate wording when the user clearly means the same folder.',
+    'A rule\'s destinationTemplate folder does not need to already exist — never refuse or ask a clarification question just because you cannot confirm a destination folder exists. Only ask a clarification question for genuinely missing information (which file, which condition, which destination) as instructed above.',
   ].join('\n');
 }
 
@@ -441,5 +452,8 @@ function ruleInstructions() {
     'Voice: you play a small, friendly house-mouse mascot. Write the `reply` field in Korean with a light squeaky-mouse flavor (an occasional soft "찍!"/"찍찍"), warm and short, and drop it for refusals. Keep name and explanation plain and precise.',
     'If the request lacks a clear condition or action, return REFUSE.',
     'Use only the MouseKeeper rule definition fields allowed by the server contract.',
+    'Rule DSL examples: move PDFs => {"match":"ALL","conditions":[{"field":"extension","operator":"IN","value":[".pdf"]}],"action":{"type":"MOVE","destinationTemplate":"Archive/PDF"}}; trash temp files => {"match":"ALL","conditions":[{"field":"name","operator":"ENDS_WITH","value":".tmp"}],"action":{"type":"TRASH"}}.',
+    'The input includes an optional roomContext: {roomName, rootAlias, existingRules: [{name, destinationTemplate}]}. It is not a live filesystem listing. Use existingRules only to avoid drafting an obvious duplicate of an existing rule and to reuse consistent destinationTemplate wording; note a likely duplicate briefly in explanation rather than refusing.',
+    'A destinationTemplate folder does not need to already exist on disk - never refuse a rule just because you cannot confirm the destination folder exists.',
   ].join('\n');
 }

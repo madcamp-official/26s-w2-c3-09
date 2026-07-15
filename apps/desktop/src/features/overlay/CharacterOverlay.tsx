@@ -90,6 +90,14 @@ type HouseDropTarget = { active: boolean };
 
 const HOUSE_FOOT_OFFSET = { x: 0.5, y: 0.82 } as const;
 const DRAG_THRESHOLD_PX = 10;
+const TRANSIENT_EVENT_IDLE_DELAYS_MS: Partial<Record<CharacterEventKind, number>> = {
+  CONNECTING: 8000,
+  ANALYZING: 8000,
+  WORKING: 8000,
+  USER_WORKING: 8000,
+  SUCCESS: 4500,
+  ERROR: 6500
+};
 
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
@@ -119,6 +127,19 @@ export function CharacterOverlay() {
       void unlisten.then((off) => off());
     };
   }, []);
+
+  useEffect(() => {
+    const delay = TRANSIENT_EVENT_IDLE_DELAYS_MS[event.kind];
+    if (!delay) return;
+    const eventKey = `${event.kind}:${event.correlation_id ?? ""}:${event.message ?? ""}`;
+    const timer = window.setTimeout(() => {
+      setEvent((current) => {
+        const currentKey = `${current.kind}:${current.correlation_id ?? ""}:${current.message ?? ""}`;
+        return currentKey === eventKey ? { kind: "IDLE" } : current;
+      });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [event.kind, event.correlation_id, event.message]);
 
   // Any window may hide chat (close button, house menu, drag start); keep wander/toggle in sync.
   useEffect(() => {
