@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use file_engine_cli::analyzer::{analyze_root as analyze_file_root, AnalyzeReport};
 use file_engine_cli::auto_approval::auto_approve_decisions;
 use file_engine_cli::browse::{browse_root, BrowseReport};
-use file_engine_cli::decision::{apply_decisions, DecisionApplication, DecisionEntry};
+use file_engine_cli::decision::{apply_decisions, Decision, DecisionApplication, DecisionEntry};
 use file_engine_cli::execute::{execute_decision_application, ExecuteReport};
 use file_engine_cli::file_index::{list_index, reindex_root, search_index, FileIndexReport};
 use file_engine_cli::file_ops::{
@@ -50,6 +50,14 @@ pub struct UnregisterManagedRootReport {
     pub server_message: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct ChatAutoCleanupExecutionReport {
+    pub root_id: String,
+    pub approved_count: usize,
+    pub precheck: PrecheckReport,
+    pub execution: ExecuteReport,
+}
+
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn register_managed_root(
@@ -57,7 +65,7 @@ pub fn register_managed_root(
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<ManagedRoot, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     register_managed_root_in_store(path, &store)
 }
 
@@ -88,7 +96,7 @@ pub fn update_managed_root_state(
     store: tauri::State<'_, ManagedRootStore>,
     watchers: tauri::State<'_, WatcherStore>,
 ) -> Result<ManagedRoot, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     update_managed_root_state_impl(root_id, patch, &store, Some(&watchers))
 }
 
@@ -113,7 +121,7 @@ pub async fn unregister_managed_root(
     auto_approval: tauri::State<'_, AutoApprovalStore>,
     watchers: tauri::State<'_, WatcherStore>,
 ) -> Result<UnregisterManagedRootReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     unregister_managed_root_impl(
         root_id,
         idempotency_key,
@@ -192,7 +200,7 @@ async fn unregister_managed_root_impl(
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn prepare_demo_root(window: tauri::Window) -> Result<String, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     prepare_demo_root_impl()
 }
 
@@ -363,7 +371,7 @@ pub fn calculate_cleanliness_snapshot(
 }
 
 /// Local validation of an AI/rule-draft (plan item 12). Strictly parses and validates a candidate
-/// Rule DSL draft without touching the filesystem — B's desktop AI code can call this to reject a
+/// Rule DSL draft without touching the filesystem; B's desktop AI code can call this to reject a
 /// bad draft before it ever enters the command/proposal pipeline. Validation only: it never reads
 /// the disk, computes targets, or mutates anything.
 #[cfg(feature = "tauri-commands")]
@@ -411,7 +419,7 @@ pub fn update_auto_approval_policy(
     roots: tauri::State<'_, ManagedRootStore>,
     policies: tauri::State<'_, AutoApprovalStore>,
 ) -> Result<AutoApprovalPolicyRecord, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     update_auto_approval_policy_impl(root_id, patch, &roots, &policies)
 }
 
@@ -434,7 +442,7 @@ pub fn auto_approve_file_changes(
     roots: tauri::State<'_, ManagedRootStore>,
     policies: tauri::State<'_, AutoApprovalStore>,
 ) -> Result<Vec<DecisionEntry>, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     auto_approve_file_changes_impl(root_id, proposal, &roots, &policies)
 }
 
@@ -481,7 +489,7 @@ pub fn execute_file_changes(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<ExecuteReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     execute_file_changes_impl(root, proposal, decisions)
@@ -500,6 +508,31 @@ pub fn execute_file_changes(
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
+pub fn approve_auto_cleanup_proposal_from_chat(
+    root_id: String,
+    proposal: ProposalReport,
+    window: tauri::Window,
+    store: tauri::State<'_, ManagedRootStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
+) -> Result<ChatAutoCleanupExecutionReport, String> {
+    crate::commands::permissions::require_chat_approval_window(&window)?;
+    let root = resolve_root_id(&store, &root_id)?;
+    let _permit = limiter.try_write()?;
+    approve_auto_cleanup_proposal_from_chat_impl(root_id, root, proposal)
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub fn approve_auto_cleanup_proposal_from_chat(
+    root_id: String,
+    proposal: ProposalReport,
+    store: &ManagedRootStore,
+) -> Result<ChatAutoCleanupExecutionReport, String> {
+    let root = resolve_root_id(store, &root_id)?;
+    approve_auto_cleanup_proposal_from_chat_impl(root_id, root, proposal)
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
 pub fn trash_file(
     root_id: String,
     path: String,
@@ -507,7 +540,7 @@ pub fn trash_file(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<TrashReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     trash_file_impl(root, path)
@@ -532,7 +565,7 @@ pub fn create_file(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CreateFileReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     create_file_impl(root, path)
@@ -558,7 +591,7 @@ pub fn rename_file(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<RenameFileReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     rename_file_impl(root, path, new_name)
@@ -583,7 +616,7 @@ pub fn undo_last_file_operation(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     undo_last_file_operation_impl(root)
@@ -607,7 +640,7 @@ pub fn undo_operation(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     undo_operation_impl(root, operation_id)
@@ -650,7 +683,7 @@ pub fn recover_journal(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<JournalRecoveryReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     recover_journal_impl(root)
@@ -855,6 +888,38 @@ fn execute_file_changes_impl(
 ) -> Result<ExecuteReport, String> {
     apply_decisions_for_command(proposal, decisions).and_then(|application| {
         execute_decision_application(root, application).map_err(command_error)
+    })
+}
+
+fn approve_auto_cleanup_proposal_from_chat_impl(
+    root_id: String,
+    root: String,
+    proposal: ProposalReport,
+) -> Result<ChatAutoCleanupExecutionReport, String> {
+    if proposal.root != root {
+        return Err("proposal root does not match the selected managed root".to_string());
+    }
+    if proposal.proposals.is_empty() {
+        return Err("auto cleanup proposal has no items to approve".to_string());
+    }
+
+    let decisions = proposal
+        .proposals
+        .iter()
+        .map(|item| DecisionEntry {
+            proposal_id: item.proposal_id.clone(),
+            decision: Decision::Approved,
+            reason: None,
+        })
+        .collect::<Vec<_>>();
+    let precheck = precheck_file_changes_impl(root.clone(), proposal.clone(), decisions.clone())?;
+    let execution = execute_file_changes_impl(root, proposal, decisions)?;
+
+    Ok(ChatAutoCleanupExecutionReport {
+        root_id,
+        approved_count: precheck.checks.len(),
+        precheck,
+        execution,
     })
 }
 

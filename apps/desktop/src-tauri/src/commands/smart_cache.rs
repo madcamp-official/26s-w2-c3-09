@@ -16,7 +16,7 @@ pub fn record_smart_cache_usage_event(
     window: tauri::Window,
     store: tauri::State<'_, SmartCacheStore>,
 ) -> Result<SmartCacheUsageEvent, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     store.record_usage_event(draft)
 }
 
@@ -37,7 +37,7 @@ pub fn update_smart_cache_file_preference(
     window: tauri::Window,
     store: tauri::State<'_, SmartCacheStore>,
 ) -> Result<SmartCacheFilePreference, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     store.update_file_preference(root_id, relative_path, patch)
 }
 
@@ -59,7 +59,7 @@ pub fn list_smart_cache_candidates(
     window: tauri::Window,
     store: tauri::State<'_, SmartCacheStore>,
 ) -> Result<Vec<SmartCacheCandidate>, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     store.list_candidates(root_id, limit.unwrap_or(25))
 }
 
@@ -75,7 +75,7 @@ pub async fn process_smart_cache_for_room(
     outbox: tauri::State<'_, OutboxStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<SmartCacheProcessingReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let _permit = limiter.try_transfer()?;
     crate::smart_cache_processor::process_smart_cache_for_room(
         &runtime,

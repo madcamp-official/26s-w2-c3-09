@@ -210,7 +210,7 @@ pub async fn process_commands(
     };
 
     for command in commands {
-        if command.status != "QUEUED" {
+        if !is_processable_command_status(&command.status) {
             report.skipped_count += 1;
             report.results.push(CommandProcessingResult {
                 command_id: command.command_id,
@@ -228,18 +228,24 @@ pub async fn process_commands(
         if is_contract_command_without_desktop_handler(&command) {
             report.processed_count += 1;
             report.failed_count += 1;
-            let sync_error = enqueue_command_status(outbox, &command.command_id, "FAILED").err();
+            let claim_error = claim_command_for_analysis(agent, &command).await.err();
+            let sync_error = if claim_error.is_none() {
+                enqueue_command_status(outbox, &command.command_id, "FAILED").err()
+            } else {
+                None
+            };
             report.results.push(CommandProcessingResult {
                 command_id: command.command_id,
                 command_type: command.command_type,
                 status: CommandProcessingStatus::Failed,
-                message: Some(match sync_error {
-                    Some(error) => format!(
+                message: Some(match (claim_error, sync_error) {
+                    (Some(error), _) => format!(
+                        "command intent is not yet handled by the desktop processor; additionally failed to claim command for failure reporting: {error}"
+                    ),
+                    (None, Some(error)) => format!(
                         "command intent is not yet handled by the desktop processor; additionally failed to queue FAILED status: {error}"
                     ),
-                    None => {
-                        "command intent is not yet handled by the desktop processor".to_string()
-                    }
+                    (None, None) => "command intent is not yet handled by the desktop processor".to_string(),
                 }),
                 proposal_item_count: 0,
             });
@@ -299,6 +305,41 @@ pub async fn process_commands(
     Ok(report)
 }
 
+fn is_processable_command_status(status: &str) -> bool {
+    matches!(status, "QUEUED" | "DELIVERED" | "ANALYZING")
+}
+
+pub(crate) async fn claim_command_for_analysis(
+    agent: &AgentRuntime,
+    command: &AgentCommand,
+) -> Result<(), String> {
+    match command.status.as_str() {
+        "QUEUED" => {
+            agent
+                .update_command_status(command.command_id.clone(), "DELIVERED".to_string())
+                .await
+                .map_err(|error| error.to_string())?;
+            agent
+                .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        "DELIVERED" => {
+            agent
+                .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        }
+        "ANALYZING" => Ok(()),
+        _ => Err(format!(
+            "command status is not claimable for analysis: {}",
+            command.status
+        )),
+    }
+}
+
 async fn process_create_command(
     agent: &AgentRuntime,
     roots: &ManagedRootStore,
@@ -307,10 +348,7 @@ async fn process_create_command(
 ) -> Result<usize, String> {
     let payload = parse_create_payload(command)?;
 
-    agent
-        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
-        .await
-        .map_err(|error| error.to_string())?;
+    claim_command_for_analysis(agent, command).await?;
 
     let room = agent
         .root_id_for_room(command.room_id.clone())
@@ -343,10 +381,7 @@ async fn process_trash_command(
 ) -> Result<usize, String> {
     let payload = parse_trash_payload(command)?;
 
-    agent
-        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
-        .await
-        .map_err(|error| error.to_string())?;
+    claim_command_for_analysis(agent, command).await?;
 
     let room = agent
         .root_id_for_room(command.room_id.clone())
@@ -379,10 +414,7 @@ async fn process_move_command(
 ) -> Result<usize, String> {
     let payload = parse_move_payload(command)?;
 
-    agent
-        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
-        .await
-        .map_err(|error| error.to_string())?;
+    claim_command_for_analysis(agent, command).await?;
 
     let room = agent
         .root_id_for_room(command.room_id.clone())
@@ -418,10 +450,7 @@ async fn process_rename_command(
     // Claim the command before local disk inspection so a slow proposal cannot be polled and
     // processed twice. This still performs no file mutation; it only moves the server command into
     // the same analysis/proposal path used by organize commands.
-    agent
-        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
-        .await
-        .map_err(|error| error.to_string())?;
+    claim_command_for_analysis(agent, command).await?;
 
     let room = agent
         .root_id_for_room(command.room_id.clone())
@@ -457,10 +486,7 @@ async fn process_organize_command(
 
     // ANALYZING stays a synchronous claim: it moves the command out of QUEUED so it is not polled
     // and re-processed again before the proposal is built. (Symmetric with the execution claim.)
-    agent
-        .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
-        .await
-        .map_err(|error| error.to_string())?;
+    claim_command_for_analysis(agent, command).await?;
 
     let room = agent
         .root_id_for_room(command.room_id.clone())
@@ -1726,7 +1752,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fails_contract_commands_that_are_not_wired_yet() {
+    async fn unwired_contract_commands_fail_without_faking_server_status_sync() {
         let runtime = AgentRuntime::default();
         let roots = ManagedRootStore::default();
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1782,11 +1808,16 @@ mod tests {
             .results
             .iter()
             .all(|result| result.status == CommandProcessingStatus::Failed));
+        // The unconfigured runtime cannot claim these commands on the server. Queuing a terminal
+        // status anyway would falsely imply that the server accepted the transition.
         let batch = outbox.pending_batch(10).expect("pending status rows");
-        assert_eq!(batch.len(), 3);
-        assert!(batch
+        assert!(batch.is_empty());
+        assert!(report
+            .results
             .iter()
-            .all(|item| item.kind == "command_status" && item.payload_json.contains("FAILED")));
+            .all(|result| result.message.as_deref().is_some_and(|message| {
+                message.contains("failed to claim command for failure reporting")
+            })));
     }
 
     #[test]

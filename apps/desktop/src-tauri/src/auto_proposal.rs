@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::agent::AgentRuntime;
 use crate::auto_cleanup_processor::AutoCleanupReport;
-use crate::command_processor::build_agent_proposal_submission;
+use crate::command_processor::{build_agent_proposal_submission, claim_command_for_analysis};
 use crate::storage::managed_roots::{ManagedRootStore, RoomBindingStatus};
 
 const AUTO_PROPOSAL_INTENT: &str = "ANALYZE";
@@ -100,20 +100,16 @@ async fn submit_one(
             room_id,
             AUTO_PROPOSAL_INTENT.to_string(),
             serde_json::json!({}),
-            format!("autocmd-{root_id}-{fingerprint}"),
+            auto_proposal_key("autocmd", root_id, &fingerprint),
         )
         .await
         .map_err(|error| error.to_string())?;
     match command.status.as_str() {
-        "QUEUED" => {
-            agent
-                .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
-                .await
-                .map_err(|error| error.to_string())?;
+        "QUEUED" | "DELIVERED" | "ANALYZING" => {
+            // A previous status update may have committed before its response was lost. Resume
+            // with the same proposal key instead of creating a second command.
+            claim_command_for_analysis(agent, &command).await?;
         }
-        // A previous status update may have committed before its response was lost. Resume with
-        // the same proposal key instead of creating a second command.
-        "ANALYZING" => {}
         "WAITING_APPROVAL"
         | "APPROVED"
         | "REJECTED"
@@ -141,11 +137,28 @@ async fn submit_one(
         }
     }
     agent
-        .submit_proposal(format!("autoprop-{root_id}-{fingerprint}"), submission)
+        .submit_proposal(
+            auto_proposal_key("autoprop", root_id, &fingerprint),
+            submission,
+        )
         .await
         .map_err(|error| error.to_string())?;
 
     Ok(true)
+}
+
+fn auto_proposal_key(prefix: &str, root_id: &str, fingerprint: &str) -> String {
+    let root = root_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("{prefix}-{root}-{fingerprint}")
 }
 
 fn proposal_fingerprint(root_id: &str, proposal: &ProposalReport) -> Result<String, String> {
@@ -166,7 +179,7 @@ fn proposal_fingerprint(root_id: &str, proposal: &ProposalReport) -> Result<Stri
 mod tests {
     use file_engine_cli::proposal::{Proposal, ProposalAction, ProposalReport, ProposalStatus};
 
-    use super::{proposal_fingerprint, should_submit_to_mobile};
+    use super::{auto_proposal_key, proposal_fingerprint, should_submit_to_mobile};
 
     #[test]
     fn submits_every_non_empty_proposal() {
@@ -205,5 +218,16 @@ mod tests {
             same,
             proposal_fingerprint("root-1", &changed).expect("changed fingerprint")
         );
+    }
+
+    #[test]
+    fn auto_proposal_keys_are_safe_for_agent_idempotency_validation() {
+        let key = auto_proposal_key("autocmd", "root:cafe", &"a".repeat(64));
+
+        assert!(key
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')));
+        assert!(key.len() <= 128);
+        assert!(key.starts_with("autocmd-root_cafe-"));
     }
 }

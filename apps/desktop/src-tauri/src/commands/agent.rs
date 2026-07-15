@@ -1,9 +1,12 @@
 use crate::agent::{
     AgentChatMessage, AgentChatQuickCleanupResult, AgentChatQuickView, AgentChatSendResult,
-    AgentChatSession, AgentCommand, AgentConnectionStatus, AgentRoomSnapshot, AgentRoomSync,
+    AgentChatSession, AgentCommand, AgentCommandDraftConfirmation, AgentConnectionStatus,
+    AgentDecision, AgentOpenProposal, AgentProposalDetails, AgentRoomSnapshot, AgentRoomSync,
     AgentRuntime, HeartbeatResult, PairingSession, PairingStatus, SyncEvent,
 };
 use crate::cleanliness::{calculate_cleanliness_snapshot, CleanlinessSnapshot};
+#[cfg(feature = "tauri-commands")]
+use crate::command_processor::{process_commands, CommandProcessingStatus};
 use crate::command_processor::{process_pending_commands, CommandProcessingReport};
 use crate::execution_processor::{process_pending_decisions, DecisionProcessingReport};
 use crate::file_browse_processor::{
@@ -52,6 +55,25 @@ pub struct RoomDisconnectReport {
     pub watcher_stopped: bool,
     pub index_cleared: bool,
     pub undoable_operation_count: usize,
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct ChatCommandDraftExecutionReport {
+    pub draft: AgentCommandDraftConfirmation,
+    pub command_report: CommandProcessingReport,
+    pub proposal: AgentProposalDetails,
+    pub decision: AgentDecision,
+    pub execution_report: DecisionProcessingReport,
+    pub proposal_outbox_report: crate::outbox_processor::OutboxFlushReport,
+    pub execution_outbox_report: crate::outbox_processor::OutboxFlushReport,
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq)]
+pub struct ChatProposalExecutionReport {
+    pub proposal: AgentProposalDetails,
+    pub decision: AgentDecision,
+    pub execution_report: DecisionProcessingReport,
+    pub execution_outbox_report: crate::outbox_processor::OutboxFlushReport,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,6 +300,240 @@ pub async fn flush_agent_outbox(
     outbox: &OutboxStore,
 ) -> Result<crate::outbox_processor::OutboxFlushReport, String> {
     crate::outbox_processor::flush_outbox(runtime, outbox).await
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn approve_agent_command_draft_and_execute(
+    draft_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+    outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
+) -> Result<ChatCommandDraftExecutionReport, String> {
+    approve_agent_command_draft_and_execute_impl(
+        draft_id,
+        room_id,
+        idempotency_key,
+        &runtime,
+        &roots,
+        &outbox,
+        &limiter,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn approve_agent_command_draft_and_execute_impl(
+    draft_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    limiter: &WorkLimiter,
+) -> Result<ChatCommandDraftExecutionReport, String> {
+    let confirm_key = scoped_chat_approval_key("confirm", &idempotency_key)?;
+    let decision_key = scoped_chat_approval_key("decision", &idempotency_key)?;
+    let draft = runtime
+        .confirm_command_draft(draft_id, confirm_key)
+        .await
+        .map_err(|error| error.to_string())?;
+    let command = draft.command.clone().ok_or_else(|| {
+        "COMMAND_DRAFT_NOT_EXECUTABLE: this draft did not materialize a desktop command".to_string()
+    })?;
+    if command.room_id != room_id {
+        return Err(
+            "COMMAND_ROOM_MISMATCH: confirmed command belongs to a different room".to_string(),
+        );
+    }
+
+    let command_report = {
+        let _permit = limiter.try_scan()?;
+        process_commands(runtime, roots, outbox, vec![command.clone()]).await?
+    };
+    ensure_chat_command_submitted(&command_report, &command.command_id)?;
+    let proposal_outbox_report = crate::outbox_processor::flush_outbox(runtime, outbox).await?;
+    let proposal = proposal_for_command(runtime, room_id, command.command_id.clone()).await?;
+    let executed = approve_proposal_details_and_execute(
+        proposal.clone(),
+        decision_key,
+        runtime,
+        roots,
+        outbox,
+        limiter,
+    )
+    .await?;
+
+    Ok(ChatCommandDraftExecutionReport {
+        draft,
+        command_report,
+        proposal,
+        decision: executed.decision,
+        execution_report: executed.execution_report,
+        proposal_outbox_report,
+        execution_outbox_report: executed.execution_outbox_report,
+    })
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn list_agent_open_proposals(
+    room_id: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+) -> Result<Vec<AgentOpenProposal>, String> {
+    runtime
+        .open_proposals_for_room(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(feature = "tauri-commands"))]
+pub async fn list_agent_open_proposals(
+    runtime: &AgentRuntime,
+    room_id: String,
+) -> Result<Vec<AgentOpenProposal>, String> {
+    runtime
+        .open_proposals_for_room(room_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub async fn approve_agent_open_proposal_and_execute(
+    proposal_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: tauri::State<'_, AgentRuntime>,
+    roots: tauri::State<'_, ManagedRootStore>,
+    outbox: tauri::State<'_, OutboxStore>,
+    limiter: tauri::State<'_, WorkLimiter>,
+) -> Result<ChatProposalExecutionReport, String> {
+    approve_agent_open_proposal_and_execute_impl(
+        proposal_id,
+        room_id,
+        idempotency_key,
+        &runtime,
+        &roots,
+        &outbox,
+        &limiter,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn approve_agent_open_proposal_and_execute_impl(
+    proposal_id: String,
+    room_id: String,
+    idempotency_key: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    limiter: &WorkLimiter,
+) -> Result<ChatProposalExecutionReport, String> {
+    let proposal = runtime
+        .get_proposal(proposal_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    if proposal.room_id != room_id {
+        return Err("PROPOSAL_ROOM_MISMATCH: proposal belongs to a different room".to_string());
+    }
+    let decision_key = scoped_chat_approval_key("decision", &idempotency_key)?;
+    approve_proposal_details_and_execute(proposal, decision_key, runtime, roots, outbox, limiter)
+        .await
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn approve_proposal_details_and_execute(
+    proposal: AgentProposalDetails,
+    decision_key: String,
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+    outbox: &OutboxStore,
+    limiter: &WorkLimiter,
+) -> Result<ChatProposalExecutionReport, String> {
+    let decision = runtime
+        .create_decision(
+            proposal.proposal_id.clone(),
+            proposal.item_ids.clone(),
+            decision_key,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let execution_report = {
+        let _permit = limiter.try_write()?;
+        process_pending_decisions(runtime, roots, outbox).await?
+    };
+    let execution_outbox_report = crate::outbox_processor::flush_outbox(runtime, outbox).await?;
+
+    Ok(ChatProposalExecutionReport {
+        proposal,
+        decision,
+        execution_report,
+        execution_outbox_report,
+    })
+}
+
+#[cfg(feature = "tauri-commands")]
+async fn proposal_for_command(
+    runtime: &AgentRuntime,
+    room_id: String,
+    command_id: String,
+) -> Result<AgentProposalDetails, String> {
+    let proposals = runtime
+        .open_proposals_for_room(room_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let proposal = proposals
+        .into_iter()
+        .find(|proposal| proposal.command_id == command_id && proposal.status == "OPEN")
+        .ok_or_else(|| {
+            "PROPOSAL_NOT_READY: confirmed command did not produce an open proposal yet".to_string()
+        })?;
+    runtime
+        .get_proposal(proposal.proposal_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(feature = "tauri-commands")]
+fn scoped_chat_approval_key(scope: &str, idempotency_key: &str) -> Result<String, String> {
+    if idempotency_key.is_empty()
+        || idempotency_key.len() > 100
+        || !idempotency_key
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err("approval idempotency key has an invalid format".to_string());
+    }
+    Ok(format!("{scope}-{idempotency_key}"))
+}
+
+#[cfg(feature = "tauri-commands")]
+fn ensure_chat_command_submitted(
+    report: &CommandProcessingReport,
+    command_id: &str,
+) -> Result<(), String> {
+    let result = report
+        .results
+        .iter()
+        .find(|result| result.command_id == command_id)
+        .ok_or_else(|| {
+            "COMMAND_PROCESSING_MISSING: confirmed command was not processed".to_string()
+        })?;
+    if result.status == CommandProcessingStatus::SubmittedProposal {
+        return Ok(());
+    }
+    Err(format!(
+        "COMMAND_PROCESSING_FAILED: {}",
+        result
+            .message
+            .as_deref()
+            .unwrap_or("proposal was not submitted")
+    ))
 }
 
 #[cfg(feature = "tauri-commands")]

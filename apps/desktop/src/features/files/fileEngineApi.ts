@@ -188,6 +188,13 @@ export type ExecuteReport = {
   results: ExecuteResult[];
 };
 
+export type ChatAutoCleanupExecutionReport = {
+  root_id: string;
+  approved_count: number;
+  precheck: PrecheckReport;
+  execution: ExecuteReport;
+};
+
 export type UndoReport = {
   root: string;
   journal_path: string;
@@ -352,6 +359,13 @@ export function executeFileChanges(
     rootId,
     proposal,
     decisions
+  });
+}
+
+export function approveAutoCleanupProposalFromChat(rootId: string, proposal: ProposalReport) {
+  return invokeCommand<ChatAutoCleanupExecutionReport>("approve_auto_cleanup_proposal_from_chat", {
+    rootId,
+    proposal
   });
 }
 

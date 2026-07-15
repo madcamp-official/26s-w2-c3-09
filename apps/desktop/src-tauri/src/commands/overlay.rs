@@ -9,10 +9,18 @@
 use crate::overlay::{CharacterEvent, OverlayRuntime, OverlayStatus};
 
 #[cfg(feature = "tauri-commands")]
-use crate::overlay::{CHARACTER_EVENT_NAME, HOUSE_OVERLAY_WINDOW_LABEL, OVERLAY_WINDOW_LABEL};
+use crate::overlay::{
+    CHARACTER_EVENT_NAME, CHAT_OVERLAY_WINDOW_LABEL, HOUSE_OVERLAY_WINDOW_LABEL,
+    OVERLAY_WINDOW_LABEL,
+};
 
 #[cfg(feature = "tauri-commands")]
 use tauri::{Emitter, Manager};
+
+#[cfg(feature = "tauri-commands")]
+const CHAT_OVERLAY_WIDTH: i32 = 450;
+#[cfg(feature = "tauri-commands")]
+const CHAT_OVERLAY_HEIGHT: i32 = 360;
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
@@ -45,16 +53,15 @@ pub fn show_overlay_window(
 ) -> Result<OverlayStatus, String> {
     let window = match app.get_webview_window(OVERLAY_WINDOW_LABEL) {
         Some(window) => window,
-        None => build_overlay_window(app)
-            .map_err(|error| runtime.mark_not_ready(error).to_string())?,
+        None => {
+            build_overlay_window(app).map_err(|error| runtime.mark_not_ready(error).to_string())?
+        }
     };
-    window
-        .show()
-        .map_err(|error| {
-            runtime
-                .mark_not_ready(format!("cannot show overlay: {error}"))
-                .to_string()
-        })?;
+    window.show().map_err(|error| {
+        runtime
+            .mark_not_ready(format!("cannot show overlay: {error}"))
+            .to_string()
+    })?;
     let _ = window.set_focus();
     let status = runtime.mark_visible().map_err(|error| error.to_string())?;
 
@@ -73,6 +80,17 @@ pub fn show_overlay_window(
         Err(error) => eprintln!("failed to create secondary house overlay: {error}"),
     }
 
+    // Keep chat ready for the character tap without allowing it to steal focus at startup.
+    match app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
+        Some(chat_window) => {
+            let _ = chat_window.hide();
+        }
+        None => {
+            if let Err(error) = build_chat_overlay_window(app) {
+                eprintln!("failed to preload chat overlay: {error}");
+            }
+        }
+    }
     Ok(status)
 }
 
@@ -89,6 +107,11 @@ pub fn hide_overlay(
     app: tauri::AppHandle,
     runtime: tauri::State<'_, OverlayRuntime>,
 ) -> Result<OverlayStatus, String> {
+    if let Some(window) = app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|error| format!("WINDOW_MISSING: cannot hide chat overlay: {error}"))?;
+    }
     if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
         window
             .hide()
@@ -132,6 +155,9 @@ pub fn emit_character_event(
         window
             .emit(CHARACTER_EVENT_NAME, &event)
             .map_err(|error| format!("EMIT_FAILED: {error}"))?;
+        if let Some(chat_window) = app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
+            let _ = chat_window.emit(CHARACTER_EVENT_NAME, &event);
+        }
         runtime
             .mark_event_accepted(&event)
             .map_err(|error| error.to_string())?;
@@ -167,6 +193,9 @@ pub fn emit_character_event_if_open(
             let _ = runtime.mark_event_accepted(event);
         }
     }
+    if let Some(window) = app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
+        let _ = window.emit(CHARACTER_EVENT_NAME, event);
+    }
 }
 
 #[cfg(feature = "tauri-commands")]
@@ -177,14 +206,15 @@ fn build_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, 
         tauri::WebviewUrl::App("index.html".into()),
     )
     .title("MouseKeeper")
-    // Keep the native transparent hit surface close to the mascot while the bubble is closed.
-    // The frontend expands the same window only while the prompt/chat panel is visible.
+    // Keep the native transparent hit surface close to the mascot. Chat now renders in its own
+    // fixed-size window, so this window never resizes at runtime.
     .inner_size(112.0, 140.0)
     .resizable(false)
     .decorations(false)
     .transparent(true)
     .shadow(false)
     .always_on_top(true)
+    .focusable(true)
     .skip_taskbar(true)
     .build()
     .map_err(|error| format!("WINDOW_MISSING: cannot create overlay window: {error}"))
@@ -232,6 +262,183 @@ fn position_house_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow)
     let x = monitor_position.x + 32;
     let y = monitor_position.y + monitor_size.height as i32 - 590 - 48;
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// The chat panel lives in its own fixed-size window instead of resizing the mascot window. That
+/// removes the clipping/off-screen bugs that came from growing a `resizable(false)` overlay while
+/// the mascot was perched high on the house.
+#[cfg(feature = "tauri-commands")]
+fn build_chat_overlay_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    tauri::WebviewWindowBuilder::new(
+        app,
+        CHAT_OVERLAY_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("MouseKeeper Chat")
+    .inner_size(CHAT_OVERLAY_WIDTH as f64, CHAT_OVERLAY_HEIGHT as f64)
+    .resizable(false)
+    .decorations(false)
+    .transparent(false)
+    .shadow(false)
+    .always_on_top(true)
+    .focusable(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("WINDOW_MISSING: cannot create chat overlay window: {error}"))
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn show_chat_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    let window = match app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
+        Some(window) => window,
+        None => build_chat_overlay_window(&app)?,
+    };
+    position_chat_overlay(&app, &window);
+    window
+        .show()
+        .map_err(|error| format!("WINDOW_MISSING: cannot show chat overlay: {error}"))?;
+    let _ = window.set_focus();
+    Ok(())
+}
+
+#[cfg(feature = "tauri-commands")]
+#[tauri::command]
+pub fn hide_chat_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(CHAT_OVERLAY_WINDOW_LABEL) {
+        window
+            .hide()
+            .map_err(|error| format!("WINDOW_MISSING: cannot hide chat overlay: {error}"))?;
+    }
+    Ok(())
+}
+
+/// Places the chat near the mascot, then clamps it onto the current monitor and chooses the
+/// candidate with the least overlap against the mascot and house windows.
+#[cfg(feature = "tauri-commands")]
+fn position_chat_overlay(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let Some(mouse) = app.get_webview_window(OVERLAY_WINDOW_LABEL) else {
+        return;
+    };
+    let (Ok(mouse_pos), Ok(mouse_size)) = (mouse.outer_position(), mouse.outer_size()) else {
+        return;
+    };
+    let chat_w = CHAT_OVERLAY_WIDTH;
+    let chat_h = CHAT_OVERLAY_HEIGHT;
+    let gap = 12;
+    let mouse_rect = RectI {
+        x: mouse_pos.x,
+        y: mouse_pos.y,
+        w: mouse_size.width as i32,
+        h: mouse_size.height as i32,
+    };
+    let monitor_rect = mouse.current_monitor().ok().flatten().map(|monitor| RectI {
+        x: monitor.position().x,
+        y: monitor.position().y,
+        w: monitor.size().width as i32,
+        h: monitor.size().height as i32,
+    });
+    let house_rect = app
+        .get_webview_window(HOUSE_OVERLAY_WINDOW_LABEL)
+        .and_then(|house| {
+            let position = house.outer_position().ok()?;
+            let size = house.outer_size().ok()?;
+            Some(RectI {
+                x: position.x,
+                y: position.y,
+                w: size.width as i32,
+                h: size.height as i32,
+            })
+        });
+    let align_y = mouse_pos.y + mouse_size.height as i32 - chat_h;
+    let align_x = mouse_pos.x + (mouse_size.width as i32 - chat_w) / 2;
+    let candidates = [
+        RectI {
+            x: mouse_pos.x - chat_w - gap,
+            y: align_y,
+            w: chat_w,
+            h: chat_h,
+        },
+        RectI {
+            x: mouse_pos.x + mouse_size.width as i32 + gap,
+            y: align_y,
+            w: chat_w,
+            h: chat_h,
+        },
+        RectI {
+            x: align_x,
+            y: mouse_pos.y - chat_h - gap,
+            w: chat_w,
+            h: chat_h,
+        },
+        RectI {
+            x: align_x,
+            y: mouse_pos.y + mouse_size.height as i32 + gap,
+            w: chat_w,
+            h: chat_h,
+        },
+    ];
+    let best = candidates
+        .into_iter()
+        .map(|candidate| clamp_rect(candidate, monitor_rect))
+        .min_by_key(|candidate| {
+            (
+                overlap_area(*candidate, mouse_rect)
+                    + house_rect
+                        .map(|house| overlap_area(*candidate, house) * 2)
+                        .unwrap_or(0),
+                distance_squared(*candidate, mouse_rect),
+            )
+        })
+        .unwrap_or(RectI {
+            x: mouse_pos.x - chat_w - gap,
+            y: align_y,
+            w: chat_w,
+            h: chat_h,
+        });
+    let x = best.x;
+    let y = best.y;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+#[cfg(feature = "tauri-commands")]
+#[derive(Clone, Copy)]
+struct RectI {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+}
+
+#[cfg(feature = "tauri-commands")]
+fn clamp_rect(rect: RectI, bounds: Option<RectI>) -> RectI {
+    let Some(bounds) = bounds else {
+        return rect;
+    };
+    let max_x = bounds.x + (bounds.w - rect.w).max(0);
+    let max_y = bounds.y + (bounds.h - rect.h).max(0);
+    RectI {
+        x: rect.x.clamp(bounds.x, max_x),
+        y: rect.y.clamp(bounds.y, max_y),
+        ..rect
+    }
+}
+
+#[cfg(feature = "tauri-commands")]
+fn overlap_area(a: RectI, b: RectI) -> i32 {
+    let x = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
+    let y = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
+    x.max(0) * y.max(0)
+}
+
+#[cfg(feature = "tauri-commands")]
+fn distance_squared(a: RectI, b: RectI) -> i32 {
+    let ax = a.x + a.w / 2;
+    let ay = a.y + a.h / 2;
+    let bx = b.x + b.w / 2;
+    let by = b.y + b.h / 2;
+    (ax - bx).pow(2) + (ay - by).pow(2)
 }
 
 fn get_overlay_status_impl(runtime: &OverlayRuntime) -> Result<OverlayStatus, String> {
