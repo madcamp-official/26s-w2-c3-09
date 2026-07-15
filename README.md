@@ -1,5 +1,51 @@
 # MOUSEKEEPER
 
+## 현재 배포 기준 (2026-07-16)
+
+MouseKeeper는 Windows 데스크톱 에이전트와 Flutter Android 모바일 앱이 같은 서버 room을 공유하는 로컬 우선 파일 관리 서비스입니다.
+
+### 최근 반영된 기능
+
+- 자연어 파일 관리: 조회는 자동 실행하고, 이동·삭제·규칙·전송·undo는 승인 후 실행합니다.
+- Desktop 파일 엔진: managed root 경계 검증, canonicalization, symlink/junction/reparse 차단, no-overwrite, journal-before-write, crash recovery, undo를 유지합니다.
+- PC↔모바일 동기화: Socket.IO 실시간 이벤트와 REST replay/cursor를 함께 사용하며, 서버가 일시적으로 끊겨도 로컬 cache/outbox를 보존합니다.
+- 관리 폴더 연결: 로컬 관리 폴더와 서버 room은 별도 상태입니다. `UNBOUND`면 파일 관리는 가능하지만 room 채팅은 사용할 수 없습니다. 모바일에서 PC 페어링을 해제하면 서버 측 모바일 권한이 취소되어 Desktop이 offline으로 표시될 수 있습니다.
+- Desktop overlay: idle 말풍선은 생쥐 왼쪽에 배치되고, 드래그 중 15초가 지나면 화난 반응을 표시합니다.
+- 모바일 치즈 상호작용: `KakaoTalk_20260716_033139321.gif`를 사용하며 idle 캐릭터와 같은 크기로 표시합니다.
+- 모바일 미니게임: 미로 대신 10스테이지 턴제 치즈 퍼즐을 제공합니다. 방향 이동, 턴 제한, 상자 밀기, 키·문, 치즈 도착 승리, 7~10 스테이지 지정 경로가 포함됩니다.
+
+### 배포 파일
+
+- Android APK: `apps/mobile/build/app/outputs/flutter-apk/app-debug.apk`
+- Windows MSI/NSIS: `apps/desktop/src-tauri/target/release/bundle/`
+- 운영 API: `https://mousekeeper.madcamp-kaist.org`
+- Android application id: `com.mousekeeper.app`
+
+### 설치 및 실행
+
+Android는 APK를 휴대폰으로 전송해 설치합니다. USB 디버깅 설치 시 `adb devices`가 `device` 상태인지 먼저 확인해야 합니다. Windows는 MSI를 실행해 설치하거나 NSIS 설치 파일을 사용합니다. Desktop은 서버 URL과 pairing 상태가 준비되어야 모바일 채팅·승인·파일 동기화를 사용할 수 있지만, 휴대폰 없이도 로컬 파일 관리는 계속할 수 있습니다.
+
+### 검증 기록
+
+- `flutter analyze`: 기능 코드 오류 없음(기존 lint info 경고만 남아 있음)
+- Flutter 전체 테스트 및 미니게임 테스트를 변경 시마다 실행
+- Android debug APK 빌드·실기기 설치·실행 확인
+- Desktop Tauri Windows bundle 빌드 및 설치 확인
+- 서버 `/health`, `/ready` HTTP 200 확인
+
+### 주요 커밋
+
+- `dcb55f5` 치즈 먹기 GIF 복원 및 idle 크기 일치
+- `17f6867` 맵 차별화, 키·문 기믹
+- `b548b95` 10스테이지·상자 밀기
+- `0fc6961` 강제 경로를 7번째 스테이지부터 적용
+- `84004d6` 다음 스테이지 진행 버튼 수정
+- `ee5929d` 미로를 치즈 퍼즐로 교체
+- `534d033` Desktop 말풍선 위치 조정
+- `95f01ad` `origin/fix/minor-bugs` 병합
+
+자세한 계약·안전 원칙과 소유권은 `MOUSEKEEPER_PLAN.md`, `AI_implement_rule.txt`, `docs/`를 참조합니다.
+
 ## 2026-07 현재 구현 반영 메모
 
 - 데스크톱은 `MOUSEKEEPER_SERVER_BASE_URL`을 우선 사용하고, 배포 실행 환경에 값이 없으면 운영 API `https://mousekeeper.madcamp-kaist.org`를 기본값으로 사용합니다.
