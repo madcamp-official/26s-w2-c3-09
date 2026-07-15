@@ -134,6 +134,20 @@ export function FileEnginePanel({
     void refreshRoots();
   }, []);
 
+  // A sibling FileEnginePanel instance (the settings pane vs. the room manager) can select a root
+  // this instance hasn't loaded yet — e.g. right after a new room is registered elsewhere. Without
+  // this, `selectedRoot` stays null and the settings section renders completely empty. Refresh once
+  // when the selected root is missing so it reappears here too. The ref guards against re-fetching
+  // in a loop when the id genuinely no longer exists.
+  const missingRootRefreshRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedRootId) return;
+    if (roots.some((root) => root.root_id === selectedRootId)) return;
+    if (missingRootRefreshRef.current === selectedRootId) return;
+    missingRootRefreshRef.current = selectedRootId;
+    void refreshRoots();
+  }, [selectedRootId, roots]);
+
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
 

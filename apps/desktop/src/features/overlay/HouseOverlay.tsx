@@ -10,14 +10,13 @@ import {
   listManagedRoots,
   listenForCleanlinessSnapshotUpdates
 } from "../files/fileEngineApi";
-import { HOUSE_DROP_TARGET_EVENT, setHouseOverlayLocked } from "./overlayApi";
+import { HOUSE_DROP_TARGET_EVENT, hideOverlay, setHouseOverlayLocked } from "./overlayApi";
 
 const houseUrl = new URL("../../assets/mouse-house-transparent.png", import.meta.url).href;
 const messLayerUrls = {
   floor: new URL("../../../../../packages/character-assets/mess/floor_dirty.png", import.meta.url).href,
   wall: new URL("../../../../../packages/character-assets/mess/wall_dirty.png", import.meta.url).href,
-  trash: new URL("../../../../../packages/character-assets/mess/trash_dirty.png", import.meta.url).href,
-  box: new URL("../../../../../packages/character-assets/mess/box_dirty.png", import.meta.url).href,
+  mess: new URL("../../../../../packages/character-assets/mess/mess_dirty.png", import.meta.url).href,
   web: new URL("../../../../../packages/character-assets/mess/web_dirty.png", import.meta.url).href
 } as const;
 
@@ -167,6 +166,15 @@ export function HouseOverlay() {
     setMenuOpen(false);
   }
 
+  function closeOverlay(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    setMenuOpen(false);
+    setActiveSection(null);
+    void hideOverlay().catch(() => {
+      // Browser preview has no Tauri runtime; the desktop shell hides the windows.
+    });
+  }
+
   function stopPanelPointer(event: MouseEvent<HTMLElement>) {
     event.stopPropagation();
   }
@@ -204,6 +212,10 @@ export function HouseOverlay() {
               <small>{item.hint}</small>
             </button>
           ))}
+          <button type="button" className="house-quick-menu-exit" onClick={closeOverlay}>
+            <strong>오버레이 종료하기</strong>
+            <small>화면에서 마우스와 집 숨기기</small>
+          </button>
         </nav>
       ) : null}
 
@@ -250,8 +262,9 @@ function HouseMessLayers({ level }: { level: number }) {
     <div className={`house-mess-layers mess-level-${level}`} aria-hidden="true">
       {level >= 1 ? <img src={messLayerUrls.floor} alt="" draggable={false} /> : null}
       {level >= 2 ? <img src={messLayerUrls.wall} alt="" draggable={false} /> : null}
-      {level >= 2 ? <img src={messLayerUrls.trash} alt="" draggable={false} /> : null}
-      {level >= 3 ? <img src={messLayerUrls.box} alt="" draggable={false} /> : null}
+      {level >= 2 ? (
+        <img className="mess-highlight" src={messLayerUrls.mess} alt="" draggable={false} />
+      ) : null}
       {level >= 4 ? <img src={messLayerUrls.web} alt="" draggable={false} /> : null}
     </div>
   );

@@ -2264,8 +2264,14 @@ fn validate_server_rooms(
     expected_device_id: &str,
     rooms: Vec<ServerRoom>,
 ) -> Result<Vec<ServerRoom>, AgentError> {
+    // `GET /v1/rooms` is scoped to the user, not the device, so the response can legitimately
+    // include rooms owned by the user's other desktop devices (e.g. a previous pairing left
+    // stale rooms behind). Those foreign rooms are not an error for this device: silently drop
+    // them and only validate the rooms this device actually owns. Hard-failing on a foreign room
+    // would break room sync entirely after re-pairing.
     rooms
         .into_iter()
+        .filter(|room| room.desktop_device_id == expected_device_id)
         .map(|room| validate_server_room(expected_device_id, room))
         .collect()
 }
