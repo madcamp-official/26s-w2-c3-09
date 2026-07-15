@@ -67,16 +67,18 @@ export function FileEnginePanel({
   activeSection = "rooms",
   selectedRootId: controlledSelectedRootId,
   onSelectedRootIdChange,
-  hideRootPicker = false
+  hideRootPicker = false,
+  initialRoots = []
 }: {
   embedded?: boolean;
   activeSection?: FileSection;
   selectedRootId?: string;
   onSelectedRootIdChange?: (rootId: string) => void;
   hideRootPicker?: boolean;
+  initialRoots?: ManagedRoot[];
 } = {}) {
   const [pathInput, setPathInput] = useState("");
-  const [roots, setRoots] = useState<ManagedRoot[]>([]);
+  const [roots, setRoots] = useState<ManagedRoot[]>(initialRoots);
   const [uncontrolledSelectedRootId, setUncontrolledSelectedRootId] = useState("");
   const [proposal, setProposal] = useState<ProposalReport | null>(null);
   const [decisions, setDecisions] = useState<DecisionState>({});
@@ -133,6 +135,24 @@ export function FileEnginePanel({
   useEffect(() => {
     void refreshRoots();
   }, []);
+
+  useEffect(() => {
+    if (initialRoots.length === 0) return;
+    setRoots(initialRoots);
+    if (!selectedRootIdRef.current) {
+      const preferred = preferredManagedRoot(initialRoots);
+      if (preferred) setPanelSelectedRootId(preferred.root_id);
+    }
+  }, [initialRoots]);
+
+  useEffect(() => {
+    if (roots.length === 0) return;
+    if (selectedRootId && roots.some((root) => root.root_id === selectedRootId)) return;
+    const preferred = preferredManagedRoot(roots);
+    if (preferred) {
+      setPanelSelectedRootId(preferred.root_id);
+    }
+  }, [roots, selectedRootId]);
 
   // A sibling FileEnginePanel instance (the settings pane vs. the room manager) can select a root
   // this instance hasn't loaded yet — e.g. right after a new room is registered elsewhere. Without
@@ -297,6 +317,9 @@ export function FileEnginePanel({
     setError(null);
     try {
       const storedRoots = await listManagedRoots();
+      if (shouldIgnoreTransientEmptyRoots(storedRoots)) {
+        return;
+      }
       setRoots(storedRoots);
       setRoomSyncStates(bindingStates(storedRoots));
       if (!selectedRootIdRef.current && storedRoots[0]?.root_id) {
@@ -311,6 +334,9 @@ export function FileEnginePanel({
   async function reloadDurableRootBindings() {
     try {
       const storedRoots = await listManagedRoots();
+      if (shouldIgnoreTransientEmptyRoots(storedRoots)) {
+        return;
+      }
       setRoots(storedRoots);
       setRoomSyncStates(bindingStates(storedRoots));
       setStatus(mobileSyncSummary(storedRoots));
@@ -1010,6 +1036,10 @@ export function FileEnginePanel({
     selectedRootIdRef.current = rootId;
     setUncontrolledSelectedRootId(rootId);
     onSelectedRootIdChange?.(rootId);
+  }
+
+  function shouldIgnoreTransientEmptyRoots(storedRoots: ManagedRoot[]) {
+    return embedded && storedRoots.length === 0 && !!selectedRootIdRef.current && roots.length > 0;
   }
 
   function setDecision(item: Proposal, decision: DecisionState[string]) {
@@ -1837,6 +1867,10 @@ function bindingStates(roots: ManagedRoot[]): Record<string, RoomSyncState> {
           : "unbound"
     ])
   );
+}
+
+function preferredManagedRoot(roots: ManagedRoot[]) {
+  return roots.find((root) => root.room_binding_status === "active") ?? roots[0] ?? null;
 }
 
 function newIdempotencyKey(prefix: string) {

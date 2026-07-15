@@ -57,7 +57,7 @@ pub fn register_managed_root(
     window: tauri::Window,
     store: tauri::State<'_, ManagedRootStore>,
 ) -> Result<ManagedRoot, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     register_managed_root_in_store(path, &store)
 }
 
@@ -88,7 +88,7 @@ pub fn update_managed_root_state(
     store: tauri::State<'_, ManagedRootStore>,
     watchers: tauri::State<'_, WatcherStore>,
 ) -> Result<ManagedRoot, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     update_managed_root_state_impl(root_id, patch, &store, Some(&watchers))
 }
 
@@ -113,7 +113,7 @@ pub async fn unregister_managed_root(
     auto_approval: tauri::State<'_, AutoApprovalStore>,
     watchers: tauri::State<'_, WatcherStore>,
 ) -> Result<UnregisterManagedRootReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     unregister_managed_root_impl(
         root_id,
         idempotency_key,
@@ -192,7 +192,7 @@ async fn unregister_managed_root_impl(
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
 pub fn prepare_demo_root(window: tauri::Window) -> Result<String, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     prepare_demo_root_impl()
 }
 
@@ -363,7 +363,7 @@ pub fn calculate_cleanliness_snapshot(
 }
 
 /// Local validation of an AI/rule-draft (plan item 12). Strictly parses and validates a candidate
-/// Rule DSL draft without touching the filesystem — B's desktop AI code can call this to reject a
+/// Rule DSL draft without touching the filesystem; B's desktop AI code can call this to reject a
 /// bad draft before it ever enters the command/proposal pipeline. Validation only: it never reads
 /// the disk, computes targets, or mutates anything.
 #[cfg(feature = "tauri-commands")]
@@ -411,7 +411,7 @@ pub fn update_auto_approval_policy(
     roots: tauri::State<'_, ManagedRootStore>,
     policies: tauri::State<'_, AutoApprovalStore>,
 ) -> Result<AutoApprovalPolicyRecord, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     update_auto_approval_policy_impl(root_id, patch, &roots, &policies)
 }
 
@@ -434,7 +434,7 @@ pub fn auto_approve_file_changes(
     roots: tauri::State<'_, ManagedRootStore>,
     policies: tauri::State<'_, AutoApprovalStore>,
 ) -> Result<Vec<DecisionEntry>, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     auto_approve_file_changes_impl(root_id, proposal, &roots, &policies)
 }
 
@@ -481,7 +481,7 @@ pub fn execute_file_changes(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<ExecuteReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     execute_file_changes_impl(root, proposal, decisions)
@@ -507,7 +507,7 @@ pub fn trash_file(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<TrashReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     trash_file_impl(root, path)
@@ -532,7 +532,7 @@ pub fn create_file(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<CreateFileReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     create_file_impl(root, path)
@@ -558,7 +558,7 @@ pub fn rename_file(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<RenameFileReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     rename_file_impl(root, path, new_name)
@@ -583,7 +583,7 @@ pub fn undo_last_file_operation(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     undo_last_file_operation_impl(root)
@@ -607,7 +607,7 @@ pub fn undo_operation(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<UndoReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     undo_operation_impl(root, operation_id)
@@ -650,7 +650,7 @@ pub fn recover_journal(
     store: tauri::State<'_, ManagedRootStore>,
     limiter: tauri::State<'_, WorkLimiter>,
 ) -> Result<JournalRecoveryReport, String> {
-    crate::commands::permissions::require_main_window(&window)?;
+    crate::commands::permissions::require_file_manager_window(&window)?;
     let root = resolve_root_id(&store, &root_id)?;
     let _permit = limiter.try_write()?;
     recover_journal_impl(root)

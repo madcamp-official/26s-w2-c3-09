@@ -39,8 +39,12 @@ export type OverlayStatus = {
 
 export const OVERLAY_WINDOW_LABEL = "character-overlay";
 export const HOUSE_OVERLAY_WINDOW_LABEL = "house-overlay";
+export const CHAT_OVERLAY_WINDOW_LABEL = "chat-overlay";
 export const CHARACTER_EVENT_NAME = "character-event";
 export const HOUSE_DROP_TARGET_EVENT = "house-drop-target";
+/** Emitted whenever the chat overlay is hidden so the mascot window can keep its toggle/wander
+ * state in sync, regardless of which window initiated the close. */
+export const CHAT_OVERLAY_CLOSED_EVENT = "chat-overlay:closed";
 /// Fired by the overlay chat input. This is the ONLY thing overlay chat can do: hand a bounded
 /// text draft to the app for the draft/proposal flow (plan item 12). It never runs a file op.
 export const OVERLAY_DRAFT_REQUEST_EVENT = "overlay:draft-request";
@@ -65,13 +69,38 @@ export function hideOverlay() {
   return invokeOverlayCommand<OverlayStatus>("hide_overlay");
 }
 
+/** Shows the standalone chat window next to the mascot. It never resizes, so the panel is never
+ * clipped the way the old single-window overlay was. */
+export function showChatOverlay() {
+  return invokeOverlayCommand<void>("show_chat_overlay");
+}
+
+export async function hideChatOverlay() {
+  try {
+    await invokeOverlayCommand<void>("hide_chat_overlay");
+  } finally {
+    if (window.__TAURI_INTERNALS__) {
+      await emit(CHAT_OVERLAY_CLOSED_EVENT).catch(() => undefined);
+    }
+  }
+}
+
 export function setHouseOverlayLocked(locked: boolean) {
   return invokeOverlayCommand<void>("set_house_overlay_locked", { locked });
 }
 
 /** True when this JS context is running inside the overlay window (vs the main window). */
 export function isOverlayWindow() {
-  return isCharacterOverlayWindow() || isHouseOverlayWindow();
+  return isCharacterOverlayWindow() || isHouseOverlayWindow() || isChatOverlayWindow();
+}
+
+export function isChatOverlayWindow() {
+  if (!window.__TAURI_INTERNALS__) return false;
+  try {
+    return getCurrentWindow().label === CHAT_OVERLAY_WINDOW_LABEL;
+  } catch {
+    return false;
+  }
 }
 
 export function isCharacterOverlayWindow() {

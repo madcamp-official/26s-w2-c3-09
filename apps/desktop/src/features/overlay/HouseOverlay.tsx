@@ -8,9 +8,11 @@ import { FileEnginePanel } from "../files/FileEnginePanel";
 import {
   getLatestCleanlinessSnapshot,
   listManagedRoots,
+  ManagedRoot,
+  listenForManagedRootBindingChanges,
   listenForCleanlinessSnapshotUpdates
 } from "../files/fileEngineApi";
-import { HOUSE_DROP_TARGET_EVENT, hideOverlay, setHouseOverlayLocked } from "./overlayApi";
+import { HOUSE_DROP_TARGET_EVENT, hideChatOverlay, hideOverlay, setHouseOverlayLocked } from "./overlayApi";
 
 const houseUrl = new URL("../../assets/mouse-house-transparent.png", import.meta.url).href;
 const messLayerUrls = {
@@ -47,17 +49,35 @@ export function HouseOverlay() {
   const [cleanlinessScore, setCleanlinessScore] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<HousePanelSection | null>(null);
+  const [roots, setRoots] = useState<ManagedRoot[]>([]);
   const [selectedRootId, setSelectedRootId] = useState("");
+  const activeRootIdRef = useRef<string | null>(null);
+  const rootsRef = useRef<ManagedRoot[]>([]);
   const dragStart = useRef<DragStart | null>(null);
   const draggingStarted = useRef(false);
+  const suppressHouseClick = useRef(false);
   const clickTimer = useRef<number | null>(null);
 
+  function selectHouseRoot(rootId: string) {
+    activeRootIdRef.current = rootId || null;
+    setSelectedRootId(rootId);
+  }
+
+  async function refreshHouseRootsForMenu() {
+    const storedRoots = await listManagedRoots();
+    const visibleRoots =
+      storedRoots.length === 0 && rootsRef.current.length > 0 && activeRootIdRef.current
+        ? rootsRef.current
+        : storedRoots;
+    rootsRef.current = visibleRoots;
+    setRoots(visibleRoots);
+    const root = selectStableRoot(visibleRoots, activeRootIdRef.current);
+    if (root) selectHouseRoot(root.root_id);
+    return root;
+  }
+
   useEffect(() => {
-    document.documentElement.classList.add("overlay-root");
-    document.body.classList.add("house-overlay-body");
     return () => {
-      document.documentElement.classList.remove("overlay-root");
-      document.body.classList.remove("house-overlay-body");
       if (clickTimer.current !== null) {
         window.clearTimeout(clickTimer.current);
       }
@@ -80,34 +100,57 @@ export function HouseOverlay() {
 
     async function refreshCleanliness() {
       try {
-        const roots = await listManagedRoots();
-        const root = roots.find((item) => item.room_binding_status === "active") ?? roots[0];
+        const root = await refreshHouseRootsForMenu();
+        if (stopped) return;
         if (!root) {
-          if (!stopped) setCleanlinessScore(null);
           return;
         }
         const snapshot = await getLatestCleanlinessSnapshot(root.root_id);
-        if (!stopped) setCleanlinessScore(snapshot?.score ?? null);
+        if (!stopped && activeRootIdRef.current === root.root_id) {
+          setCleanlinessScore(snapshot?.score ?? null);
+        }
       } catch {
-        if (!stopped) setCleanlinessScore(null);
+        // Keep the last known score during transient store/bootstrap errors so the house does not
+        // flash clean/empty while the background runtime is reconciling roots.
       }
     }
 
     void refreshCleanliness();
     const unlisten = listenForCleanlinessSnapshotUpdates((update) => {
-      if (!stopped) setCleanlinessScore(update.snapshot.score);
+      if (!stopped && update.rootId === activeRootIdRef.current) {
+        setCleanlinessScore(update.snapshot.score);
+      }
+    });
+    let unlistenBinding: (() => void) | undefined;
+    void listenForManagedRootBindingChanges(() => {
+      void refreshCleanliness();
+    }).then((off) => {
+      unlistenBinding = off;
     });
     return () => {
       stopped = true;
       void unlisten.then((off) => off());
+      unlistenBinding?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    if (!activeSection) return;
+    const selectedStillExists = roots.some((root) => root.root_id === selectedRootId);
+    if (selectedStillExists) return;
+    const preferred = selectStableRoot(roots, selectedRootId);
+    if (preferred) {
+      selectHouseRoot(preferred.root_id);
+    }
+  }, [activeSection, roots, selectedRootId]);
 
   function beginHousePointer(pointer: PointerEvent<HTMLButtonElement>) {
     if (pointer.button !== 0) return;
     if (locked) return;
     dragStart.current = { x: pointer.clientX, y: pointer.clientY };
     draggingStarted.current = false;
+    suppressHouseClick.current = false;
     pointer.currentTarget.setPointerCapture(pointer.pointerId);
   }
 
@@ -118,6 +161,7 @@ export function HouseOverlay() {
     if (moved < 4) return;
 
     draggingStarted.current = true;
+    suppressHouseClick.current = true;
     void getCurrentWindow()
       .startDragging()
       .catch(() => {
@@ -134,11 +178,16 @@ export function HouseOverlay() {
   }
 
   function queueHouseClick() {
-    if (!locked) return;
+    if (suppressHouseClick.current) {
+      suppressHouseClick.current = false;
+      return;
+    }
+    void hideChatOverlay().catch(() => undefined);
     if (clickTimer.current !== null) {
       window.clearTimeout(clickTimer.current);
     }
     clickTimer.current = window.setTimeout(() => {
+      void refreshHouseRootsForMenu().catch(() => undefined);
       setMenuOpen((open) => !open);
       setActiveSection(null);
       clickTimer.current = null;
@@ -162,17 +211,25 @@ export function HouseOverlay() {
   }
 
   function openSection(section: HousePanelSection) {
-    setActiveSection(section);
+    void hideChatOverlay().catch(() => undefined);
     setMenuOpen(false);
+    setActiveSection(section);
+    void refreshHouseRootsForMenu().catch(() => undefined);
   }
 
   function closeOverlay(event: MouseEvent<HTMLButtonElement>) {
     event.stopPropagation();
     setMenuOpen(false);
     setActiveSection(null);
-    void hideOverlay().catch(() => {
-      // Browser preview has no Tauri runtime; the desktop shell hides the windows.
-    });
+    void hideOverlay()
+      .catch((cause) => {
+        console.error("Failed to hide all overlays", cause);
+      })
+      .finally(() => {
+        void getCurrentWindow().hide().catch(() => {
+          // Browser preview has no Tauri runtime; the desktop shell hides the window.
+        });
+      });
   }
 
   function stopPanelPointer(event: MouseEvent<HTMLElement>) {
@@ -240,7 +297,7 @@ export function HouseOverlay() {
             </button>
           </header>
           <div className="house-manager-content">
-            {renderManagerSection(activeSection, selectedRootId, setSelectedRootId)}
+            {renderManagerSection(activeSection, selectedRootId, selectHouseRoot, roots)}
           </div>
         </section>
       ) : null}
@@ -270,10 +327,20 @@ function HouseMessLayers({ level }: { level: number }) {
   );
 }
 
+function selectStableRoot(roots: ManagedRoot[], currentRootId: string | null) {
+  return (
+    roots.find((root) => root.root_id === currentRootId) ??
+    roots.find((root) => root.room_binding_status === "active") ??
+    roots[0] ??
+    null
+  );
+}
+
 function renderManagerSection(
   section: HousePanelSection,
   selectedRootId: string,
-  setSelectedRootId: (rootId: string) => void
+  setSelectedRootId: (rootId: string) => void,
+  roots: ManagedRoot[]
 ) {
   if (section === "connection") {
     return <AgentPanel showAutostart={false} />;
@@ -297,6 +364,7 @@ function renderManagerSection(
           selectedRootId={selectedRootId}
           onSelectedRootIdChange={setSelectedRootId}
           hideRootPicker
+          initialRoots={roots}
         />
       </>
     );
@@ -309,6 +377,7 @@ function renderManagerSection(
       selectedRootId={selectedRootId}
       onSelectedRootIdChange={setSelectedRootId}
       hideRootPicker={section !== "rooms"}
+      initialRoots={roots}
     />
   );
 }

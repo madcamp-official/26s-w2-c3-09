@@ -1,32 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   getAllWindows,
   getCurrentWindow,
-  LogicalPosition,
-  LogicalSize,
   PhysicalPosition
 } from "@tauri-apps/api/window";
 
-import { listManagedRoots } from "../files/fileEngineApi";
-import type { ManagedRoot } from "../files/fileEngineApi";
 import {
-  createAgentChatQuickCleanup,
-  createAgentChatSession,
-  getAgentChatQuickView,
-  listAgentChatMessages,
-  listAgentChatSessions,
-  markAgentChatSessionRead,
-  sendAgentChatMessage
-} from "../agent/agentApi";
-import type { AgentChatMessage, AgentChatQuickView, AgentChatSession } from "../agent/agentApi";
-import {
+  CHAT_OVERLAY_CLOSED_EVENT,
   CharacterEvent,
   CharacterEventKind,
   HOUSE_DROP_TARGET_EVENT,
   HOUSE_OVERLAY_WINDOW_LABEL,
+  hideChatOverlay,
   listenForCharacterEvents,
+  showChatOverlay
 } from "./overlayApi";
 import { useCharacterWander } from "./characterWander";
 
@@ -64,32 +53,30 @@ const danglingMotionUrl = new URL(
   "../../../../../packages/character-assets/new_mouse/gif/mouse_dangling_preview.gif",
   import.meta.url
 ).href;
-const chatAvatarUrl = new URL(
-  "../../../../../packages/character-assets/new_mouse/mouse_walk_clean.png",
-  import.meta.url
-).href;
-
 const KIND_LABELS: Record<CharacterEventKind, string> = {
-  IDLE: "대기 중",
-  CONNECTING: "연결 중",
-  ANALYZING: "분석 중",
-  WAITING_APPROVAL: "승인 대기",
-  WORKING: "작업 중",
-  SUCCESS: "완료",
-  ERROR: "확인 필요",
-  USER_WORKING: "작업 중",
-  OFFLINE: "오프라인"
+  IDLE: "idle",
+  CONNECTING: "connecting",
+  ANALYZING: "analyzing",
+  WAITING_APPROVAL: "waiting approval",
+  WORKING: "working",
+  SUCCESS: "complete",
+  ERROR: "needs attention",
+  USER_WORKING: "working",
+  OFFLINE: "offline"
 };
 
 type DragStart = {
   x: number;
   y: number;
-  at: number;
 };
 
+type DragMode = "idle" | "native" | "manual";
+
 type DragOrigin = {
-  winX: number;
-  winY: number;
+  pointerX: number;
+  pointerY: number;
+  windowX: number;
+  windowY: number;
 };
 
 type Point = { x: number; y: number };
@@ -99,51 +86,22 @@ type Polygon = readonly Point[];
 type HouseDropTarget = { active: boolean };
 
 const HOUSE_FOOT_OFFSET = { x: 0.5, y: 0.82 } as const;
-const OVERLAY_SIZES = {
-  closed: { width: 112, height: 140 },
-  prompt: { width: 190, height: 140 },
-  chat: { width: 450, height: 360 }
-} as const;
+const DRAG_THRESHOLD_PX = 10;
 
 export function CharacterOverlay() {
   const [event, setEvent] = useState<CharacterEvent>({ kind: "IDLE" });
-  const [draft, setDraft] = useState("");
-  const [rooms, setRooms] = useState<ManagedRoot[]>([]);
-  const [chatSession, setChatSession] = useState<AgentChatSession | null>(null);
-  const [quickView, setQuickView] = useState<AgentChatQuickView | null>(null);
-  const [chatMessages, setChatMessages] = useState<AgentChatMessage[]>([]);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [answerPending, setAnswerPending] = useState(false);
-  const [chatLoading, setChatLoading] = useState(false);
-  const [bubbleOpen, setBubbleOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [isDraggingOverlay, setIsDraggingOverlay] = useState(false);
   const [pointerHeld, setPointerHeld] = useState(false);
   const [dragReleaseTick, setDragReleaseTick] = useState(0);
   const dragStart = useRef<DragStart | null>(null);
+  const lastDragPoint = useRef<DragStart | null>(null);
   const dragOrigin = useRef<DragOrigin | null>(null);
+  const dragMode = useRef<DragMode>("idle");
   const draggingStarted = useRef(false);
   const suppressClick = useRef(false);
+  const pointerStartedWithChatOpen = useRef(false);
   const houseDropActive = useRef(false);
-
-  const activeRoom = rooms.find((root) => root.room_binding_status === "active") ?? rooms[0] ?? null;
-  const activeRoomName = activeRoom?.display_name ?? "방 없음";
-  const activeRoomId = activeRoom?.room_id ?? null;
-
-  useEffect(() => {
-    document.documentElement.classList.add("overlay-root");
-    document.body.classList.add("overlay-body");
-    return () => {
-      document.documentElement.classList.remove("overlay-root");
-      document.body.classList.remove("overlay-body");
-    };
-  }, []);
-
-  useEffect(() => {
-    const mode = chatOpen ? "chat" : bubbleOpen ? "prompt" : "closed";
-    void resizeOverlayWindow(mode);
-  }, [bubbleOpen, chatOpen]);
 
   useEffect(() => {
     const unlisten = listenForCharacterEvents(setEvent);
@@ -152,65 +110,13 @@ export function CharacterOverlay() {
     };
   }, []);
 
+  // Any window may hide chat (close button, house menu, drag start); keep wander/toggle in sync.
   useEffect(() => {
-    if (!bubbleOpen) return;
-    void listManagedRoots()
-      .then(setRooms)
-      .catch(() => setRooms([]));
-  }, [bubbleOpen]);
-
-  useEffect(() => {
-    if (!chatOpen) return;
-    if (!activeRoomId) {
-      setChatSession(null);
-      setQuickView(null);
-      setChatMessages([]);
-      setNotice("먼저 데스크탑에서 관리 폴더를 서버 room과 연결해야 채팅을 이어서 기록할 수 있어요.");
-      return;
-    }
-
-    let cancelled = false;
-    setChatLoading(true);
-    setNotice(null);
-    void ensureRoomChatSession(activeRoomId, activeRoomName)
-      .then(async (session) => {
-        const [messages, quick] = await Promise.all([
-          listAgentChatMessages(session.session_id),
-          getAgentChatQuickView(activeRoomId).catch(() => null)
-        ]);
-        await markAgentChatSessionRead(session.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
-        if (cancelled) return;
-        setChatSession(session);
-        setQuickView(quick);
-        setChatMessages(messages);
-      })
-      .catch((cause) => {
-        if (cancelled) return;
-        setChatSession(null);
-        setQuickView(null);
-        setChatMessages([]);
-        setNotice(cause instanceof Error ? cause.message : String(cause));
-      })
-      .finally(() => {
-        if (!cancelled) setChatLoading(false);
-      });
+    const unlisten = listen(CHAT_OVERLAY_CLOSED_EVENT, () => setChatOpen(false));
     return () => {
-      cancelled = true;
+      void unlisten.then((off) => off());
     };
-  }, [activeRoomId, activeRoomName, chatOpen]);
-
-  useEffect(() => {
-    if (!chatOpen || !chatSession || answerPending) return;
-    const timer = window.setInterval(() => {
-      void listAgentChatMessages(chatSession.session_id)
-        .then(async (messages) => {
-          await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
-          setChatMessages(messages);
-        })
-        .catch(() => undefined);
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [answerPending, chatOpen, chatSession]);
+  }, []);
 
   async function setHouseDropTarget(active: boolean) {
     if (houseDropActive.current === active) return;
@@ -234,7 +140,9 @@ export function CharacterOverlay() {
       setDragReleaseTick((tick) => tick + 1);
     }
     dragStart.current = null;
+    lastDragPoint.current = null;
     dragOrigin.current = null;
+    dragMode.current = "idle";
     draggingStarted.current = false;
     setIsDraggingOverlay(false);
     setPointerHeld(false);
@@ -243,26 +151,11 @@ export function CharacterOverlay() {
   useEffect(() => {
     const onPointerMoveGlobal = (pointerEvent: globalThis.PointerEvent) => {
       const start = dragStart.current;
-      if (!start) return;
-      const moved = Math.hypot(pointerEvent.screenX - start.x, pointerEvent.screenY - start.y);
-      if (!draggingStarted.current) {
-        if (moved < 4) return;
-        draggingStarted.current = true;
-        suppressClick.current = true;
-        setIsDraggingOverlay(true);
-      }
+      if (!start || !draggingStarted.current) return;
 
-      const origin = dragOrigin.current;
-      if (!origin) return;
-      const nextX = origin.winX + (pointerEvent.screenX - start.x);
-      const nextY = origin.winY + (pointerEvent.screenY - start.y);
-      void getCurrentWindow()
-        .setPosition(new LogicalPosition(nextX, nextY))
-        .then(() => isCurrentWindowOverHouse())
+      void isCurrentWindowOverHouse()
         .then((active) => setHouseDropTarget(active))
-        .catch(() => {
-          // Browser preview cannot move a native window; Tauri handles this in the desktop shell.
-        });
+        .catch(() => undefined);
     };
     const onReleaseGlobal = () => void releaseDrag();
     window.addEventListener("pointermove", onPointerMoveGlobal);
@@ -277,7 +170,7 @@ export function CharacterOverlay() {
     };
   }, []);
 
-  const wanderActive = event.kind === "IDLE" && !isDraggingOverlay && !pointerHeld && !bubbleOpen;
+  const wanderActive = event.kind === "IDLE" && !isDraggingOverlay && !pointerHeld && !chatOpen;
   const { phase: wanderPhase, facing } = useCharacterWander(wanderActive, dragReleaseTick);
 
   const motionUrl = useMemo(() => {
@@ -290,120 +183,129 @@ export function CharacterOverlay() {
 
   function beginOverlayDrag(pointer: PointerEvent<HTMLButtonElement>) {
     if (pointer.button !== 0) return;
-    dragStart.current = { x: pointer.screenX, y: pointer.screenY, at: Date.now() };
+    pointerStartedWithChatOpen.current = chatOpen;
+    dragStart.current = { x: pointer.screenX, y: pointer.screenY };
+    lastDragPoint.current = { x: pointer.screenX, y: pointer.screenY };
     dragOrigin.current = null;
+    dragMode.current = "idle";
     draggingStarted.current = false;
     suppressClick.current = false;
     setPointerHeld(true);
+    if (chatOpen) {
+      setChatOpen(false);
+      void hideChatOverlay().catch(() => undefined);
+    }
     pointer.currentTarget.setPointerCapture(pointer.pointerId);
-    if (window.__TAURI_INTERNALS__) {
-      const win = getCurrentWindow();
-      void Promise.all([win.outerPosition(), win.scaleFactor()])
-        .then(([position, scale]) => {
-          const logical = position.toLogical(scale);
-          dragOrigin.current = { winX: logical.x, winY: logical.y };
-        })
-        .catch(() => {
-          /* no window position available; drag will simply show the dangling pose in place */
+    void getCurrentWindow()
+      .outerPosition()
+      .then((position) => {
+        dragOrigin.current = {
+          pointerX: pointer.screenX,
+          pointerY: pointer.screenY,
+          windowX: position.x,
+          windowY: position.y
+        };
+      })
+      .catch((cause) => {
+        console.error("Failed to read character overlay position", cause);
+      });
+  }
+
+  function continueOverlayDrag(pointer: PointerEvent<HTMLButtonElement>) {
+    const start = dragStart.current;
+    if (!start) return;
+    lastDragPoint.current = { x: pointer.screenX, y: pointer.screenY };
+    const moved = Math.hypot(pointer.screenX - start.x, pointer.screenY - start.y);
+    if (!draggingStarted.current) {
+      if (moved < DRAG_THRESHOLD_PX) return;
+      draggingStarted.current = true;
+      suppressClick.current = true;
+      setIsDraggingOverlay(true);
+      // Moving the mascot should not drag the chat with it, so tuck the chat away.
+      setChatOpen(false);
+      void hideChatOverlay().catch(() => undefined);
+      dragMode.current = "native";
+      void getCurrentWindow()
+        .startDragging()
+        .catch((cause) => {
+          console.error("Native character drag failed; falling back to manual move", cause);
+          dragMode.current = "manual";
+          const latest = lastDragPoint.current;
+          if (latest) void moveOverlayFromPoint(latest.x, latest.y);
         });
+      return;
+    }
+    if (dragMode.current !== "native") {
+      void moveOverlayFromPoint(pointer.screenX, pointer.screenY);
     }
   }
 
   function finishOverlayPointer(pointer: PointerEvent<HTMLButtonElement>) {
     const start = dragStart.current;
+    const wasDragging = draggingStarted.current;
+    const moved = start ? Math.hypot(pointer.screenX - start.x, pointer.screenY - start.y) : 0;
     if (pointer.currentTarget.hasPointerCapture(pointer.pointerId)) {
       pointer.currentTarget.releasePointerCapture(pointer.pointerId);
     }
-    if (start) {
-      const moved = Math.hypot(pointer.screenX - start.x, pointer.screenY - start.y);
-      suppressClick.current = moved > 5 || Date.now() - start.at > 350;
+    void releaseDrag();
+    if (start && !wasDragging && moved < DRAG_THRESHOLD_PX) {
+      if (pointerStartedWithChatOpen.current) {
+        setChatOpen(false);
+      } else {
+        openChatOverlayFromMouse();
+      }
+      return;
     }
+    suppressClick.current = wasDragging || moved >= DRAG_THRESHOLD_PX;
+  }
+
+  function cancelOverlayPointer(pointer: PointerEvent<HTMLButtonElement>) {
+    if (pointer.currentTarget.hasPointerCapture(pointer.pointerId)) {
+      pointer.currentTarget.releasePointerCapture(pointer.pointerId);
+    }
+    suppressClick.current = true;
     void releaseDrag();
   }
 
-  function openBubble() {
+  async function moveOverlayFromPoint(screenX: number, screenY: number) {
+    let origin = dragOrigin.current;
+    if (!origin) {
+      try {
+        const position = await getCurrentWindow().outerPosition();
+        origin = {
+          pointerX: screenX,
+          pointerY: screenY,
+          windowX: position.x,
+          windowY: position.y
+        };
+        dragOrigin.current = origin;
+      } catch (cause) {
+        console.error("Failed to read character overlay position", cause);
+        return;
+      }
+    }
+
+    const nextX = origin.windowX + (screenX - origin.pointerX);
+    const nextY = origin.windowY + (screenY - origin.pointerY);
+    try {
+      await getCurrentWindow().setPosition(new PhysicalPosition(Math.round(nextX), Math.round(nextY)));
+      await setHouseDropTarget(await isCurrentWindowOverHouse());
+    } catch (cause) {
+      console.error("Failed to move character overlay", cause);
+    }
+  }
+
+  function openChatOverlayFromMouse() {
     if (suppressClick.current) {
       suppressClick.current = false;
       return;
     }
-    setBubbleOpen((open) => {
-      if (open) {
+    void showChatOverlay()
+      .then(() => setChatOpen(true))
+      .catch((cause) => {
+        console.error("Failed to show chat overlay", cause);
         setChatOpen(false);
-        setNotice(null);
-        return false;
-      }
-      setChatOpen(false);
-      setNotice(null);
-      return true;
-    });
-  }
-
-  async function submitDraft() {
-    const trimmed = draft.trim();
-    if (!trimmed || !activeRoomId) {
-      setNotice("먼저 관리 폴더를 서버 room과 연결해야 채팅을 보낼 수 있어요.");
-      return;
-    }
-    const optimisticId = `local-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
-    const optimisticMessage: AgentChatMessage = {
-      message_id: optimisticId,
-      room_id: activeRoomId,
-      session_id: chatSession?.session_id ?? null,
-      sender_type: "USER",
-      message_type: "TEXT",
-      content: trimmed,
-      structured_payload: null,
-      command_id: null,
-      created_at: new Date().toISOString()
-    };
-    setNotice(null);
-    setBusy(true);
-    setAnswerPending(true);
-    setDraft("");
-    setChatMessages((items) => appendUniqueMessages(items, [optimisticMessage]));
-    try {
-      const session = chatSession ?? (await ensureRoomChatSession(activeRoomId, activeRoomName));
-      if (!chatSession) setChatSession(session);
-      const result = await sendAgentChatMessage(session.session_id, trimmed);
-      const sentMessages = [result.message, result.assistant].filter(isChatMessage);
-      await markAgentChatSessionRead(session.session_id, lastAgentChatMessageId(sentMessages)).catch(() => undefined);
-      setChatMessages((items) =>
-        appendUniqueMessages(
-          items.filter((message) => message.message_id !== optimisticId),
-          sentMessages
-        )
-      );
-      setNotice(aiNotice(result.ai_status));
-    } catch (cause) {
-      setChatMessages((items) => items.filter((message) => message.message_id !== optimisticId));
-      setDraft((current) => current || trimmed);
-      setNotice(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-      setAnswerPending(false);
-    }
-  }
-
-  async function runQuickCleanup() {
-    setNotice(null);
-    setBusy(true);
-    try {
-      if (!activeRoomId) {
-        throw new Error("관리 폴더를 서버 room과 연결해야 빠른 정리 제안을 만들 수 있어요.");
-      }
-      const result = await createAgentChatQuickCleanup(activeRoomId);
-      setChatSession(result.session);
-      const sentMessages = [result.message, result.assistant].filter(isChatMessage);
-      setChatMessages((items) => appendUniqueMessages(items, sentMessages));
-      await markAgentChatSessionRead(result.session.session_id, lastAgentChatMessageId(sentMessages)).catch(() => undefined);
-      const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
-      setQuickView(quick);
-      setNotice("빠른 정리 제안 카드가 추가됐어요. 승인하면 PC 분석이 시작됩니다.");
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
+      });
   }
 
   return (
@@ -411,12 +313,12 @@ export function CharacterOverlay() {
       <button
         type="button"
         className="character-drag-surface"
-        onClick={openBubble}
         onPointerDown={beginOverlayDrag}
+        onPointerMove={continueOverlayDrag}
         onPointerUp={finishOverlayPointer}
-        onPointerCancel={finishOverlayPointer}
+        onPointerCancel={cancelOverlayPointer}
         aria-label={`MouseKeeper ${KIND_LABELS[event.kind]}`}
-        title="클릭: 말풍선 / 드래그: 이동"
+        title="Click: chat / drag: move"
       >
         <img
           className="character-motion"
@@ -427,51 +329,6 @@ export function CharacterOverlay() {
           style={{ transform: spriteFlip }}
         />
       </button>
-
-      {bubbleOpen ? (
-        <section className={`character-bubble ${chatOpen ? "is-chatting" : ""}`} aria-label="MouseKeeper chat">
-          {chatOpen ? (
-            <RoomChatPanel
-              avatarUrl={chatAvatarUrl}
-              answerPending={answerPending}
-              busy={busy}
-              draft={draft}
-              event={event}
-              notice={notice}
-              roomId={activeRoomId}
-              roomName={activeRoomName}
-              messages={chatMessages}
-              loading={chatLoading}
-              sessionTitle={chatSession?.title ?? null}
-              quickView={quickView}
-              onChangeDraft={setDraft}
-              onClose={() => {
-                setChatOpen(false);
-                setNotice(null);
-              }}
-              onQuickCleanup={() => void runQuickCleanup()}
-              onUsePrompt={setDraft}
-              onSubmit={() => void submitDraft()}
-            />
-          ) : (
-            <button
-              type="button"
-              className="character-bubble-prompt"
-              onClick={() => {
-                setChatOpen(true);
-                setNotice(null);
-              }}
-              aria-label="채팅창 열기"
-            >
-              <span className="character-bubble-dots" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-              </span>
-            </button>
-          )}
-        </section>
-      ) : null}
     </div>
   );
 }
@@ -489,27 +346,6 @@ async function readHouseRect(): Promise<Rect | null> {
     return { x: houseX, y: houseY, w: houseSide, h: houseSide };
   } catch {
     return null;
-  }
-}
-
-async function resizeOverlayWindow(mode: keyof typeof OVERLAY_SIZES) {
-  if (!window.__TAURI_INTERNALS__) return;
-  const win = getCurrentWindow();
-  const target = OVERLAY_SIZES[mode];
-  try {
-    const [position, before] = await Promise.all([win.outerPosition(), win.outerSize()]);
-    await win.setSize(new LogicalSize(target.width, target.height));
-    const after = await win.outerSize();
-    // The mascot is pinned to the bottom-right corner. Moving by the size delta keeps its feet
-    // at the same desktop coordinate while the speech bubble opens or closes.
-    await win.setPosition(
-      new PhysicalPosition(
-        position.x + before.width - after.width,
-        position.y + before.height - after.height
-      )
-    );
-  } catch {
-    // Browser preview and a closing native window do not expose a usable window handle.
   }
 }
 
@@ -618,174 +454,4 @@ async function snapCharacterToHouseFloor() {
   await getCurrentWindow()
     .setPosition(new PhysicalPosition(Math.round(next.x), Math.round(next.y)))
     .catch(() => undefined);
-}
-
-async function ensureRoomChatSession(roomId: string, roomName: string) {
-  const sessions = await listAgentChatSessions(roomId);
-  return sessions[0] ?? createAgentChatSession(roomId, `${roomName} chat`);
-}
-
-function appendUniqueMessages(current: AgentChatMessage[], next: AgentChatMessage[]) {
-  const seen = new Set(current.map((message) => message.message_id));
-  const merged = [...current];
-  for (const message of next) {
-    if (seen.has(message.message_id)) continue;
-    seen.add(message.message_id);
-    merged.push(message);
-  }
-  return merged;
-}
-
-function lastAgentChatMessageId(messages: AgentChatMessage[]) {
-  return messages.length > 0 ? messages[messages.length - 1].message_id : null;
-}
-
-function isChatMessage(message: AgentChatMessage | null): message is AgentChatMessage {
-  return message != null;
-}
-
-function aiNotice(status: string) {
-  if (status === "UNCONFIGURED") {
-    return "메시지는 저장됐고, AI 응답은 OpenAI 설정이 끝나면 붙어요. 서버의 AI_PROVIDER/AI_API_KEY/AI_MODEL을 확인해 주세요.";
-  }
-  if (status === "INVALID") {
-    return "메시지는 저장됐지만 AI 응답 형식이 검증을 통과하지 못했어요.";
-  }
-  return null;
-}
-
-function RoomChatPanel({
-  avatarUrl,
-  answerPending,
-  busy,
-  draft,
-  event,
-  loading,
-  messages,
-  notice,
-  quickView,
-  roomId,
-  roomName,
-  sessionTitle,
-  onChangeDraft,
-  onClose,
-  onQuickCleanup,
-  onUsePrompt,
-  onSubmit
-}: {
-  avatarUrl: string;
-  answerPending: boolean;
-  busy: boolean;
-  draft: string;
-  event: CharacterEvent;
-  loading: boolean;
-  messages: AgentChatMessage[];
-  notice: string | null;
-  quickView: AgentChatQuickView | null;
-  roomId: string | null;
-  roomName: string;
-  sessionTitle: string | null;
-  onChangeDraft: (value: string) => void;
-  onClose: () => void;
-  onQuickCleanup: () => void;
-  onUsePrompt: (value: string) => void;
-  onSubmit: () => void;
-}) {
-  const prompts = quickView?.prompts.slice(0, 4) ?? [];
-  const pendingCount = quickView?.pending_action_count ?? 0;
-  const unreadCount = quickView?.unread_count ?? 0;
-  return (
-    <div className="room-chat-panel" data-room-id={roomId ?? "unbound"}>
-      <header className="room-chat-header">
-        <button type="button" onClick={onClose} aria-label="Close chat">
-          &lt;
-        </button>
-        <div>
-          <strong>{roomName}</strong>
-          <small>{sessionTitle ?? "서버 채팅 세션 연결 중"}</small>
-        </div>
-        <span className="room-chat-status" title={event.kind} aria-label={event.kind} />
-      </header>
-
-      <div className="room-chat-quickbar" aria-label="Chat quick actions">
-        <button type="button" onClick={onQuickCleanup} disabled={busy || roomId == null}>
-          빠른 정리
-        </button>
-        {prompts.map((prompt) => (
-          <button key={prompt.id} type="button" onClick={() => onUsePrompt(prompt.prompt)} title={prompt.prompt}>
-            {prompt.label}
-          </button>
-        ))}
-      </div>
-
-      {pendingCount > 0 || unreadCount > 0 ? (
-        <div className="room-chat-quickmeta" aria-label="Chat quick counts">
-          {pendingCount > 0 ? <span>제안 {pendingCount}</span> : null}
-          {unreadCount > 0 ? <span>새 메시지 {unreadCount}</span> : null}
-        </div>
-      ) : null}
-
-      <div className="room-chat-thread" aria-live="polite">
-        {loading ? (
-          <article className="room-chat-message is-mouse">
-            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-            <div>
-              <strong>MouseKeeper</strong>
-              <p>모바일과 공유하는 채팅 기록을 불러오는 중이에요.</p>
-            </div>
-          </article>
-        ) : null}
-        {!loading && messages.length === 0 ? (
-          <article className="room-chat-message is-mouse">
-            <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-            <div>
-              <strong>MouseKeeper</strong>
-              <p>{event.message ?? "이 방 기준으로 이야기할게요. 이 기록은 모바일 채팅과 같은 서버 세션에 저장돼요."}</p>
-            </div>
-          </article>
-        ) : null}
-        {messages.map((message) => (
-          <article
-            className={`room-chat-message ${message.sender_type === "USER" ? "is-user" : "is-mouse"}`}
-            key={message.message_id}
-          >
-            {message.sender_type === "ASSISTANT" ? (
-              <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />
-            ) : null}
-            <div>
-              {message.sender_type === "ASSISTANT" ? <strong>MouseKeeper</strong> : null}
-              <p>{message.content}</p>
-              {message.message_type === "COMMAND_DRAFT" ? (
-                <small className="room-chat-draft-hint">모바일에서 승인할 수 있는 명령 초안이에요.</small>
-              ) : null}
-            </div>
-          </article>
-        ))}
-      </div>
-
-      {answerPending ? <p className="character-thinking">답을 만들고 있어요!</p> : null}
-
-      {notice ? <p className="character-notice">{notice}</p> : null}
-
-      <form
-        className="character-chat"
-        onSubmit={(submitEvent) => {
-          submitEvent.preventDefault();
-          onSubmit();
-        }}
-      >
-        <input
-          aria-label="Send message draft"
-          placeholder={`${roomName}에 메시지 입력`}
-          maxLength={2000}
-          value={draft}
-          onChange={(inputEvent) => onChangeDraft(inputEvent.target.value)}
-          autoFocus
-        />
-        <button type="submit" disabled={busy || draft.trim().length === 0}>
-          전송
-        </button>
-      </form>
-    </div>
-  );
 }

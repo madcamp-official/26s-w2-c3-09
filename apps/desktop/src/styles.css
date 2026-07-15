@@ -817,88 +817,16 @@ body.overlay-body .character-motion {
   -webkit-user-drag: none;
 }
 
-body.overlay-body .character-bubble {
-  position: absolute;
-  bottom: 36px;
-  right: 98px;
-  box-sizing: border-box;
-  width: 72px;
-  min-height: 44px;
+body.chat-overlay-body .chat-overlay {
   display: grid;
-  place-items: center;
-  gap: 0;
-  border: 0;
-  border-radius: 999px;
-  background:
-    radial-gradient(circle at 46% 48%, rgba(247, 253, 255, 0.98) 0 38%, rgba(215, 239, 247, 0.94) 72%, rgba(185, 224, 237, 0.92) 100%);
-  padding: 0;
-  box-shadow: none;
-  backdrop-filter: none;
-  pointer-events: auto;
-}
-
-body.overlay-body .character-bubble::after {
-  content: "";
-  position: absolute;
-  right: -4px;
-  bottom: 6px;
-  width: 18px;
-  height: 16px;
-  border: 0;
-  border-radius: 3px 12px 3px 12px;
-  background: rgba(190, 228, 240, 0.94);
-  transform: rotate(-28deg) skewX(-12deg);
-  transform-origin: left top;
-}
-
-body.overlay-body .character-bubble.is-chatting {
-  top: 10px;
-  bottom: auto;
-  right: 116px;
-  width: 318px;
-  height: 336px;
+  width: 100vw;
+  height: 100vh;
+  min-width: 0;
   min-height: 0;
-  place-items: stretch;
-  border-radius: 14px;
   background: #b7d7ea;
   padding: 0;
   overflow: hidden;
-  box-shadow: 0 10px 26px rgba(32, 40, 48, 0.22);
-}
-
-body.overlay-body .character-bubble.is-chatting::after {
-  display: none;
-}
-
-body.overlay-body .character-bubble-prompt {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  min-height: 44px;
-  min-width: 0;
-  overflow: hidden;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  color: #24576b;
-  padding: 0;
-  box-shadow: none;
-}
-
-body.overlay-body .character-bubble-dots {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-}
-
-body.overlay-body .character-bubble-dots span {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: linear-gradient(180deg, #16455a, #4f8da0);
+  pointer-events: auto;
 }
 
 body.overlay-body .character-notice {
@@ -1169,6 +1097,7 @@ body.house-overlay-body .house-drag-surface {
   box-shadow: none;
   outline: none;
   cursor: grab;
+  isolation: isolate;
   pointer-events: auto;
   touch-action: none;
 }
@@ -1202,7 +1131,7 @@ body.house-overlay-body .house-mess-layers {
   width: 100%;
   height: 100%;
   background: transparent;
-  mix-blend-mode: multiply;
+  mix-blend-mode: normal;
   pointer-events: none;
 }
 
@@ -1227,7 +1156,7 @@ body.house-overlay-body .house-mess-layers img {
   object-fit: contain;
   background: transparent;
   filter: brightness(1.08) contrast(1.14) saturate(1.04);
-  mix-blend-mode: multiply;
+  mix-blend-mode: normal;
   user-select: none;
   -webkit-user-drag: none;
 }
@@ -3001,7 +2930,8 @@ html.overlay-root,
 html.overlay-root body,
 html.overlay-root #root,
 html.overlay-root .character-overlay,
-html.overlay-root .house-overlay {
+html.overlay-root .house-overlay,
+html.overlay-root .chat-overlay {
   border: 0 !important;
   outline: 0 !important;
   background: transparent !important;
@@ -3010,8 +2940,18 @@ html.overlay-root .house-overlay {
 }
 
 html.overlay-root body.overlay-body,
-html.overlay-root body.house-overlay-body {
+html.overlay-root body.house-overlay-body,
+html.overlay-root body.chat-overlay-body {
   overflow: hidden !important;
+}
+
+html.overlay-root body.house-overlay-body,
+html.overlay-root body.house-overlay-body #root,
+html.overlay-root body.house-overlay-body .house-overlay,
+html.overlay-root body.house-overlay-body .house-drag-surface,
+html.overlay-root body.house-overlay-body .house-mess-layers {
+  background: transparent !important;
+  background-color: transparent !important;
 }
 
 html.overlay-root .character-drag-surface,
@@ -3380,6 +3320,15 @@ html.overlay-root .house-manager-content .pairing-code {
   word-break: break-all;
 }
 
+html.overlay-root body.chat-overlay-body .chat-overlay {
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  background: #b7d7ea !important;
+  background-color: #b7d7ea !important;
+}
+
 html.overlay-root body.overlay-body .room-chat-panel {
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto auto auto;
@@ -3389,12 +3338,6 @@ html.overlay-root body.overlay-body .room-chat-panel {
   overflow: hidden;
   color: #202124;
   font-family: "Segoe UI", system-ui, sans-serif;
-}
-
-html.overlay-root body.overlay-body .character-bubble.is-chatting {
-  width: 318px;
-  height: 336px;
-  min-height: 0;
 }
 
 html.overlay-root body.overlay-body .room-chat-thread {
