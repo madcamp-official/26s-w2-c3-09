@@ -1,296 +1,401 @@
-# MOUSEKEEPER (26s-w2-c3-09)
+# MOUSEKEEPER
 
-## Recent implementation notes (2026-07-13/14)
+MOUSEKEEPER는 데스크톱의 관리 폴더를 안전하게 분석하고, 모바일과 데스크톱에서 같은 AI 채팅을 이어가며, 사용자의 승인을 받은 파일 작업만 실행하는 local-first 크로스플랫폼 파일 관리 서비스입니다.
 
-- Desktop overlay chat now uses the same server-backed room chat sessions as mobile: it lists/creates `/v1/rooms/:roomId/chat-sessions`, loads `/v1/chat-sessions/:sessionId/messages`, and sends messages through the authenticated desktop agent bridge so chat history continues across desktop and Android.
-- OpenAI provider configuration is ready for `AI_MODEL=gpt-5.4` through the Responses API path. Provider authentication/model access errors now fail closed as `AI_PROVIDER_UNCONFIGURED` instead of crashing chat message creation.
-- Release E2E preflight is now available through `pnpm e2e:preflight`. It checks the API base URL, `/health`, `/ready`, Android tooling/device presence, desktop Rust tooling, required repo paths, and dirty worktree state without creating fake pass evidence.
-- Release E2E preflight `-RunLocalChecks` now also runs the mobile smart-cache encrypted download, verified download, and owner-scoped display-cache regression tests so encrypted plaintext handoff changes cannot skip the release gate.
-- Smart-cache policy now supports `pinnedPatterns`: mobile can save pinned path globs, the server stores and returns them with the room policy, and Desktop marks matching local candidates as `manualPin` before reservation submission.
-- Desktop smart-cache candidate processing now applies the server-provided `excludedPatterns` policy before local file validation or batch submission. This keeps the server as the final enforcement layer while avoiding preparing and submitting files the policy will reject anyway.
-- Chat `FIND` command drafts now materialize as read-only file-browse requests instead of queued write-capable commands. The server stores the browse request idempotently, Desktop validates `query`/`extensions`/`limit`, and the local SQLite file index filters extensions before applying page limits.
-- Chat `DOWNLOAD` command drafts now materialize as idempotent FileTransfer requests instead of queued write-capable commands. The draft records `fileTransferId`, emits the same durable file-transfer event flow as manual downloads, and fails closed with `EXPECTED_IDENTITY_UNSUPPORTED` when a draft includes file identity preconditions that the current desktop transfer contract cannot yet carry.
-- Chat `UPLOAD` command drafts now fail closed at confirmation with `UPLOAD_TRANSFER_UNCONFIGURED` instead of entering the desktop command queue. The current FileTransfer state machine is desktop-to-mobile only, so mobile-to-desktop uploads must wait for an explicit inverse transfer contract rather than pretending to work.
-- Desktop command processing now fails contract-level `FIND`, `DOWNLOAD`, and `UPLOAD` commands visibly instead of silently skipping them. Until those intent-specific handlers are wired, the agent queues a durable `FAILED` command status so server/mobile state can leave `QUEUED` rather than polling forever.
-- Mobile Room now exposes an approval-first manual file command form for `RENAME`, `MOVE`, `TRASH`, and `CREATE`. The form validates obvious unsafe relative paths locally, sends the existing server command contract with `requiresApproval`, and relies on the desktop agent to create proposals before any file mutation.
-- Mobile Smart Cache reads now use `smartCachePolicyProvider(roomId)`, `smartCacheFilesProvider(roomId)`, and `smartCacheStatusProvider(roomId)`, preserving the existing transport-only offline fallback while keeping policy/file projections behind provider-backed reads.
-- Mobile encrypted smart-cache downloads now have a real fail-closed plaintext handoff path: ciphertext SHA-256 verification, `MKS1_NONCE_CIPHERTEXT_TAG` envelope parsing, matching 32-byte key validation, AES-256-GCM tag/nonce verification, plaintext SHA-256 verification, and `.part`/no-overwrite final save. The default key store still returns `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC` until an actual key-sync provider is wired.
-- Mobile rules now expose `ruleGatewayProvider` and `ruleListProvider(roomId)` for provider-backed reads; RulesPage still applies successful create/update/draft confirmations by local upsert instead of reloading the entire list.
-- Mobile connection gate loading now delays the pixel-fill mouse for 200ms to avoid flicker, then shows a long-wait message after 10 seconds and an explicit retry action after 20 seconds.
-- Mobile file browse transport is now provider-backed through `fileBrowseGatewayProvider`, `fileDirectoryBrowseRequesterProvider`, and `fileBrowseStatusFetcherProvider`; FilesPage still keeps the WebSocket-first wait path and only uses REST status as the 5-second safety fallback.
-- Mobile Room REST reads are now split into Riverpod providers for commands, proposals, executions, activity, and latest cleanliness snapshot. RoomPage still preserves the existing offline cache fallback, but explicit/manual reloads are the only path that invalidates those providers; WebSocket updates continue to patch the affected item instead of reloading the whole room.
-- Mobile Room state now has a `RoomContent` reducer that applies realtime command/proposal/execution/cleanliness patches as one object, preserving unchanged slices by identity and returning the same object for unrelated events.
-- Mobile realtime now accepts `file.directory.updated` payloads as directory-scoped patches and routes them to the visible Files page without bumping the generic page revision or reloading Home.
-- Mobile file directory state now has a reducer for `FILE_ADDED`, `FILE_REMOVED`, `FILE_UPDATED`, and `FILE_MOVED` style patches, updating only the visible folder entries and marking paginated/uncertain ranges stale instead of forcing an immediate full browse reload.
-- Mobile Files now preserves the same `FileDirectoryState` object for unchanged browse pages, so duplicate/empty directory responses do not trigger unnecessary state replacement while stale ranges still clear after an authoritative refresh.
-- Mobile Home's 5-second connection safety loop now has no reload callback at all; it can reconcile only the lightweight device/room gate, while Home summary refreshes remain explicit or WebSocket fallback-driven.
-- Mobile connection safety now exposes one explicit `ConnectionControlApi.summary()` path over `/v1/connections/summary`, so the 5-second reconcile cannot accidentally fan out to separate device/room reads or reload `/v1/home/summary`.
-- Mobile file browsing now keeps the visible directory page, next cursor, and desktop generation in `FileDirectoryState`, so the next `fileDirectoryProvider(rootId, relativePath)` split has one reducer-backed state object instead of scattered page fields.
-- Mobile chat read paths now expose `chatSessionListProvider(roomId)`, `chatMessagesProvider(sessionId)`, and cursor-scoped page reads, with ChatPage loading through those providers in production while preserving test gateway injection.
-- Mobile chat conversation state is now centralized in `ChatConversationState`, keeping sessions, selected session, message page, pagination cursor, and `hasMoreMessages` together so the next Riverpod provider split can avoid scattered `setState` reload paths.
-- Mobile chat state now has provider-backed gateway injection and pure reducers for session selection, pagination merge, preview touching, and command-draft patching; no-op updates preserve object identity so later realtime/chat pagination work can avoid full page reloads.
-- Mobile chat sessions can now be renamed from the session bar through the existing `PATCH /v1/chat-sessions/:sessionId` API; the returned session row replaces only the matching local row without reloading messages.
-- Mobile chat now consumes `chat.message.created` as a session-scoped realtime patch. The visible session fetches only messages after its current cursor and merges unseen rows, while the generic page revision fan-out is suppressed for complete chat message events.
-- Mobile chat now refreshes the lightweight chat session list when `chat.message.created` arrives, so other-session preview/title/order updates appear in the session picker without loading that session's messages or reloading the page.
-- RuleDefinition hardening: the Rust file engine now accepts the server/mobile `RuleDefinition` draft shape as well as root-local `rules.json`, maps additive conditions such as modified/created age, size, relative path, file kind, name operators, `TRASH`, and `CREATE_DIR`, records directory entries for safe destination checks, and deduplicates identical `CREATE_DIR` proposals before execution approval.
-- Latency validation: no merge-conflict markers are present; the existing mobile/server/desktop latency hardening was rechecked with focused tests. Mobile Home uses one `/v1/home/summary` load plus WebSocket item patches, the 5-second connection safety reconcile does not refetch Home summary, Desktop keeps 5-second heartbeat with 15/30-second REST reconcile, and pairing status remains isolated at 60/min with 2-second desktop polling.
-- Server `/realtime` now installs a Socket.IO Redis adapter from the existing `REDIS_URL`, using dedicated duplicated pub/sub clients so multi-process room broadcasts no longer depend on a single API process.
-- Mobile smart-cache downloads now POST `DOWNLOAD_COMPLETED` to `/v1/cached-files/:cachedFileId/access-events` only after local save and SHA-256 verification; the server records `lastAccessedAt`/usage score from that verified ACK instead of treating signed URL issuance as a completed access.
-- Realtime/event contract artifacts now include independent JSON Schema files for `presence.updated`, item-scoped `smart-cache.updated`, and the safe declarative Rule DSL, with OpenAPI component refs and regression checks.
-- Mobile smart-cache file listing now uses the plan-aligned `/v1/rooms/:roomId/smart-cache/files` endpoint, while the older `/v1/rooms/:roomId/cached-files` route remains as a compatibility alias.
-- Mobile now stores smart-cache file metadata in Drift (`cached_smart_cache_files`): availability/freshness, checksum, local verified download path, and last verified/downloaded timestamps are owner-scoped and purged with the room/connection cache.
-- Mobile smart-cache now falls back to owner-scoped Drift metadata only on transport failures, showing an offline warning and the last verified cache list without hiding server/auth errors.
-- Mobile file browse requests now listen for `file.browse.ready` / `file.browse.failed` WebSocket events and wake only the matching active request; REST status checks are a 5-second safety fallback instead of a fixed 2-second polling loop, and browse events no longer trigger Home summary reloads.
-- Latency hardening: mobile Home keeps the 5-second authoritative safety check for device/room liveness, but HomeController no longer subscribes to that gate as a summary dependency, with regression coverage proving the loop does not trigger another `/v1/home/summary` fetch.
-- Mobile connection safety reads now use one lightweight `/v1/connections/summary` request for ACTIVE device/room gate data only; `/v1/home/summary` remains the richer Home projection and is no longer reused by the 5-second safety reconcile.
-- Realtime Home updates remain item-scoped where payloads are complete: `presence.updated` patches only the affected device, lifecycle events remove only affected devices/rooms, and execution status patches only the affected room.
-- `execution.updated` events now carry `executionId`, `roomId`, and `status` in the payload itself, so mobile reducers can perform targeted result upserts without depending on envelope-only fields.
-- Mobile Room now patches/upserts only the affected execution row for `execution.updated` realtime events and skips the redundant full room reload that follows from the generic revision signal.
-- `command.updated` events now also carry `commandId`, `roomId`, and `status`; Mobile Room patches only the affected command row instead of reloading the entire room projection.
-- `proposal.created` events now carry `proposalId`, `roomId`, `commandId`, `status`, `summary`, `itemCount`, and the authoritative `pendingProposalCount`; mobile patches the Home badge and Room proposal row without a full summary/room reload.
-- `decision.created` events now carry `decisionId`, `proposalId`, `roomId`, `commandId`, final proposal/command statuses, and authoritative `pendingProposalCount`; mobile removes the closed proposal and patches the related command without reloading the room.
-- `room.snapshot.updated` events now carry the full cleanliness snapshot projection; mobile patches Home cleanliness fields and Room `CleanlinessCard` only when the event is newer than the cached `calculatedAt`.
-- `device.paired` events now carry the active public device projection; mobile upserts the Connection Gate and Home device row from WebSocket data, avoiding an extra REST summary reconcile on successful pairing while preserving the legacy fallback for incomplete events.
-- Mobile realtime dispatch now suppresses generic `realtimeRevision` fan-out for complete item-scoped payloads, including presence, lifecycle removals, proposals, decisions, cleanliness snapshots, commands, and executions; incomplete or unknown projections still keep the full reconcile fallback.
-- Mobile file downloads now listen for `file.transfer.updated` WebSocket events and wake only the matching active transfer, keeping REST status reads as a 15-second safety fallback instead of polling every 2 seconds.
-- Desktop background runtime keeps heartbeat at 5 seconds, splits scheduled REST reconciliation into 15-second fast control-plane passes and 30-second heavy file-transfer/smart-cache passes, while Socket.IO wakeups still trigger an immediate full reconcile.
-- Desktop AgentPanel now separates local status refresh cadence: heartbeat freshness uses the 5-second runtime cadence, background status refreshes every 15 seconds, and connection status refreshes every 30 seconds.
-- Desktop full reconcile now rebuilds the SQLite browse/search index for active watched managed roots and recalculates the same cleanliness snapshot, so missed watcher events are repaired without turning mobile into a full-refresh polling client.
-- File-engine SQLite `file_index` now stores nullable OS-backed `file_id` values: Windows uses volume serial + file index via Win32, Unix uses dev + inode, and unsupported platforms leave the field empty instead of inventing an identity.
-- File-engine proposals now carry the same nullable OS-backed `source_file_id`; desktop proposal submissions preserve it as `sourceFileId`, and execution precheck rejects a changed/unavailable identity as `SourceChanged` before any journaled mutation runs.
-- Desktop file transfer sourceVersion now uses the same OS-backed file identity instead of the older `hm:` hash fallback, and revalidates identity/size/mtime before hashing, after hashing, and after streaming so source swaps are reported as `SOURCE_CHANGED`.
-- Pairing status polling uses the existing isolated 60/min rate-limit bucket and the desktop pairing UI keeps a 2-second polling cadence.
-- Desktop scan, write, and transfer work now share explicit per-kind gates across manual Tauri commands and background runtime passes; overlapping same-kind work fails fast with `BUSY` instead of racing file scans, journaled writes, or object uploads.
-- Smart-cache uploads now use Desktop-side AES-256-GCM before signed PUT; the server stores ciphertext size/checksum plus encryption metadata, and mobile can decrypt only when a matching synced key is provided. Without that real key-sync provider, it still fails closed with `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`.
-- Desktop watcher source changes now enqueue durable smart-cache STALE reports; the server marks only the affected available cached files stale and emits `smart-cache.updated` without forcing a mobile Home summary reload.
-- Rule draft lifecycle now persists only validated `READY` AI rule drafts, keeps unconfigured AI as explicit `UNCONFIGURED` without fake rows, and requires explicit idempotent confirmation before creating a durable rule.
-- Rule draft preview now has an explicit `/v1/rule-drafts/:draftId/preview` contract and server route. Until a Desktop dry-run transport is wired, it fails closed with `RULE_DRAFT_PREVIEW_UNCONFIGURED` instead of returning fake match results.
-- Mobile Rules exposes that rule draft preview route from the pending draft card and surfaces the fail-closed dry-run-unconfigured state without creating or confirming a rule.
-- OpenAI Responses provider is now configurable behind `AI_PROVIDER=openai`, `AI_API_KEY`, and `AI_MODEL`; model output is parsed as structured JSON and revalidated against MouseKeeper command/rule Zod contracts before any draft enters product logic. Missing or rejected credentials still return explicit `AI_PROVIDER_UNCONFIGURED`.
-- Desktop command processing now accepts server `RENAME`, `MOVE`, `TRASH`, directory `CREATE`, and empty-file `CREATE` commands as proposal generation only: the agent validates the managed-root binding, source paths, filenames/destinations, parent directory safety, symlink/reparse safety, and destination conflicts, then submits `MOVE`, quarantine, `CREATE_DIR`, or `CREATE_FILE` proposal items without touching files before user approval.
-- Delegated `CREATE_DIR`/`CREATE_FILE` batch execution now has a desktop regression that proves planned journal entries are written before created paths, existing targets are skipped without overwrite, and undo removes only the newly created paths.
-
-> 구체적인 아키텍처와 개발 순서는 [구현 계획](IMPLEMENTATION_PLAN.md), 현재 완료/누락 판정은 [구현 이력 및 MVP 감사](HISTORY.md)를 기준으로 합니다.
+> 현황 기준일: 2026-07-15
 >
-> 현재 감사 기준: `B` (`origin/main` 기반, `2026-07-13`), A/B v1.4 통합 코드 포함
+> 기준 브랜치: `main` (`679fb22`)
+>
+> 운영 API: `https://mousekeeper.madcamp-kaist.org`
+>
+> Android application ID: `com.mousekeeper.app`
 
-## 공통과제 II : 협업형 실전 산출물 제작 (2인 1팀)
+## 현재 상태 요약
 
-**목적:** 실시간 인터랙션, LLM Wrapper, Cross-Platform 중 하나의 옵션을 선택해 구현하며, 선택한 기술을 실제로 동작하는 형태의 산출물로 완성한다.
+| 영역 | 상태 | 요약 |
+|---|---|---|
+| Desktop Agent | 핵심 구현 완료 | Tauri/React UI, Rust 파일 안전 엔진, 관리 폴더, watcher, 제안·실행·undo, 채팅, 파일 전달 |
+| Mobile | 핵심 구현 완료 | Google 로그인 경계, 1:1 PC 페어링, 폴더·파일 탐색, 동일 채팅 세션, 캐릭터 홈, 미니게임 |
+| Server | 핵심 구현 완료 | NestJS API, PostgreSQL, Redis/Valkey, Socket.IO, AI provider, 명령·제안·실행 상태 머신 |
+| Worker | 구현 완료 | FCM 전송, 만료 object 삭제, 재시도 가능한 PostgreSQL 작업 처리 |
+| AWS 운영 | 동작 중 | EC2, Nginx/TLS, systemd, private S3 IAM role, PostgreSQL backup |
+| Release hardening | 진행 중 | Android release signing, Sentry 운영 수신, 일부 실기기 E2E와 smart-cache key sync가 남음 |
 
-**선택 옵션:**
+2026-07-15 현재 `/health`와 `/ready`는 모두 HTTP 200을 반환합니다. 이 확인은 API와 필수 서버 의존성이 준비되었다는 뜻이며, Google 로그인·FCM·OpenAI·S3처럼 외부 자격 증명이 필요한 모든 기능의 성공을 대신하지는 않습니다.
 
-| 옵션 | 설명 |
-|---|---|
-| 실시간 인터랙션 | 사용자 간 상태 변화, 실시간 데이터 흐름, 스트리밍 응답 등 실시간성이 드러나는 기능을 구현 |
-| LLM Wrapper | LLM API를 활용하여 AI 기능이 포함된 산출물을 구현 |
-| Cross-Platform | 하나의 산출물을 여러 실행 환경에서 사용할 수 있도록 구현* |
+MVP의 핵심 코드 흐름은 구축되어 있지만, signed Android release와 전체 실기기 3자 E2E까지 포함한 “출시 완료” 상태는 아닙니다. 외부 provider가 없거나 계약이 아직 없는 기능은 성공으로 가장하지 않고 `UNCONFIGURED` 또는 명시적 오류로 종료합니다.
 
-> *데스크톱 앱 ↔ 모바일 앱; 혹은 다른 폼팩터에서의 앱; 웹만/웹 기반 프레임워크(Electron, Tauri 등) 대신 다른 프레임워크를 시도해보는 것을 적극 권장
+## 프로젝트 목표
 
-**결과물:** 선택한 옵션이 적용된 작동 가능한 산출물, 실행 가능한 코드, 시연 자료 및 관련 문서
+MOUSEKEEPER는 다음 세 가지를 동시에 검증합니다.
 
----
+- **Cross-Platform:** Windows Desktop Agent와 Flutter Android 앱이 같은 사용자·폴더·채팅 상태를 공유합니다.
+- **Realtime Interaction:** Socket.IO 이벤트와 REST replay를 함께 사용해 연결, 폴더, 명령, 제안, 실행, 채팅 상태를 동기화합니다.
+- **LLM Wrapper:** OpenAI Responses API의 구조화 출력을 다시 스키마로 검증하고, AI가 파일을 직접 변경하지 못하도록 승인 경계 뒤에 둡니다.
 
-## 팀원
+## 제품 원칙
 
-| 이름 | 학교 | GitHub | 역할 |
-|---|---|---|---|
-| 김윤서 | 이화여자대학교 | westyoon | B — Product & Cloud: 모바일, 서버, worker, 인증·실시간 연결 |
-| 임성진 | 고려대학교 | nounmoumn | A — Desktop Agent: 로컬 파일 안전, Tauri/Rust, watcher·실행·복구 |
+1. 사용자가 직접 선택한 managed root 밖의 파일은 읽거나 변경하지 않습니다.
+2. AI는 대화·규칙·명령 초안만 만들며 파일 작업을 직접 실행하지 않습니다.
+3. 쓰기 작업은 `제안 → 사용자 승인 → 실행 직전 재검증 → journal → no-overwrite 실행` 순서를 지킵니다.
+4. 서버에는 전체 로컬 파일 인덱스와 절대 경로를 영구 저장하지 않습니다.
+5. 실시간 이벤트를 놓쳐도 durable event와 REST cursor replay로 최종 상태가 수렴해야 합니다.
+6. secret, API key, 서비스 계정 원문은 Git에 저장하지 않습니다.
+7. provider나 환경 변수가 없으면 fake success 대신 `UNCONFIGURED`를 표시합니다.
 
----
+## 핵심 사용자 흐름
 
-## 선택 옵션
-
-- [x] 실시간 인터랙션
-- [x] LLM Wrapper
-- [x] Cross-Platform
-
----
-
-## 프로젝트 개요
-
-MOUSEKEEPER는 사용자가 등록한 로컬 폴더를 데스크톱 에이전트가 안전하게 분석하고, 모바일에서 제안을 검토·승인한 뒤 파일 정리와 복구를 수행하는 local-first 크로스플랫폼 서비스다.
-
-- **P0 정리 흐름:** 모바일 command → 서버 영속 저장 → 데스크톱 분석 → proposal → 사용자 승인 → 실행 직전 재검증 → journal → no-overwrite 실행 → 결과 동기화 → undo
-- **P0 파일 접근:** 온라인 데스크톱 탐색 → managed root 재검증 → 만료형 전송 → 모바일 checksum 검증 → ACK/TTL 삭제
-- **안전 원칙:** 등록 root 밖 접근 차단, symlink/junction/reparse point 우회 차단, 승인 없는 쓰기 금지, journal-before-write, 기존 파일 덮어쓰기 금지
-- **실시간 원칙:** Socket.IO는 알림 수단이며 PostgreSQL과 replay cursor가 상태 복구의 기준이다.
-- **외부 연동 원칙:** 미설정 provider는 성공으로 가장하지 않고 `UNCONFIGURED`로 처리한다.
-
-## 시스템 구조
+### 1. 로그인과 페어링
 
 ```text
-Flutter Android
-  ↕ REST + Socket.IO
-NestJS/Fastify Server ─ PostgreSQL
-  ├─ Redis/Valkey: presence TTL, rate limit, 짧은 lock, Socket.IO adapter
-  ├─ PostgreSQL durable worker: 알림, 재시도, object 만료·삭제
-  └─ S3-compatible Storage: P0 만료형 전송 / P1 opt-in cache
-  ↕ REST + Socket.IO
-Tauri Desktop
-  ├─ React/Vite UI
-  ├─ Rust file engine: path guard, scan, watcher, rule, journal, undo
-  └─ SQLite WAL: managed roots, file index, operation history
+Google 로그인
+  → 서버에서 Firebase ID token 검증
+  → Desktop이 6자리 pairing code 생성
+  → Mobile이 code claim
+  → 사용자와 Desktop device 연결
+  → ACTIVE device/room 확인 후 Mobile Home 진입
 ```
 
-| 경로 | 역할 |
+- 모바일은 활성 상태에서 하나의 데스크톱 연결을 기준으로 동작합니다.
+- 페어링된 상태의 설정 화면은 연결된 데스크톱 이름과 연결 해제 동작을 제공합니다.
+- 연결이 없으면 모바일은 Pairing Gate 밖으로 나가지 않습니다.
+- 데스크톱은 모바일보다 먼저 관리 폴더를 등록할 수 있습니다.
+- 저장된 휴대폰 연결이 유효하지 않으면 Desktop onboarding은 다시 pairing 단계로 돌아갑니다.
+
+### 2. 관리 폴더 자동 동기화
+
+```text
+Desktop에서 폴더 선택
+  → canonical path와 경계 검증
+  → 로컬 managed root 저장
+  → server room 생성 또는 기존 room 확인
+  → room.created/replay
+  → Mobile 폴더 목록과 Home에 자동 반영
+```
+
+- 별도의 큰 “등록” 버튼 없이 폴더 선택과 등록이 한 흐름으로 처리됩니다.
+- 페어링 전에 만든 managed root도 페어링 후 background reconcile에서 서버 room으로 보정됩니다.
+- 폴더 해제 시 watcher와 disposable index만 정리하며 원본 파일, journal, undo 기록은 보존합니다.
+- 모바일 Home은 폴더 슬롯에 `배경 5 → 배경 1 → 배경 2 → 배경 3 → 배경 4` 순서로 배경을 매핑합니다.
+
+### 3. 파일 정리 승인 흐름
+
+```text
+Mobile/Desktop 채팅 또는 수동 명령
+  → Server에 command/draft 영속화
+  → Desktop이 managed root 안에서 proposal 생성
+  → Mobile/Desktop에 승인 카드 표시
+  → 사용자 승인 또는 거절
+  → Desktop precondition 재검증
+  → journal-before-write
+  → no-overwrite 실행
+  → execution result 동기화
+  → 필요 시 undo
+```
+
+지원되는 핵심 로컬 작업은 `MOVE`, `RENAME`, `TRASH`/quarantine, `CREATE_DIR`, 빈 파일 `CREATE`, README 생성·수정입니다. 일부 기능은 명령 계약과 실제 실행 가능 범위가 다르므로 아래의 미완료 항목을 확인해야 합니다.
+
+### 4. 온라인 파일 탐색과 다운로드
+
+```text
+Mobile browse/search 요청
+  → Server가 만료형 request 생성
+  → Desktop이 로컬 SQLite index 조회
+  → page/cursor 결과 전달
+  → Mobile이 파일 선택
+  → Desktop source identity·size·mtime 재검증
+  → signed object transfer
+  → Mobile .part 저장 및 SHA-256 검증
+  → 최종 저장과 ACK
+  → Worker가 만료 object 삭제
+```
+
+검색은 300ms debounce, 최소 2자, scope와 generation cursor를 사용합니다. 원본이 전송 중 변경되면 `SOURCE_CHANGED`, cursor가 무효화되면 `CURSOR_INVALIDATED`로 실패합니다.
+
+### 5. 데스크톱·모바일 공용 AI 채팅
+
+- 채팅 session과 message는 PostgreSQL에 저장됩니다.
+- 데스크톱과 모바일은 같은 room의 같은 session API를 사용합니다.
+- 어느 쪽에서 보낸 메시지도 `chat.message.created` 이벤트와 cursor 보정으로 반대편에 표시됩니다.
+- 최대 5개의 실제 채팅 session을 유지하며, 인위적인 여섯 번째 `승인 대기방`은 제거했습니다.
+- 승인할 제안은 별도 가상 채팅방이 아니라 실제 채팅의 proposal card와 proposal 화면에서 처리합니다.
+- 사용자 메시지는 즉시 화면에 추가되고 AI 처리 중에는 `답을 만들고 있어요!`를 표시합니다.
+- 현재 OpenAI 호출은 구조화된 단일 응답 방식이며 token streaming은 아직 구현하지 않았습니다.
+
+## 시스템 아키텍처
+
+```text
+┌──────────────────────────────┐
+│ Flutter Mobile              │
+│ Riverpod · Drift · Socket.IO│
+└──────────────┬───────────────┘
+               │ HTTPS + WebSocket
+┌──────────────▼───────────────┐
+│ NestJS/Fastify Server       │
+│ Auth · Pairing · Chat · API │
+└───────┬──────────┬───────────┘
+        │          │
+        │          ├─ Redis/Valkey: presence TTL, Socket.IO adapter
+        │          ├─ PostgreSQL: durable product/control-plane data
+        │          └─ Private S3: transfer/cache object
+        │ HTTPS + WebSocket
+┌───────▼──────────────────────┐
+│ Tauri Desktop Agent         │
+│ React UI + Rust file engine │
+│ SQLite WAL · watcher        │
+└──────────────────────────────┘
+
+Worker
+  ├─ FCM notification delivery
+  ├─ expired transfer/cache object cleanup
+  └─ durable retry/lease processing
+```
+
+### 저장 경계
+
+| 위치 | 저장 내용 |
 |---|---|
-| `apps/desktop` | A 소유 Tauri/React/Rust 데스크톱 앱 |
-| `tools/file-engine-cli` | 데스크톱과 같은 Rust 파일 엔진을 검증하는 CLI |
-| `apps/mobile` | B 소유 Flutter Android 앱 |
-| `apps/server` | B 소유 REST, Socket.IO, 인증, 상태 머신과 영속 queue |
-| `apps/worker` | 전송·캐시 object lifecycle worker |
-| `packages/contracts` | OpenAPI, JSON Schema, Zod 공개 계약 |
-| `packages/database` | Drizzle schema와 PostgreSQL migration |
+| PostgreSQL | 사용자, device, pairing, room, rule, command, proposal, decision, execution, chat, transfer/cache metadata, sync/audit event |
+| Redis/Valkey | presence TTL, Socket.IO pub/sub adapter, 짧은 수명의 연결 상태 |
+| Desktop SQLite | managed root, 로컬 file index, operation journal, sync cursor/outbox, local preference |
+| Mobile Drift | 사용자별 표시 cache, mutation outbox, sync cursor, 검증된 다운로드 metadata |
+| Private S3 | 만료형 FileTransfer object와 암호화된 smart-cache object |
 
-## 현재 구현 현황
+## 기술 스택
 
-### A — Desktop Agent
-
-구현된 코드:
-
-- managed root canonicalization, overlap·traversal·symlink/junction/reparse point 방어
-- SQLite WAL 기반 managed root, file index, operation journal과 auto-approval 설정 저장
-- Tauri 비동기 background loop에서 SQLite 동기 경계를 안전하게 넘는 runtime bridge
-- scan, 검색, paginated browse, watcher debounce·reconcile·startup 복원
-- Rule DSL, proposal, 사용자 decision, 실행 직전 precheck
-- journal-before-write, no-overwrite move, 복구형 trash, create/rename, history, undo, journal recovery
-- React 파일 관리 UI와 Tauri invoke bridge
-- 실제 REST agent transport: pairing 코드 생성·2초 status polling, 5초 heartbeat, 15초 fast REST reconcile, 30초 heavy transfer/smart-cache reconcile, pending command 조회·상태 전이
-- device token의 OS keychain 저장과 UI·로그 비노출, 잘못된 서버 응답 schema 검증
-- device별 SQLite sync cursor와 `/v1/sync/events` REST replay
-- Desktop Agent 연결·pairing·replay 상태 UI
-- managed root 등록 시 서버 room 자동 생성·중복 조회와 수동 `Sync to mobile` 재시도
-- system tray, 사용자가 직접 설정하는 autostart, MSI/NSIS Windows bundle 구성
-- Desktop·Flutter가 함께 사용하는 8종 픽셀풍 MouseKeeper PNG 상태 모션
-- Windows에서 Cargo object 파일 잠금으로 Vite가 종료되지 않도록 `src-tauri/target` 감시 제외
-- overlay window/event bridge skeleton
-- 서버 `RENAME`·`MOVE`·`TRASH`·directory `CREATE`·empty-file `CREATE` command를 직접 파일 변경이 아닌 승인 대기 `MOVE`/격리/`CREATE_DIR`/`CREATE_FILE` proposal로 변환하는 Desktop processor 경로
-- 파일 엔진·realtime용 OpenAPI 외부 JSON Schema 15개와 fixture
-
-아직 완료되지 않은 범위:
-
-- 새 Android identifier용 Firebase debug build 완료, Google login·FCM 실기기 재검증
-- Android release signing, updater signing과 rename 이후 Windows installer 재검증
-- 실제 Rive animation/interaction과 schema-validated 자연어 command provider
-- Release-grade three-party E2E automation for delegated create operations and identity-checked transfer regressions
-- Mobile smart-cache decryption key sync provider and encrypted-download E2E
-- Android ↔ server ↔ Desktop 전체 P0 release E2E 자동화
-
-서버 URL 또는 pairing이 없으면 agent transport는 fake online을 만들지 않고 명시적으로 `UNCONFIGURED`를 반환한다. pairing 뒤에도 heartbeat나 인증 요청이 성공하기 전에는 `offline`이며, device token은 React 계층으로 전달되지 않는다.
-
-### B — Product & Cloud
-
-- Firebase Android 및 Google 로그인, Firebase Admin token 검증 경로
-- PostgreSQL/Drizzle 17개 migration과 Redis/Valkey local compose
-- pairing, device, room, heartbeat/presence, command/proposal/decision/execution API
-- Socket.IO `/realtime`, Redis adapter, idempotency, audit, cursor replay
-- Flutter home/room/rule partial-update·expanded DSL form/proposal/result/chat session/files/smart-cache UI와 Drift cache/outbox
-- P0 browse/transfer control plane과 P1 smart-cache quota/reservation/lifecycle control plane
-- FCM token API·outbox·worker 전송과 모바일 foreground/background 수신 경로
-- worker, AWS EC2 systemd/Nginx 구성, Render blueprint, 실제 backup/restore drill 및 안전 문서
-- server·worker·mobile Sentry SDK와 request/path/token redaction 경계
-
-AWS EC2 API는 `https://mousekeeper.madcamp-kaist.org`에서 `/health`, `/ready`까지 운영 검증됐다. Private S3 bucket과 최소 권한 EC2 IAM role의 LIST/PUT/HEAD/GET/DELETE, FileTransfer와 암호화 smart-cache object lifecycle, worker 삭제를 실제 검증했다. FCM worker는 기존 Firebase service account로 운영 중이고 PostgreSQL backup/격리 restore drill도 통과했다. Rive asset, Android release keystore, Sentry DSN이 필요한 최종 검증은 계속 `UNCONFIGURED` 또는 검증 대기 상태다.
-
-### Phase별 판정
-
-| Phase | 현재 판정 | 남은 완료 조건 |
-|---|---|---|
-| 0 계약·파일 안전 POC | 완료 | Rust 안전 회귀와 fixture E2E 유지 |
-| 1 로그인·페어링·Presence | 코드 경로와 새 Firebase debug build | Google login과 background/terminated FCM 수신 확인 |
-| 2 관리 폴더·스캔·청결도 | room/snapshot/watcher 연결, watcher 누락 보정용 30초 full-pass index reconcile, SQLite OS file ID 저장, proposal/precondition/transfer source identity 검증 | 실기기 3자 E2E 회귀 |
-| 3 규칙·명령·제안 | Desktop/server/mobile processor 연결, 확장 Rule DSL 서버 계약 | 확장 DSL Desktop evaluator 통합과 실제 3자 release E2E |
-| 4 실행·Undo·README·파일 전달 | MOVE/격리/README/transfer/CREATE_DIR/CREATE_FILE 구현 | 실제 3자 transfer E2E와 create release E2E |
-| 5 캐릭터·채팅 | PNG 상태/metadata/overlay shell, 모바일 chat session UI·cursor pagination, AI provider 경계, AI command draft schema 재검증과 `UNCONFIGURED` 응답 계약 | Rive asset과 실제 자연어 명령 provider |
-| 6 오프라인·재접속 | 양쪽 outbox·cursor replay, pairing gate pixel-fill loading 구현 | 강제 종료·서버 재시작 E2E |
-| 7 하드닝·배포 | EC2·private S3·FCM worker·DB restore drill | rename migration, signed release, Sentry DSN |
-| 8 P1 스마트 캐시 | quota/reservation/usage score/lifecycle, Desktop AES-256-GCM ciphertext upload, server encryption metadata, Mobile AES-GCM tag/plaintext verification and safe local save when a key is supplied | Mobile key sync provider and physical E2E |
-
-### v1.4 — 청결도·연결 해제·모바일 파일 접근
-
-- 청결도는 Rust의 `mousekeeper-cleanliness-v1` 공식이 만든 하나의 snapshot만 사용한다. Desktop은 그 객체를 표시·queue하고 서버는 재계산 없이 저장하며 모바일은 score, 감점 code/count/points, 계산 시각, 공식 버전을 그대로 표시한다.
-- device와 room 연결 해제는 모바일·Desktop 양쪽에서 시작할 수 있다. 서버는 멱등 transaction으로 ACTIVE 상태와 진행 작업을 종료하고 durable event를 기록한 뒤 즉시 publish한다. device 해제는 socket과 연결 room을 함께 정리한다.
-- 모바일은 로그인 직후 서버의 ACTIVE device/room을 확인하는 Pairing Gate를 통과해야 main navigation을 만든다. stale Drift cache는 gate를 열 수 없고 revoke/remove event와 replay가 관련 cache·outbox를 계단식으로 제거한다. event 유실 시에도 5초 간격의 직렬 authoritative safety reconcile로 device/room 연결 상태만 보정하며, 홈 전체 데이터는 `/v1/home/summary`를 재호출하지 않고 완전한 WebSocket payload 단위로 갱신한다.
-- `CharacterState` 9종과 lifecycle 최종 상태는 TypeScript·JSON Schema·OpenAPI·Rust·Flutter에서 같은 대문자 wire value를 사용한다. 모바일은 잘못된 상태·ID·sequence를 fail-closed로 폐기하고 상대경로는 모든 계약에서 같은 1,024자·경계 규칙을 적용한다.
-- 모바일 realtime replay와 mutation queue는 시작 시점 UID·generation에 고정된다. 로그아웃 뒤 다른 계정으로 전환되면 이전 계정의 늦은 socket 응답·cursor·cache write·ACK·outbox 갱신을 모두 폐기하며, 계정별 flush는 서로 막지 않는다.
-- room 연결 해제 시 Desktop watcher와 disposable index만 정리한다. managed root, 실제 파일, `.mousekeeper_trash`, operation journal과 undo 가능 기록은 삭제하지 않는다.
-- 모바일 Files 화면은 연결된 folder 선택, breadcrumb 탐색, metadata, pagination, filename 검색과 검증 다운로드를 제공한다. 검색은 300ms debounce·2자 제한·generation cursor를 사용하며, 다운로드는 `.part`에 받은 뒤 SHA-256이 일치해야 최종 저장 및 ACK한다.
-- 호감도 숫자와 ledger는 유지하지만 appearance/accessory/room theme 해금 UI와 mutation 호출은 제거했다. MVP 화면은 affinity와 무관한 고정 외형·테마를 사용한다.
-
-연결 해제와 file access의 DB 통합 suite는 PostgreSQL·Redis가 실행되는 환경에서 opt-in으로 동작한다. 로컬 Docker daemon이 꺼진 검증에서는 이를 성공으로 가장하지 않고 skip으로 기록하며, 배포 전 migration 적용과 실제 revoke/search/download 경합 E2E가 필요하다.
-
-## 검증 기록 (`2026-07-13`)
-
-| 검사 | 결과 |
+| 영역 | 기술 |
 |---|---|
-| `pnpm check:contracts` | 서버 controller 62개와 OpenAPI 일치 |
-| `pnpm typecheck` | Node/React workspace 전체 통과 |
-| Desktop `tsc + vite build` | production web bundle 성공 |
-| contracts test | 25개 통과 |
-| server test | 일반 모드 40개 통과·외부 DB/인프라 통합 7개 skip, 실제 S3 lifecycle E2E는 이전 운영 검증 유지 |
-| worker test | IAM role·FCM config·영구 무효 token·Sentry redaction 포함 8개 통과 |
-| desktop-agent-simulator test | 1개 통과 |
-| `flutter analyze` | 오류 0개 |
-| Flutter test | Pairing Gate·계정 전환 race·typed event·검색·검증 다운로드 포함 78개 통과 |
-| Android debug APK | Firebase Messaging·Sentry SDK 포함 빌드 성공 |
-| Rust file-engine CLI | unit 106개 + integration 3개, 총 109개 통과 |
-| Rust Desktop/Tauri core | 기본 feature 142개 통과 |
-| Rust fixture E2E | proposal → precheck → execute → undo 통과 |
-| Tauri feature test | `cargo test --features tauri-commands` 114개 및 Clippy `-D warnings` 통과 |
-| Windows release bundle | 실제 앱 feature를 포함한 MSI 6.82MB, NSIS 4.81MB 생성 성공 |
-| Desktop ↔ server presence | `ONLINE_IDLE` heartbeat `201`, REST replay `200` 확인 |
-| Android ↔ server | SM S901N `adb reverse` 연결, devices/rooms/presence API `200` 확인 |
-| Managed root ↔ mobile room | Desktop `POST /v1/rooms` `201`, 자동 동기화 계약 test 통과 |
-| AWS production | DNS·TLS·HTTP→HTTPS·`/health=ok`·`/ready=ready` 통과, 3000·5432·6379 외부 차단 |
-| AWS S3 production | EC2 IAM role로 LIST·PUT·HEAD·GET·DELETE 및 삭제 후 404 통과, worker 30초 주기 무오류 실행 |
-| FileTransfer production E2E | signed PUT → HEAD/complete → GET/SHA-256 → ACK → worker delete 통과 |
-| Smart cache production E2E | client-side AES-256-GCM ciphertext → HEAD/SHA → download/decrypt → disable/delete 통과; key/plaintext 서버 미저장 확인 |
-| PostgreSQL recovery | root-only custom dump 생성·검증, 임시 DB restore와 필수 schema 검증, 임시 DB 삭제 통과 |
-| FCM/Sentry runtime | Firebase Admin 기반 FCM worker active; Sentry SDK는 DSN 미설정으로 전송 검증 대기 |
+| Desktop UI | Tauri 2, React 18, Vite, TypeScript |
+| Desktop engine | Rust, Tokio, SQLite WAL, OS keychain, filesystem watcher |
+| Mobile | Flutter, Dart, Riverpod, GoRouter, Drift, Firebase Auth/Messaging |
+| Server | NestJS 11, Fastify 5, Socket.IO, Zod |
+| Data | PostgreSQL 17, Drizzle ORM, Redis/Valkey 8 |
+| Worker | TypeScript, PostgreSQL durable jobs, Firebase Admin, AWS SDK |
+| AI | OpenAI Responses API, strict JSON Schema output, Zod 재검증 |
+| Storage/Infra | AWS EC2, Nginx, systemd, private S3, TLS |
+| Contracts | OpenAPI, JSON Schema, TypeScript schema/fixture |
 
-CI는 `dev` push를 검사하며 Windows에서 두 Rust crate의 format/test와 Tauri feature check를 실행한다.
+계획 초기의 BullMQ 대신 현재 worker는 PostgreSQL durable job과 polling/lease를 사용합니다. 기능적으로 동작하지만 이 차이는 향후 ADR로 명시할 필요가 있습니다.
 
-## 다음 구현 순서
+## 저장소 구조
 
-1. Android USB를 다시 연결해 새 package 빌드로 Google 로그인, FCM token 등록, background/terminated 알림 수신을 확인한다.
-2. Mobile smart-cache 복호화 key sync provider를 설계·연결하고, 구현된 AES-GCM tag verification/안전한 로컬 plaintext 저장 경로를 실제 Android·Desktop·서버 E2E로 검증한다.
-3. Indexed file ID 기반 proposal/precondition/transfer 회귀를 유지하고, 추가된 CREATE_DIR/CREATE_FILE Desktop batch journal/no-overwrite/undo 회귀를 실제 3자 release E2E로 확장한다.
-4. command/proposal/execute/undo와 browse/transfer를 한 managed root·실기기에서 왕복 검증한다.
-5. 새 EC2 unit/path와 Firebase package로 rename migration을 실행하고 rollback을 확인한다.
-6. 실제 `.riv`와 overlay shell을 연결하고 artboard/state machine/input을 실기기·Desktop에서 확인한다.
-7. Android release keystore와 Sentry DSN을 secret으로 주입해 signed AAB와 redacted event 수신을 검증한다.
+```text
+apps/
+  desktop/                  Tauri/React Desktop Agent
+    src/features/           agent, files, character, onboarding, overlay
+    src-tauri/              Rust file engine와 native bridge
+  mobile/                   Flutter Android app
+  server/                   NestJS control plane/API/WebSocket
+  worker/                   FCM 및 object lifecycle worker
+
+packages/
+  contracts/                OpenAPI, Zod/TypeScript 계약, event schema
+  database/                 Drizzle schema와 SQL migration
+  character-assets/         공용 캐릭터·배경 asset
+
+tools/
+  file-engine-cli/          로컬 파일 안전 엔진 검증 CLI
+  desktop-agent-simulator/  server/agent 계약 시뮬레이터
+
+infra/aws/                  EC2 bootstrap, Nginx, systemd, backup/restore
+scripts/                    계약 검사, 배포/운영 점검, release preflight
+test-fixtures/              파일 트리, 전송, smart-cache 회귀 fixture
+docs/                       안전·계약·배포·E2E 문서
+```
+
+## 구현 현황
+
+### Desktop Agent
+
+- [x] managed root 등록, canonicalization, 부모·자식 root overlap 차단
+- [x] `..`, 절대 경로, symlink, junction, Windows reparse point escape 차단
+- [x] SQLite WAL 기반 root/index/journal/cursor/outbox 저장
+- [x] 전체 scan, paginated browse, filename search, watcher debounce와 reconcile
+- [x] watcher 누락을 복구하는 주기적 full index reconcile과 청결도 snapshot 계산
+- [x] Rule DSL 평가와 결정론적 proposal 생성
+- [x] source identity·size·mtime와 destination conflict precheck
+- [x] journal-before-write, no-overwrite, `.mousekeeper_trash`, undo, crash recovery
+- [x] README draft/write/backup/undo 경로
+- [x] 6자리 pairing, 2초 status polling, 5초 heartbeat
+- [x] 15초 fast reconcile, 30초 transfer/cache reconcile, WebSocket 즉시 wake-up
+- [x] 페어링 전 managed root 등록과 페어링 후 자동 room 동기화
+- [x] system tray, autostart, overlay window, Windows MSI/NSIS 설정
+- [x] 모바일과 동일한 chat session/message를 사용하는 Desktop chat overlay
+- [x] house overlay 내부 캐릭터 이동 제한과 더 타이트한 interaction hitbox
+- [x] FileTransfer streaming upload, SHA-256, 전송 전후 source 변경 감지
+- [x] AES-256-GCM smart-cache 암호화 업로드
+
+### Mobile
+
+- [x] Firebase/Google 로그인 configuration gate와 명시적 오류 화면
+- [x] pairing code 입력, 연결 상태 gate, 연결된 PC 이름과 연결 해제 설정
+- [x] managed folder 자동 수신, 폴더 선택, Home 배경 매핑
+- [x] 폴더가 없을 때 `폴더를 연결해 주세요!` 안내
+- [x] 고정 Y축에서 idle/walk GIF 전환, 방향별 좌우 반전, 캐릭터·배경 동방향 패닝
+- [x] 캐릭터 탭 시 현재 folder의 공용 AI chat으로 이동
+- [x] folder·console·cheese·hanger 이미지 기반 하단 navigation
+- [x] 파일 목록 modal/page, breadcrumb, 검색, pagination, 검증 다운로드
+- [x] 미로 찾기, 30초 두더지형 게임, random cage escape 게임
+- [x] draggable cheese feeding과 1초 feeding feedback
+- [x] wardrobe placeholder route
+- [x] Desktop과 동일한 chat session, message, proposal/draft UI와 optimistic send
+- [x] synthetic `승인 대기방` 제거; 실제 session만 표시
+- [x] proposal 승인·거절, 실행 결과, history 흐름
+- [x] 사용자별 Drift cache/outbox/cursor와 로그아웃 세대 격리
+- [x] Socket.IO item patch와 REST replay, 5초 lightweight connection safety check
+- [x] cheese loading overlay, pixel font/theme, 반응형 말줄임과 크기 조정
+- [x] smart cache 자동 정책; 일반 사용자에게 수동 cache 설정 UI를 노출하지 않음
+
+### Server API
+
+- [x] Firebase user token과 별도 Desktop device token 인증
+- [x] pairing session create/claim/status와 device revoke
+- [x] room 생성·삭제·자동 managed-folder sync event
+- [x] Redis presence TTL과 ONLINE/OFFLINE event
+- [x] `/v1/home/summary`, `/v1/connections/summary` 분리
+- [x] command, proposal, decision, execution durable 상태 머신
+- [x] rule/rule-draft 생성·검증·확정 API
+- [x] chat session 생성·수정·삭제, cursor message API
+- [x] desktop/mobile 공용 chat realtime event
+- [x] file browse/search request와 page/cursor lifecycle
+- [x] FileTransfer signed URL, ACK, cancel, expiry lifecycle
+- [x] smart-cache policy, quota, reservation, usage score, stale/delete lifecycle
+- [x] Socket.IO `/realtime`과 Redis multi-process adapter
+- [x] durable sync event, 사용자별 sequence와 REST replay
+- [x] FCM token/outbox와 privacy-safe audit
+- [x] OpenAI Responses provider와 strict structured output 검증
+- [x] AI에 room name/root alias/existing rules context 전달
+- [x] 최근 browse, snapshot, proposal 등 server cache 기반 file context 전달
+
+### Worker와 인프라
+
+- [x] FCM batch 전송, lease/retry, 영구 무효 token 정리
+- [x] transfer/cache object 만료·취소·실패 후 삭제 재시도
+- [x] orphan object sweep
+- [x] local PostgreSQL·Valkey Docker Compose
+- [x] AWS EC2 bootstrap과 loopback server binding
+- [x] Nginx HTTP→HTTPS, TLS reverse proxy
+- [x] API/worker/backup systemd unit
+- [x] private S3 bucket과 EC2 IAM role credential 방식
+- [x] PostgreSQL backup timer와 격리 restore drill script
+- [x] fail-closed release E2E preflight
+
+## 최근 주요 변경
+
+| 날짜 | 변경 |
+|---|---|
+| 2026-07-15 | Desktop의 기존 managed root를 페어링 직후 자동으로 room과 동기화 |
+| 2026-07-15 | Desktop과 Mobile 채팅을 동일 server session으로 통합하고 양방향 realtime 보정 |
+| 2026-07-15 | Mobile 채팅 목록의 synthetic `승인 대기방` 제거 |
+| 2026-07-15 | AI에 room context와 최근 server-side file cache context 추가 |
+| 2026-07-15 | OpenAI 불완전 structured output 1회 재시도와 fail-closed 검증 강화 |
+| 2026-07-15 | smart cache를 자동 정책으로 전환하고 수동 설정 중심 UI 제거 |
+| 2026-07-15 | 픽셀 홈 navigation, 미니게임 3종, cheese feeding, wardrobe route 추가 |
+| 2026-07-15 | managed-folder 배경 순서 회전, maze mouse와 random cage map 적용 |
+
+세부 커밋 단위 이력은 `git log`, 구현 감사 기록은 [HISTORY.md](HISTORY.md)에서 확인할 수 있습니다.
+
+## AI 채팅
+
+### 동작 방식
+
+1. 사용자 메시지를 먼저 PostgreSQL에 저장합니다.
+2. 서버가 room과 최근 파일 context를 구성합니다.
+3. OpenAI Responses API에 strict JSON Schema 형식으로 요청합니다.
+4. 반환 JSON을 다시 Zod/DTO로 검증합니다.
+5. 일반 답변 또는 command/rule draft를 채팅 message로 저장합니다.
+6. draft는 사용자가 확정하더라도 기존 proposal·approval 경계를 우회하지 않습니다.
+
+### 필요한 서버 환경 변수
+
+- `AI_PROVIDER=openai`
+- `AI_API_KEY`
+- `AI_MODEL` — 현재 목표 운영 모델은 `gpt-5.4`
+- `AI_TIMEOUT_MS`
+- `AI_MAX_OUTPUT_TOKENS`
+
+키가 없거나 모델 접근 권한이 없거나 provider 응답이 계약 검증을 통과하지 못하면 각각 `AI_PROVIDER_UNCONFIGURED`, `AI_OUTPUT_INVALID` 등 명시적 상태로 처리합니다. 모델 출력 원문과 사용자 파일명·경로는 로그에 남기지 않습니다.
+
+## 자동 스마트 캐시
+
+스마트 캐시는 일반 사용자가 매번 켜고 끄는 기능이 아니라 server/Desktop이 자동 정책으로 관리합니다.
+
+- Desktop이 usage event와 pin/exclude policy를 기반으로 후보를 선정합니다.
+- 서버가 quota와 max file size를 검증하고 upload reservation을 발급합니다.
+- Desktop은 AES-256-GCM으로 암호화한 뒤 ciphertext만 S3에 올립니다.
+- 서버는 ciphertext checksum/size와 encryption metadata만 저장합니다.
+- 모바일은 실제 key가 제공될 때 ciphertext와 GCM tag, plaintext checksum을 검증한 뒤 저장합니다.
+
+현재 Desktop→Mobile 복호화 key sync provider가 없으므로 encrypted mobile cache 다운로드 기본 경로는 `UNCONFIGURED: SMART_CACHE_DECRYPTION_KEY_SYNC`로 닫혀 있습니다. 이 항목을 해결하기 전에는 스마트 캐시의 물리 Android 전체 E2E를 완료로 판정하지 않습니다.
 
 ## 실행 방법
 
-필수 환경 변수는 [.env.example](.env.example)을 기준으로 현재 shell 또는 secret manager에 주입한다. 실제 secret과 서비스 계정 원문은 Git에 넣지 않는다.
+### 필수 도구
 
-### AI 채팅 설정
+- Node.js와 `pnpm@11.11.0`
+- Docker Desktop 또는 Docker Engine
+- Flutter SDK와 Android SDK
+- Rust stable MSVC toolchain
+- Windows Tauri build prerequisites
+- Google 로그인 사용 시 프로젝트와 package가 일치하는 `google-services.json`
 
-서버 채팅은 메시지를 PostgreSQL에 먼저 저장하고, OpenAI Responses provider가 설정된 경우에만 AI 명령 초안을 만든다. 운영 EC2에서는 `/etc/mousekeeper/server.env`에 `AI_PROVIDER=openai`, `AI_MODEL=gpt-5.4`, 실제 `AI_API_KEY`를 설정한 뒤 `mousekeeper-server`를 재시작한다. 키나 모델 접근 권한이 없으면 채팅 저장은 유지되고 AI 응답만 `AI_PROVIDER_UNCONFIGURED`로 표시된다.
+### 1. 의존성 설치
 
 ```powershell
-# Node workspace
 pnpm install --frozen-lockfile
 
-# PostgreSQL + Redis/Valkey
+Set-Location apps/mobile
+flutter pub get
+Set-Location ../..
+```
+
+### 2. PostgreSQL·Valkey 실행
+
+루트 `.env.docker.example`의 key를 참고해 Git에 포함되지 않는 로컬 `.env`에 실제 개발 값을 넣습니다. 빈 값으로 실행하면 Compose가 fail-fast합니다.
+
+```powershell
 docker compose up -d
+docker compose ps
+```
+
+그다음 현재 shell에 서버가 사용할 `DATABASE_URL`, `REDIS_URL`과 필수 환경 변수를 주입하고 migration을 적용합니다.
+
+```powershell
 pnpm --filter @mousekeeper/database db:migrate
+```
 
-# Server
+### 3. Server와 Worker 실행
+
+필수 key 목록은 [.env.example](.env.example)을 기준으로 합니다. Firebase Admin credential은 파일 경로 또는 개별 환경 변수 중 한 방식으로 실제 값을 주입해야 합니다.
+
+```powershell
 pnpm --filter @mousekeeper/server start:dev
+pnpm --filter @mousekeeper/worker start
+```
 
-# Desktop: Rust stable/MSVC toolchain 필요
+로컬 확인 주소:
+
+- `http://127.0.0.1:3000/health`
+- `http://127.0.0.1:3000/ready`
+
+### 4. Desktop 실행
+
+```powershell
 $env:MOUSEKEEPER_SERVER_BASE_URL = "http://127.0.0.1:3000"
 pnpm --filter @mousekeeper/desktop tauri:dev
+```
 
-# Windows MSI/NSIS 생성
+운영 서버를 사용할 때는 URL을 `https://mousekeeper.madcamp-kaist.org`로 바꿉니다.
+
+Windows bundle:
+
+```powershell
 pnpm --filter @mousekeeper/desktop tauri:build
 ```
 
-Android 실기기에서 USB로 로컬 서버를 사용할 때:
+### 5. Android 실기기 실행
+
+로컬 서버를 USB Android 기기에서 사용할 때:
 
 ```powershell
 & "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" reverse tcp:3000 tcp:3000
@@ -299,163 +404,206 @@ Set-Location apps/mobile
 flutter run `
   --dart-define=FIREBASE_ENABLED=true `
   --dart-define=MOUSEKEEPER_API_URL=http://127.0.0.1:3000 `
-  --dart-define=GOOGLE_SERVER_CLIENT_ID=<Google-Web-OAuth-Client-ID>
+  --dart-define=GOOGLE_SERVER_CLIENT_ID=<실제-Web-OAuth-Client-ID>
 ```
 
-### AWS EC2 운영 주소
+운영 서버를 사용할 때는 `MOUSEKEEPER_API_URL=https://mousekeeper.madcamp-kaist.org`를 사용하며 `adb reverse`는 필요하지 않습니다.
 
-운영 주소는 `https://mousekeeper.madcamp-kaist.org`다. 2026-07-13 기준 공용 DNS, 80 → 443 redirect, TLS, `/health=ok`, PostgreSQL·Valkey를 포함한 `/ready=ready`를 확인했다. 3000·5432·6379는 외부에서 닫혀 있다.
+Debug APK 생성:
 
-EC2의 Nginx·systemd·IAM role·TLS 설정은 [AWS EC2 배포 절차](docs/AWS_EC2_DEPLOYMENT.md)를 따른다. 다음 명령은 `/health=ok`, `/ready=ready`를 모두 확인한다.
+```powershell
+Set-Location apps/mobile
+flutter build apk --debug `
+  --dart-define=FIREBASE_ENABLED=true `
+  --dart-define=MOUSEKEEPER_API_URL=https://mousekeeper.madcamp-kaist.org `
+  --dart-define=GOOGLE_SERVER_CLIENT_ID=<실제-Web-OAuth-Client-ID>
+```
+
+기본 산출물 경로는 `apps/mobile/build/app/outputs/flutter-apk/app-debug.apk`입니다.
+
+## 운영 배포
+
+운영 API는 `https://mousekeeper.madcamp-kaist.org`입니다.
+
+- Nginx가 80을 443으로 redirect합니다.
+- API는 loopback에서만 listen하며 3000, PostgreSQL 5432, Valkey 6379는 외부에 노출하지 않습니다.
+- server와 worker는 systemd로 실행합니다.
+- S3 static access key 대신 최소 권한 EC2 IAM role credential을 사용합니다.
+- DB migration, service restart, health/ready, worker, backup을 배포마다 함께 확인해야 합니다.
+
+상세 절차는 [AWS EC2 배포 문서](docs/AWS_EC2_DEPLOYMENT.md)를 따릅니다.
 
 ```powershell
 .\scripts\check-production-endpoint.ps1 `
   -BaseUrl https://mousekeeper.madcamp-kaist.org
 ```
 
-Desktop과 모바일에는 HTTPS URL을 환경으로 주입한다. 운영 주소에서는 `adb reverse`를 사용하지 않는다.
+## 검증 방법
 
-핵심 검증 명령:
+### Node/계약
 
 ```powershell
 pnpm check:contracts
 pnpm typecheck
 pnpm test
+pnpm build
+```
 
+### Mobile
+
+```powershell
 Set-Location apps/mobile
 flutter analyze
 flutter test
 ```
 
----
+### Desktop Rust
 
-## 회고 문서
+```powershell
+Set-Location tools/file-engine-cli
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test
 
-> [KPT 방법론 참고](https://velog.io/@habwa/%EB%8B%A8%EA%B8%B0-%ED%94%84%EB%A1%9C%EC%A0%9D%ED%8A%B8-%ED%9A%8C%EA%B3%A0-KPT-%EB%B0%A9%EB%B2%95%EB%A1%A0)
+Set-Location ../../apps/desktop/src-tauri
+cargo fmt --check
+cargo clippy --all-targets --features tauri-commands -- -D warnings
+cargo test --features tauri-commands
+```
 
-### Keep — 잘 된 점, 다음에도 유지할 것
+Windows에서 symlink 테스트가 권한 오류 1314로 실패하면 Windows 개발자 모드를 켜거나 관리자 터미널을 사용해야 합니다. 권한 부족을 제품 성공으로 간주해 테스트를 삭제하거나 무조건 skip하지 않습니다.
 
--
--
--
+### Release preflight
 
-### Problem — 아쉬웠던 점, 개선이 필요한 것
+```powershell
+pnpm e2e:preflight
+```
 
--
--
--
+이 스크립트는 API URL, health/ready, Android tool/device, Rust toolchain, 필수 경로와 dirty worktree를 확인합니다. 필요 조건이 없으면 `UNCONFIGURED` 또는 `FAIL`로 종료합니다.
 
-### Try — 다음번에 시도해볼 것
+### 최근 확인된 검증 기록
 
--
--
--
+| 날짜 | 검사 | 결과 |
+|---|---|---|
+| 2026-07-15 | Server TypeScript | 통과 |
+| 2026-07-15 | Desktop TypeScript | 통과 |
+| 2026-07-15 | OpenAI Responses provider spec | 11개 통과 |
+| 2026-07-15 | Mobile `flutter analyze` | 오류 0개 |
+| 2026-07-15 | Mobile chat widget/reducer spec | 17개 통과 |
+| 2026-07-13 감사 기준 | Flutter 전체 기록 | 78개 통과 |
+| 2026-07-13 감사 기준 | Rust file-engine 기록 | unit 106개 + integration 3개 통과 |
+| 2026-07-13 감사 기준 | Tauri feature 기록 | 114개 통과, Clippy 통과 |
+| 2026-07-15 | 운영 `/health`, `/ready` | 각각 HTTP 200 |
 
-### 팀원별 소감
+과거 숫자는 해당 날짜의 감사 기록이며 현재 전체 suite의 자동 통과를 대신하지 않습니다. release 전에는 위 명령을 다시 실행해야 합니다.
 
-**김윤서:**
+## 환경 변수
 
-> 
+루트 [.env.example](.env.example)은 key 이름만 관리합니다. 실제 값은 로컬 shell, 안전한 비추적 `.env`, CI secret 또는 EC2의 `/etc/mousekeeper/*.env`에 주입합니다.
 
-**임성진:**
+### Server
 
-> 
+- Core: `NODE_ENV`, `PORT`, `SERVER_HOST`, `DATABASE_URL`, `REDIS_URL`, `WEB_ORIGIN`
+- Auth: `JWT_OR_DEVICE_TOKEN_SECRET`
+- Firebase: `FIREBASE_SERVICE_ACCOUNT_PATH` 또는 `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`
+- AI: `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_TIMEOUT_MS`, `AI_MAX_OUTPUT_TOKENS`
+- Transfer/cache: `FILE_TRANSFER_MAX_BYTES`, `FILE_TRANSFER_TTL_SECONDS`, `SMART_CACHE_ENABLED`, `SMART_CACHE_DEFAULT_ROOM_QUOTA_BYTES`, `SMART_CACHE_DEFAULT_MAX_FILE_BYTES`
+- Observability: `SENTRY_DSN`
 
----
+### Worker/Object storage
 
-## 참고 자료
+- `DATABASE_URL`
+- `OBJECT_STORAGE_ENDPOINT`, `OBJECT_STORAGE_REGION`, `OBJECT_STORAGE_BUCKET`
+- 로컬 static credential 사용 시 `OBJECT_STORAGE_ACCESS_KEY_ID`, `OBJECT_STORAGE_SECRET_ACCESS_KEY`
+- EC2에서는 IAM role을 사용하므로 static credential을 비워 둡니다.
+- `FCM_ENABLED`와 Firebase Admin credential
 
-### 실시간 인터랙션
+### Clients
 
-**WebSocket**
+- Desktop: `MOUSEKEEPER_SERVER_BASE_URL`
+- Mobile dart-define: `FIREBASE_ENABLED`, `MOUSEKEEPER_API_URL`, `GOOGLE_SERVER_CLIENT_ID`, 선택적 `SENTRY_DSN`
+- Android release: `MOUSEKEEPER_ANDROID_KEYSTORE_PATH`, `MOUSEKEEPER_ANDROID_KEY_ALIAS`, `MOUSEKEEPER_ANDROID_STORE_PASSWORD`, `MOUSEKEEPER_ANDROID_KEY_PASSWORD`
 
-- https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API
-- https://techblog.woowahan.com/5268/
-- https://tech.kakao.com/posts/391
-- https://daleseo.com/websocket/
-- https://kakaoentertainment-tech.tistory.com/110
+## 미완료·검증 대기 항목
 
-**Socket.IO**
+### 출시 전 필수
 
-- https://socket.io/docs/v4/
-- https://inpa.tistory.com/entry/SOCKET-%F0%9F%93%9A-Namespace-Room-%EA%B8%B0%EB%8A%A5
-- https://adjh54.tistory.com/549
-- https://fred16157.github.io/node.js/nodejs-socketio-communication-room-and-namespace/
+- [ ] Android release keystore를 secret으로 주입하고 signed AAB 검증
+- [ ] Firebase release SHA 기준 Google 로그인 재검증
+- [ ] FCM foreground/background/terminated 실기기 수신 검증
+- [ ] Sentry 운영 DSN과 redaction된 event 수신 확인
+- [ ] Android ↔ Server ↔ Desktop command/proposal/execute/undo 전체 E2E 자동화
+- [ ] browse/search/download를 실제 기기와 managed root에서 반복 검증
+- [ ] EC2 migration/rollback, worker, backup/restore release runbook 재실행
 
-**SSE (Server-Sent Events)**
+### 기능 계약이 아직 닫힌 항목
 
-- https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
-- https://developer.mozilla.org/ko/docs/Web/API/Server-sent_events/Using_server-sent_events
-- https://api7.ai/ko/blog/what-is-sse
+- [ ] Desktop rule evaluator dry-run transport — 현재 `RULE_DRAFT_PREVIEW_UNCONFIGURED`
+- [ ] Mobile→Desktop inverse upload — 현재 `UPLOAD_TRANSFER_UNCONFIGURED`
+- [ ] DOWNLOAD의 `expectedIdentity` 전달 — 현재 `EXPECTED_IDENTITY_UNSUPPORTED`
+- [ ] Smart-cache Desktop→Mobile 복호화 key sync provider
+- [ ] AI token streaming과 응답 취소/부분 표시
+- [ ] 실제 Rive `.riv` state machine; 현재 GIF/PNG motion 사용
+- [ ] 개별 proposal item 부분 승인과 reject reason UX
 
-**TCP / UDP Socket**
+### MVP 이후
 
-- https://docs.python.org/3/library/socket.html
-- https://inpa.tistory.com/entry/NW-%F0%9F%8C%90-%EC%95%84%EC%A7%81%EB%8F%84-%EB%AA%A8%ED%98%B8%ED%95%9C-TCP-UDP-%EA%B0%9C%EB%85%90-%E2%9D%93-%EC%89%BD%EA%B2%8C-%EC%9D%B4%ED%95%B4%ED%95%98%EC%9E%90
+- [ ] 100,000 entry, 다중 managed root, watcher overflow 장시간 soak test
+- [ ] macOS filesystem adapter, signing/notarization
+- [ ] iOS release
+- [ ] Desktop updater signing
+- [ ] wardrobe 실제 item/equipment 시스템
 
-**gRPC Streaming**
+## 역할과 코드 소유권
 
-- https://grpc.io/docs/what-is-grpc/core-concepts/
-- https://tech.ktcloud.com/entry/gRPC%EC%9D%98-%EB%82%B4%EB%B6%80-%EA%B5%AC%EC%A1%B0-%ED%8C%8C%ED%97%A4%EC%B9%98%EA%B8%B0-HTTP2-Protobuf-%EA%B7%B8%EB%A6%AC%EA%B3%A0-%EC%8A%A4%ED%8A%B8%EB%A6%AC%EB%B0%8D
-- https://tech.ktcloud.com/entry/gRPC%EC%9D%98-%EB%82%B4%EB%B6%80-%EA%B5%AC%EC%A1%B0-%ED%8C%8C%ED%97%A4%EC%B9%98%EA%B8%B02-Channel-Stub
-- https://inspirit941.tistory.com/371
-- https://devocean.sk.com/blog/techBoardDetail.do?ID=167433
+### A — Desktop Agent와 로컬 파일 안전
 
-**WebRTC**
+- `apps/desktop/src-tauri/`
+- `apps/desktop/src/features/files/`
+- `apps/desktop/src/features/admin/`
+- `tools/file-engine-cli/`
+- `packages/rule-fixtures/`, file safety/transfer fixture
 
-- https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API
-- https://webrtc.org/getting-started/overview
-- https://web.dev/articles/webrtc-basics?hl=ko
-- https://devocean.sk.com/blog/techBoardDetail.do?ID=164885
-- https://beomkey-nkb.github.io/%EA%B0%9C%EB%85%90%EC%A0%95%EB%A6%AC/webRTC%EC%A0%95%EB%A6%AC/
-- https://gh402.tistory.com/45
-- https://on.com2us.com/tech/webrtc-coturn-turn-stun-server-setup-guide/
+### B — Product, Cloud, Mobile, Character
 
-**QUIC / WebTransport**
+- `apps/mobile/`
+- `apps/server/`
+- `apps/worker/`
+- `infra/`
+- `apps/desktop/src/features/character/`
+- `packages/character-assets/`
 
-- https://developer.mozilla.org/en-US/docs/Web/API/WebTransport_API
-- https://datatracker.ietf.org/doc/html/rfc9000
-- https://news.hada.io/topic?id=13888
+공유 계약 경계는 `packages/contracts/`, `packages/database/`, `.env.example`, `docs/`, 루트 `README.md`입니다. breaking contract 변경은 schema, fixture, server, Desktop, Mobile을 함께 검토합니다.
 
-#### KCLOUD VM / Cloudflare Tunnel 환경별 주의사항
+## 문서
 
-| 환경 | 사용 가능(권장) 기술 | 포트/조건 | 주의할 기술 |
-|---|---|---|---|
-| **로컬 / 일반 VM** | HTTP/REST, WebSocket, Socket.IO, SSE, TCP Socket, gRPC Streaming, WebRTC, QUIC/WebTransport 등 대부분 가능 | 직접 포트 개방 가능. 예: 3000, 5000, 8000, 8080, 9000 등. 외부 공개 시 방화벽/보안그룹/공인 IP 설정 필요 | WebRTC는 STUN/TURN 필요 가능. QUIC/WebTransport는 HTTP/3 · UDP 지원 필요 |
-| **KCLOUD VM (VPN 내부)** | HTTP/REST, WebSocket, Socket.IO, SSE, WebRTC 시그널링 | 접속 기기 VPN 필요. 기본 허용 포트: **22, 80, 443**. 개발 포트(3000, 8000, 8080 등)는 직접 접근 제한 가능 | TCP Socket은 포트 제한 있음. gRPC는 HTTP/2 설정 필요. WebRTC 미디어·UDP·QUIC/WebTransport 비권장 |
-| **KCLOUD VM + Tunnel** | HTTP/REST, WebSocket, Socket.IO, SSE, WebRTC 시그널링 | VM의 `localhost:<port>`를 도메인에 연결. `localPort`는 **1024~65535**. 예: 3000, 8000, 8080 가능 | 순수 TCP Socket, UDP, WebRTC 미디어/DataChannel, QUIC/WebTransport 불가. gRPC 보장 어려움 |
-| **외부 서비스 + 우리 도메인** | HTTP/REST, WebSocket, Socket.IO, SSE, WebRTC 시그널링 | Vercel/Netlify/Railway/Render/AWS/GCP 등에 배포 후 CNAME/A 레코드 연결. 보통 외부는 **443** 사용 | WebSocket/gRPC/TCP/UDP는 플랫폼 지원 여부 확인 필요. 서버리스 플랫폼은 장시간 연결 제한 가능 |
-| **서버 없이 외부 SaaS 사용** | Supabase Realtime, Firebase, Pusher/Ably, LLM API Streaming | 직접 포트 관리 불필요. 각 서비스 SDK/API 사용 | 커스텀 TCP/UDP 서버 구현 불가. WebRTC는 STUN/TURN 필요할 수 있음 |
+- 전체 계획: [MOUSEKEEPER_PLAN.md](MOUSEKEEPER_PLAN.md)
+- 구현 계획과 남은 항목: [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
+- 구현 이력과 MVP 감사: [HISTORY.md](HISTORY.md)
+- AI 구현 원칙: [AI_implement_rule.txt](AI_implement_rule.txt)
+- API/계약: [docs/CONTRACTS.md](docs/CONTRACTS.md)
+- 파일 안전 불변식: [docs/FILE_SAFETY_INVARIANTS.md](docs/FILE_SAFETY_INVARIANTS.md)
+- FileTransfer threat model: [docs/FILE_TRANSFER_THREAT_MODEL.md](docs/FILE_TRANSFER_THREAT_MODEL.md)
+- 서비스 threat model: [docs/threat-model.md](docs/threat-model.md)
+- E2E 시나리오: [docs/e2e-scenarios.md](docs/e2e-scenarios.md)
+- 복구 절차: [docs/RECOVERY_RUNBOOK.md](docs/RECOVERY_RUNBOOK.md)
+- AWS EC2 배포: [docs/AWS_EC2_DEPLOYMENT.md](docs/AWS_EC2_DEPLOYMENT.md)
+- file-engine CLI: [docs/FILE_ENGINE_CLI.md](docs/FILE_ENGINE_CLI.md)
+- local-first ADR: [docs/adr/0001-local-first.md](docs/adr/0001-local-first.md)
 
-### LLM Wrapper
+## 완료 기준
 
-- https://github.com/teddylee777/openai-api-kr
-- https://github.com/teddylee777/langchain-kr
-- https://devocean.sk.com/blog/techBoardDetail.do?ID=167407
-- https://mastra.ai/docs
+기능을 완료로 표시하려면 다음 조건을 모두 만족해야 합니다.
 
-### Cross-Platform
+- 실제 호출 경로가 연결되어 있어야 합니다.
+- 공개 입력과 AI 출력은 schema/DTO 검증을 통과해야 합니다.
+- 파일 쓰기는 managed-root 경계, approval, precheck, journal, no-overwrite를 지켜야 합니다.
+- loading, empty, offline, error, `UNCONFIGURED` 상태가 구분되어야 합니다.
+- 관련 typecheck/test/build가 통과해야 합니다.
+- 외부 provider가 필요한 기능은 실제 credential과 실기기 검증 전까지 완료로 가장하지 않습니다.
 
-- https://flutter.dev/
-- https://reactnative.dev/
-- https://docs.expo.dev/
-- https://kotlinlang.org/multiplatform/
-
----
-
-## A File Engine Notes
-
-A-side local file engine documentation:
-
-- CLI usage and JSON contracts: [`docs/FILE_ENGINE_CLI.md`](docs/FILE_ENGINE_CLI.md)
-- Shared server/Desktop contracts: [`docs/CONTRACTS.md`](docs/CONTRACTS.md)
-- Release E2E checklist: [`docs/e2e-scenarios.md`](docs/e2e-scenarios.md)
-- Service threat model: [`docs/threat-model.md`](docs/threat-model.md)
-- Local-first ADR: [`docs/adr/0001-local-first.md`](docs/adr/0001-local-first.md)
-- Desktop/Tauri integration plan: [`apps/desktop/src-tauri/INTEGRATION.md`](apps/desktop/src-tauri/INTEGRATION.md)
-
-Current safe flow:
+로컬 파일 작업의 안전한 기준 흐름은 다음과 같습니다.
 
 ```text
-propose -> decision.jsonl -> precheck -> execute -> undo
+propose → approve/reject → precheck → journal → execute → verify → history/undo
 ```
