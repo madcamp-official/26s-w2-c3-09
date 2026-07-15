@@ -399,7 +399,12 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   void _openChat(Map<String, dynamic> room) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ChatPage(roomId: room['id'] as String)),
+      MaterialPageRoute(
+        builder: (_) => ChatPage(
+          roomId: room['id'] as String,
+          roomName: room['name'] as String? ?? '관리 폴더',
+        ),
+      ),
     );
   }
 
@@ -619,9 +624,9 @@ class _MousePlayground extends StatelessWidget {
       if (bubbleStage != _SpeechBubbleStage.hidden)
         _MouseSpeechBubble(
           alignment: Offset(
-            mouseAlignment.dx - 0.28,
-            mouseAlignment.dy +
-                (bubbleStage == _SpeechBubbleStage.menu ? 0.40 : 0.22),
+            mouseAlignment.dx - 0.14,
+            mouseAlignment.dy -
+                (bubbleStage == _SpeechBubbleStage.menu ? 0.54 : 0.38),
           ),
           stage: bubbleStage,
           selectedRoom: selectedRoom,

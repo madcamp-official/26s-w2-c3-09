@@ -111,7 +111,7 @@ void main() {
 
     await _pumpChat(tester, gateway);
 
-    expect(find.text('첫 대화'), findsOneWidget);
+    expect(find.text('첫 대화'), findsAtLeast(1));
     expect(find.text('첫 메시지'), findsOneWidget);
     expect(gateway.messageLoads, {'s1': 1});
 
@@ -143,9 +143,85 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('provider session'), findsOneWidget);
+    expect(find.text('provider session'), findsAtLeast(1));
     expect(find.text('provider message'), findsOneWidget);
     expect(gateway.messageLoads, {'s1': 1});
+  });
+
+  testWidgets('desktop quick-view prompts fill the mobile composer', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화')],
+      messagesBySession: {'s1': []},
+      quickView: {
+        'prompts': [
+          {
+            'id': 'find-reports',
+            'label': 'Find reports',
+            'prompt': '최근 report PDF 파일 찾아줘',
+            'category': 'QUERY',
+          },
+        ],
+        'pendingActionCount': 2,
+        'unreadCount': 1,
+      },
+    );
+
+    await _pumpChat(tester, gateway);
+    expect(find.text('Find reports'), findsOneWidget);
+    expect(find.text('제안 2'), findsOneWidget);
+    expect(find.text('새 메시지 1'), findsOneWidget);
+
+    await tester.tap(find.text('Find reports'));
+    await tester.pump();
+
+    final field = tester.widget<TextField>(
+      find.byKey(const ValueKey('chat-message-field')),
+    );
+    expect(field.controller?.text, '최근 report PDF 파일 찾아줘');
+  });
+
+  testWidgets('desktop quick cleanup creates and opens its approval card', (
+    tester,
+  ) async {
+    final gateway = _FakeChatGateway(
+      sessions: [_session('s1', '첫 대화')],
+      messagesBySession: {'s1': []},
+      quickCleanupResult: {
+        'session': _session('quick-session', '빠른 정리 제안'),
+        'message': _message(
+          'quick-user',
+          'quick-session',
+          'USER',
+          '빠른 정리 제안 요청',
+        ),
+        'assistant': _message(
+          'quick-draft',
+          'quick-session',
+          'ASSISTANT',
+          '이 폴더를 분석하고 정리 제안을 만들까요?',
+          messageType: 'COMMAND_DRAFT',
+          structuredPayload: {
+            'id': 'quick-draft-1',
+            'status': 'DRAFT',
+            'commandId': null,
+          },
+        ),
+      },
+    );
+
+    await _pumpChat(tester, gateway);
+    await tester.tap(find.byKey(const ValueKey('chat-quick-cleanup')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.quickCleanupCalls, 1);
+    expect(find.text('빠른 정리 제안 요청'), findsOneWidget);
+    expect(find.text('이 폴더를 분석하고 정리 제안을 만들까요?'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('chat-command-draft-confirm-quick-draft-1')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('sending appends user and assistant messages without reload', (
@@ -413,7 +489,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('chat-session-title-save')));
     await tester.pumpAndSettle();
 
-    expect(find.text('새 제목'), findsOneWidget);
+    expect(find.text('새 제목'), findsAtLeast(1));
     expect(find.text('첫 메시지'), findsOneWidget);
     expect(gateway.updatedTitles, ['s1:새 제목']);
     expect(gateway.messageLoads, {'s1': 1});
@@ -554,6 +630,8 @@ class _FakeChatGateway implements ChatGateway {
     required this.messagesBySession,
     this.sendResult,
     this.sendCompleter,
+    this.quickView,
+    this.quickCleanupResult,
     this.createError,
   });
 
@@ -562,6 +640,8 @@ class _FakeChatGateway implements ChatGateway {
   final List<Map<String, dynamic>> pendingProposals = const [];
   final Map<String, dynamic>? sendResult;
   final Completer<Map<String, dynamic>>? sendCompleter;
+  final Map<String, dynamic>? quickView;
+  final Map<String, dynamic>? quickCleanupResult;
   final Object? createError;
   final Map<String, int> messageLoads = {};
   final List<Map<String, Object?>> messageRequests = [];
@@ -574,6 +654,24 @@ class _FakeChatGateway implements ChatGateway {
   final List<String> readReceipts = [];
   int createdSessions = 0;
   int sessionLoads = 0;
+  int quickCleanupCalls = 0;
+
+  @override
+  Future<Map<String, dynamic>> getQuickView(String roomId) async =>
+      quickView ??
+      {
+        'prompts': <Map<String, dynamic>>[],
+        'pendingActionCount': 0,
+        'unreadCount': 0,
+      };
+
+  @override
+  Future<Map<String, dynamic>> createQuickCleanup(String roomId) async {
+    quickCleanupCalls += 1;
+    final result = quickCleanupResult;
+    if (result == null) throw StateError('QUICK_CLEANUP_NOT_CONFIGURED');
+    return result;
+  }
 
   @override
   Future<List<Map<String, dynamic>>> listSessions(String roomId) async {
