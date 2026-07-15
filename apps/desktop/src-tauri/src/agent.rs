@@ -192,6 +192,36 @@ pub struct AgentPendingDecision {
     pub items: Vec<AgentProposalItemRecord>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct AgentCommandDraftConfirmation {
+    pub draft_id: String,
+    pub command: Option<AgentCommand>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentOpenProposal {
+    pub proposal_id: String,
+    pub command_id: String,
+    pub room_id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentProposalDetails {
+    pub proposal_id: String,
+    pub command_id: String,
+    pub room_id: String,
+    pub status: String,
+    pub item_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AgentDecision {
+    pub decision_id: String,
+    pub proposal_id: String,
+    pub decision_type: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AgentExecution {
     pub execution_id: String,
@@ -879,10 +909,7 @@ impl AgentRuntime {
         result
     }
 
-    pub async fn chat_quick_view(
-        &self,
-        room_id: String,
-    ) -> Result<AgentChatQuickView, AgentError> {
+    pub async fn chat_quick_view(&self, room_id: String) -> Result<AgentChatQuickView, AgentError> {
         validate_opaque_value("room id", &room_id, 200)?;
         let (base_url, credential) = self.require_authenticated_config()?;
         let result = self
@@ -915,6 +942,35 @@ impl AgentRuntime {
             )
             .await
             .and_then(|response| validate_chat_quick_cleanup(&room_id, response));
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn confirm_command_draft(
+        &self,
+        draft_id: String,
+        idempotency_key: String,
+    ) -> Result<AgentCommandDraftConfirmation, AgentError> {
+        validate_opaque_value("command draft id", &draft_id, 200)?;
+        validate_opaque_value(
+            "command draft confirmation idempotency key",
+            &idempotency_key,
+            128,
+        )?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<CommandDraftConfirmationResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/command-drafts/{draft_id}/confirm"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({})),
+            )
+            .await
+            .and_then(validate_command_draft_confirmation);
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -1197,6 +1253,85 @@ impl AgentRuntime {
             )
             .await
             .map(|proposals| proposals.len());
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn open_proposals_for_room(
+        &self,
+        room_id: String,
+    ) -> Result<Vec<AgentOpenProposal>, AgentError> {
+        validate_opaque_value("room id", &room_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<Vec<OpenProposalResponse>>(
+                self.http
+                    .get(format!("{base_url}/v1/rooms/{room_id}/proposals/open"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(validate_open_proposals);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn get_proposal(
+        &self,
+        proposal_id: String,
+    ) -> Result<AgentProposalDetails, AgentError> {
+        validate_opaque_value("proposal id", &proposal_id, 200)?;
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<ProposalDetailResponse>(
+                self.http
+                    .get(format!("{base_url}/v1/proposals/{proposal_id}"))
+                    .bearer_auth(&credential.device_token),
+            )
+            .await
+            .and_then(validate_proposal_details);
+        match &result {
+            Ok(_) => self.mark_online(),
+            Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
+        }
+        result
+    }
+
+    pub async fn create_decision(
+        &self,
+        proposal_id: String,
+        approved_item_ids: Vec<String>,
+        idempotency_key: String,
+    ) -> Result<AgentDecision, AgentError> {
+        validate_opaque_value("proposal id", &proposal_id, 200)?;
+        validate_opaque_value("decision idempotency key", &idempotency_key, 128)?;
+        if approved_item_ids.is_empty() || approved_item_ids.len() > 200 {
+            return Err(validation_error(
+                "approved item ids must contain between 1 and 200 items",
+            ));
+        }
+        for item_id in &approved_item_ids {
+            validate_opaque_value("approved item id", item_id, 200)?;
+        }
+        let (base_url, credential) = self.require_authenticated_config()?;
+        let result = self
+            .send_json::<DecisionResponse>(
+                self.http
+                    .post(format!("{base_url}/v1/proposals/{proposal_id}/decisions"))
+                    .bearer_auth(&credential.device_token)
+                    .header("Idempotency-Key", idempotency_key)
+                    .json(&json!({
+                        "decisionType": "APPROVE",
+                        "approvedItemIds": approved_item_ids,
+                    })),
+            )
+            .await
+            .and_then(|response| validate_created_decision(&proposal_id, response));
         match &result {
             Ok(_) => self.mark_online(),
             Err(error) => self.record_error(error.clone(), AgentConnectionState::Offline),
@@ -2003,6 +2138,41 @@ struct ChatQuickCleanupResponse {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CommandDraftSummaryResponse {
+    id: String,
+    status: String,
+    command_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandDraftConfirmationResponse {
+    draft: CommandDraftSummaryResponse,
+    #[serde(default)]
+    command: Option<ServerCommand>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenProposalResponse {
+    id: String,
+    command_id: String,
+    room_id: String,
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposalDetailResponse {
+    id: String,
+    command_id: String,
+    room_id: String,
+    status: String,
+    items: Vec<ProposalItemResponse>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SyncEventResponse {
     event_id: String,
     event_type: String,
@@ -2511,7 +2681,10 @@ fn validate_chat_quick_history(
         || response.session_id.trim().is_empty()
         || response.session_title.trim().is_empty()
         || response.session_title.chars().count() > 120
-        || !matches!(response.sender_type.as_str(), "USER" | "ASSISTANT" | "SYSTEM")
+        || !matches!(
+            response.sender_type.as_str(),
+            "USER" | "ASSISTANT" | "SYSTEM"
+        )
         || !matches!(
             response.message_type.as_str(),
             "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT"
@@ -2542,7 +2715,10 @@ fn validate_chat_quick_suggestion(
         || response.session_id.trim().is_empty()
         || response.session_title.trim().is_empty()
         || response.session_title.chars().count() > 120
-        || !matches!(response.message_type.as_str(), "COMMAND_DRAFT" | "RULE_DRAFT")
+        || !matches!(
+            response.message_type.as_str(),
+            "COMMAND_DRAFT" | "RULE_DRAFT"
+        )
         || response.content.trim().is_empty()
         || response.content.chars().count() > 2_000
         || response.draft_id.trim().is_empty()
@@ -2563,6 +2739,111 @@ fn validate_chat_quick_suggestion(
         draft_id: response.draft_id,
         status: response.status,
         created_at: response.created_at,
+    })
+}
+
+fn validate_command_draft_confirmation(
+    response: CommandDraftConfirmationResponse,
+) -> Result<AgentCommandDraftConfirmation, AgentError> {
+    if response.draft.id.trim().is_empty()
+        || response.draft.status.trim().is_empty()
+        || response
+            .draft
+            .command_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+    {
+        return Err(invalid_response_error(
+            "command draft confirmation failed response validation",
+        ));
+    }
+    let command = response.command.map(validate_server_command).transpose()?;
+    if command
+        .as_ref()
+        .is_some_and(|command| Some(&command.command_id) != response.draft.command_id.as_ref())
+    {
+        return Err(invalid_response_error(
+            "confirmed command did not match command draft summary",
+        ));
+    }
+    Ok(AgentCommandDraftConfirmation {
+        draft_id: response.draft.id,
+        command,
+    })
+}
+
+fn validate_open_proposals(
+    responses: Vec<OpenProposalResponse>,
+) -> Result<Vec<AgentOpenProposal>, AgentError> {
+    responses.into_iter().map(validate_open_proposal).collect()
+}
+
+fn validate_open_proposal(response: OpenProposalResponse) -> Result<AgentOpenProposal, AgentError> {
+    if response.id.trim().is_empty()
+        || response.command_id.trim().is_empty()
+        || response.room_id.trim().is_empty()
+        || response.status.trim().is_empty()
+    {
+        return Err(invalid_response_error(
+            "open proposal failed response validation",
+        ));
+    }
+    Ok(AgentOpenProposal {
+        proposal_id: response.id,
+        command_id: response.command_id,
+        room_id: response.room_id,
+        status: response.status,
+    })
+}
+
+fn validate_proposal_details(
+    response: ProposalDetailResponse,
+) -> Result<AgentProposalDetails, AgentError> {
+    if response.id.trim().is_empty()
+        || response.command_id.trim().is_empty()
+        || response.room_id.trim().is_empty()
+        || response.status.trim().is_empty()
+        || response.items.is_empty()
+        || response.items.len() > 200
+    {
+        return Err(invalid_response_error(
+            "proposal detail failed response validation",
+        ));
+    }
+    let mut item_ids = Vec::with_capacity(response.items.len());
+    for item in response.items {
+        if item.id.trim().is_empty() || item.proposal_id != response.id {
+            return Err(invalid_response_error(
+                "proposal item failed response validation",
+            ));
+        }
+        item_ids.push(item.id);
+    }
+    Ok(AgentProposalDetails {
+        proposal_id: response.id,
+        command_id: response.command_id,
+        room_id: response.room_id,
+        status: response.status,
+        item_ids,
+    })
+}
+
+fn validate_created_decision(
+    expected_proposal_id: &str,
+    response: DecisionResponse,
+) -> Result<AgentDecision, AgentError> {
+    if response.id.trim().is_empty()
+        || response.proposal_id != expected_proposal_id
+        || response.decision_type != "APPROVE"
+    {
+        return Err(invalid_response_error(
+            "created decision failed response validation",
+        ));
+    }
+    Ok(AgentDecision {
+        decision_id: response.id,
+        proposal_id: response.proposal_id,
+        decision_type: response.decision_type,
     })
 }
 

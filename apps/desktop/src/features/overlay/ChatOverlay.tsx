@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listManagedRoots } from "../files/fileEngineApi";
 import type { ManagedRoot } from "../files/fileEngineApi";
 import {
+  approveAgentCommandDraftAndExecute,
   createAgentChatQuickCleanup,
   createAgentChatSession,
   getAgentChatQuickView,
@@ -42,6 +43,8 @@ export function ChatOverlay() {
   const [busy, setBusy] = useState(false);
   const [answerPending, setAnswerPending] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
+  const [approvingDraftIds, setApprovingDraftIds] = useState<Set<string>>(new Set());
+  const [approvedDraftIds, setApprovedDraftIds] = useState<Set<string>>(new Set());
   const [selectedRootId, setSelectedRootId] = useState<string | null>(
     () => readChatRoomSelection().rootId
   );
@@ -225,6 +228,45 @@ export function ChatOverlay() {
     }
   }
 
+  async function approveCommandDraft(draftId: string) {
+    if (!activeRoomId) {
+      setNotice("관리 폴더를 서버 room과 연결해야 명령을 실행할 수 있어요.");
+      return;
+    }
+    const idempotencyKey = commandDraftApprovalKey(draftId);
+    setNotice(null);
+    setBusy(true);
+    setApprovingDraftIds((current) => new Set(current).add(draftId));
+    try {
+      const report = await approveAgentCommandDraftAndExecute(draftId, activeRoomId, idempotencyKey);
+      const executed = report.execution_report.executed_item_count;
+      const skipped = report.execution_report.skipped_item_count;
+      setApprovedDraftIds((current) => new Set(current).add(draftId));
+      setNotice(`승인 후 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
+      if (chatSession) {
+        const messages = await listAgentChatMessages(chatSession.session_id);
+        setChatMessages(messages);
+        await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
+      }
+      const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
+      setQuickView(quick);
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      setNotice(
+        message.includes("IDEMPOTENCY_CONFLICT")
+          ? "이 명령 초안은 이전 승인 시도와 충돌했어요. 같은 요청을 한 번 더 보내 새 초안을 만든 뒤 승인해 주세요."
+          : message
+      );
+    } finally {
+      setBusy(false);
+      setApprovingDraftIds((current) => {
+        const next = new Set(current);
+        next.delete(draftId);
+        return next;
+      });
+    }
+  }
+
   function beginChatWindowDrag(pointer: PointerEvent<HTMLElement>) {
     if (pointer.button !== 0) return;
     const target = pointer.target as HTMLElement;
@@ -249,7 +291,10 @@ export function ChatOverlay() {
         loading={chatLoading}
         sessionTitle={chatSession?.title ?? null}
         quickView={quickView}
+        approvedDraftIds={approvedDraftIds}
+        approvingDraftIds={approvingDraftIds}
         onBeginWindowDrag={beginChatWindowDrag}
+        onApproveCommandDraft={(draftId) => void approveCommandDraft(draftId)}
         onChangeDraft={setDraft}
         onClose={() => {
           void hideChatOverlay();
@@ -286,6 +331,10 @@ function isChatMessage(message: AgentChatMessage | null): message is AgentChatMe
   return message != null;
 }
 
+function commandDraftApprovalKey(draftId: string) {
+  return `chatdraft-${draftId.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80)}`;
+}
+
 function aiNotice(status: string) {
   if (status === "UNCONFIGURED") {
     return "메시지는 저장됐고, AI 응답은 OpenAI 설정이 끝나면 붙어요. 서버의 AI_PROVIDER/AI_API_KEY/AI_MODEL을 확인해 주세요.";
@@ -296,9 +345,62 @@ function aiNotice(status: string) {
   return null;
 }
 
+type CommandDraftPayload = {
+  id: string;
+  status: string;
+};
+
+function commandDraftPayload(payload: unknown): CommandDraftPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  return typeof record.id === "string" && typeof record.status === "string"
+    ? { id: record.id, status: record.status }
+    : null;
+}
+
+function CommandDraftActions({
+  approvedDraftIds,
+  approvingDraftIds,
+  busy,
+  payload,
+  roomId,
+  onApprove
+}: {
+  approvedDraftIds: Set<string>;
+  approvingDraftIds: Set<string>;
+  busy: boolean;
+  payload: unknown;
+  roomId: string | null;
+  onApprove: (draftId: string) => void;
+}) {
+  const draft = commandDraftPayload(payload);
+  if (!draft) {
+    return <small className="room-chat-draft-hint">명령 상태를 확인할 수 없어요.</small>;
+  }
+  if (approvedDraftIds.has(draft.id)) {
+    return <small className="room-chat-draft-hint">승인 후 실행 요청을 완료했어요.</small>;
+  }
+  if (draft.status !== "DRAFT") {
+    return <small className="room-chat-draft-hint">명령 상태: {draft.status}</small>;
+  }
+  const approving = approvingDraftIds.has(draft.id);
+  return (
+    <button
+      type="button"
+      className="room-chat-draft-approve"
+      onClick={() => onApprove(draft.id)}
+      disabled={busy || approving || roomId == null}
+    >
+      {approving ? "실행 중" : "승인하고 실행"}
+    </button>
+  );
+}
+
 function RoomChatPanel({
   avatarUrl,
   answerPending,
+  approvedDraftIds,
+  approvingDraftIds,
   busy,
   draft,
   event,
@@ -313,11 +415,14 @@ function RoomChatPanel({
   onClose,
   onQuickCleanup,
   onBeginWindowDrag,
+  onApproveCommandDraft,
   onUsePrompt,
   onSubmit
 }: {
   avatarUrl: string;
   answerPending: boolean;
+  approvedDraftIds: Set<string>;
+  approvingDraftIds: Set<string>;
   busy: boolean;
   draft: string;
   event: CharacterEvent;
@@ -332,6 +437,7 @@ function RoomChatPanel({
   onClose: () => void;
   onQuickCleanup: () => void;
   onBeginWindowDrag: (event: PointerEvent<HTMLElement>) => void;
+  onApproveCommandDraft: (draftId: string) => void;
   onUsePrompt: (value: string) => void;
   onSubmit: () => void;
 }) {
@@ -408,7 +514,17 @@ function RoomChatPanel({
               {message.sender_type === "ASSISTANT" ? <strong>MouseKeeper</strong> : null}
               <p>{message.content}</p>
               {message.message_type === "COMMAND_DRAFT" ? (
-                <small className="room-chat-draft-hint">모바일에서 승인할 수 있는 명령 초안이에요.</small>
+                <div className="room-chat-draft-actions">
+                  <small className="room-chat-draft-hint">승인 대기 중인 명령 초안이에요.</small>
+                  <CommandDraftActions
+                    payload={message.structured_payload}
+                    roomId={roomId}
+                    busy={busy}
+                    approvedDraftIds={approvedDraftIds}
+                    approvingDraftIds={approvingDraftIds}
+                    onApprove={onApproveCommandDraft}
+                  />
+                </div>
               ) : null}
             </div>
           </article>

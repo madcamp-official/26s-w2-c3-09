@@ -273,6 +273,29 @@ export type DecisionProcessingReport = {
   results: DecisionProcessingResult[];
 };
 
+export type ChatCommandDraftExecutionReport = {
+  draft: {
+    draft_id: string;
+    command: AgentCommand | null;
+  };
+  command_report: CommandProcessingReport;
+  proposal: {
+    proposal_id: string;
+    command_id: string;
+    room_id: string;
+    status: string;
+    item_ids: string[];
+  };
+  decision: {
+    decision_id: string;
+    proposal_id: string;
+    decision_type: string;
+  };
+  execution_report: DecisionProcessingReport;
+  proposal_outbox_report: OutboxFlushReport;
+  execution_outbox_report: OutboxFlushReport;
+};
+
 export type FileBrowseProcessingStatus = "completed" | "failed";
 
 export type FileBrowseProcessingResult = {
@@ -378,6 +401,17 @@ export function processAgentCommands() {
 
 export function processAgentDecisions() {
   return invokeAgentCommand<DecisionProcessingReport>("process_agent_decisions");
+}
+
+export function approveAgentCommandDraftAndExecute(
+  draftId: string,
+  roomId: string,
+  idempotencyKey: string
+) {
+  return invokeAgentCommand<ChatCommandDraftExecutionReport>(
+    "approve_agent_command_draft_and_execute",
+    { draftId, roomId, idempotencyKey }
+  );
 }
 
 export function processAgentFileBrowseRequests() {

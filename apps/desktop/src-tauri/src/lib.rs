@@ -166,6 +166,7 @@ pub fn run() {
             commands::agent::poll_agent_commands,
             commands::agent::process_agent_commands,
             commands::agent::process_agent_decisions,
+            commands::agent::approve_agent_command_draft_and_execute,
             commands::agent::process_agent_file_browse_requests,
             commands::agent::process_agent_file_transfers,
             commands::agent::flush_agent_outbox,

@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::agent::AgentRuntime;
 use crate::auto_cleanup_processor::AutoCleanupReport;
-use crate::command_processor::build_agent_proposal_submission;
+use crate::command_processor::{build_agent_proposal_submission, claim_command_for_analysis};
 use crate::storage::managed_roots::{ManagedRootStore, RoomBindingStatus};
 
 const AUTO_PROPOSAL_INTENT: &str = "ANALYZE";
@@ -105,15 +105,11 @@ async fn submit_one(
         .await
         .map_err(|error| error.to_string())?;
     match command.status.as_str() {
-        "QUEUED" => {
-            agent
-                .update_command_status(command.command_id.clone(), "ANALYZING".to_string())
-                .await
-                .map_err(|error| error.to_string())?;
+        "QUEUED" | "DELIVERED" | "ANALYZING" => {
+            // A previous status update may have committed before its response was lost. Resume
+            // with the same proposal key instead of creating a second command.
+            claim_command_for_analysis(agent, &command).await?;
         }
-        // A previous status update may have committed before its response was lost. Resume with
-        // the same proposal key instead of creating a second command.
-        "ANALYZING" => {}
         "WAITING_APPROVAL"
         | "APPROVED"
         | "REJECTED"
