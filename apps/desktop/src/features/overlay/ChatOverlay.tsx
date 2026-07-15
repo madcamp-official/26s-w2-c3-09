@@ -619,13 +619,11 @@ export function ChatOverlay() {
       if (isDecisionSkippedOnly(report.execution_report)) {
         setSkippedDraftIds((current) => new Set(current).add(draftId));
       }
-      pushLocalStatusMessage(
-        executionStatusMessage({
-          roomId: activeRoomId,
-          sessionId: chatSession?.session_id ?? null,
-          content: formatDecisionExecutionResult("요청한 작업 실행 결과", report.execution_report)
-        })
-      );
+      // The server now posts a real EXECUTION_RESULT chat message for this
+      // execution; no local synthetic bubble is pushed here to avoid a
+      // duplicate. The listAgentChatMessages refetch right below already
+      // picks it up (approveAgentCommandDraftAndExecute awaits the desktop's
+      // outbox flush, so the server-side message exists by the time we get here).
       setNotice(`승인 후 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
       if (chatSession) {
         const messages = await listAgentChatMessages(chatSession.session_id);
@@ -745,18 +743,18 @@ export function ChatOverlay() {
       if (isDecisionSkippedOnly(report.execution_report)) {
         setSkippedProposalIds((current) => new Set(current).add(proposalId));
       }
-      pushLocalStatusMessage(
-        executionStatusMessage({
-          roomId: activeRoomId,
-          sessionId: chatSession?.session_id ?? null,
-          content: formatDecisionExecutionResult("자동 제안 실행 결과", report.execution_report)
-        })
-      );
+      // No local synthetic bubble here either — the server posts a real
+      // EXECUTION_RESULT chat message, picked up by the refetch below.
       setNotice(`자동 제안 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
       if (activeRootId) {
         setLocalAutoProposals((current) =>
           current.filter((proposal) => proposal.root_id !== activeRootId)
         );
+      }
+      if (chatSession) {
+        const messages = await listAgentChatMessages(chatSession.session_id);
+        setChatMessages(messages);
+        await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
       }
       await loadOpenProposals(activeRoomId);
       const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
@@ -800,14 +798,15 @@ export function ChatOverlay() {
         setOpenProposals([]);
         const executed = report.execution_report.executed_item_count;
         const skipped = report.execution_report.skipped_item_count;
-        pushLocalStatusMessage(
-          executionStatusMessage({
-            roomId: activeRoomId,
-            sessionId: chatSession?.session_id ?? null,
-            content: formatDecisionExecutionResult("자동 제안 실행 결과", report.execution_report)
-          })
-        );
+        // Server-backed proposal: a real EXECUTION_RESULT chat message is
+        // posted server-side, so no local synthetic bubble is pushed — just
+        // refetch so it shows up immediately.
         setNotice(`자동 제안 실행 완료: 실행 ${executed}개, 건너뜀 ${skipped}개`);
+        if (chatSession) {
+          const messages = await listAgentChatMessages(chatSession.session_id);
+          setChatMessages(messages);
+          await markAgentChatSessionRead(chatSession.session_id, lastAgentChatMessageId(messages)).catch(() => undefined);
+        }
         const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
         setQuickView(quick);
         return;
@@ -934,6 +933,19 @@ function buildChatTimeline(
   openProposals: TimedOpenProposal[],
   localAutoProposals: LocalAutoProposal[]
 ): ChatTimelineItem[] {
+  // The server now posts a real PROPOSAL chat message for every proposal it
+  // creates; once that message exists, the legacy synthetic "openProposal"
+  // timeline item for the same id must not also render, or the same
+  // proposal shows up twice.
+  const proposalIdsWithChatMessage = new Set(
+    messages
+      .filter((message) => message.message_type === "PROPOSAL")
+      .map((message) => proposalCardPayload(message.structured_payload)?.id)
+      .filter((id): id is string => typeof id === "string")
+  );
+  const dedupedOpenProposals = openProposals.filter(
+    (proposal) => !proposalIdsWithChatMessage.has(proposal.proposal_id)
+  );
   return [
     ...messages.map((message): ChatTimelineItem => ({
       kind: "message",
@@ -941,7 +953,7 @@ function buildChatTimeline(
       timestamp: Date.parse(message.created_at),
       message
     })),
-    ...openProposals.map((proposal): ChatTimelineItem => ({
+    ...dedupedOpenProposals.map((proposal): ChatTimelineItem => ({
       kind: "openProposal",
       key: `open:${proposal.proposal_id}`,
       timestamp: proposal.receivedAt,
@@ -1063,11 +1075,6 @@ function proposalDestinationLabel(action: string, to: string) {
   if (action === "trash") return "휴지통으로";
   if (!to.trim()) return "";
   return `→ ${to}`;
-}
-
-function formatDecisionExecutionResult(title: string, report: DecisionProcessingReport) {
-  const failed = report.failed_count > 0 ? `, 실패 ${report.failed_count}개` : "";
-  return `${title}\n실행 ${report.executed_item_count}개, 건너뜀 ${report.skipped_item_count}개${failed}`;
 }
 
 function isDecisionSkippedOnly(report: DecisionProcessingReport) {
@@ -1268,6 +1275,107 @@ function RuleDraftSummary({ payload }: { payload: unknown }) {
       <strong>{draft.name}</strong>
       {draft.explanation.trim().length > 0 ? <span>{draft.explanation}</span> : null}
     </div>
+  );
+}
+
+type ProposalCardPayload = {
+  id: string;
+  status: string;
+  itemCount: number | null;
+};
+
+function proposalCardPayload(payload: unknown): ProposalCardPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  return typeof record.id === "string" && typeof record.status === "string"
+    ? {
+        id: record.id,
+        status: record.status,
+        itemCount: typeof record.itemCount === "number" ? record.itemCount : null
+      }
+    : null;
+}
+
+function ProposalSummary({ payload }: { payload: unknown }) {
+  const proposal = proposalCardPayload(payload);
+  if (!proposal || proposal.itemCount == null) return null;
+  return (
+    <div className="room-chat-rule-summary">
+      <span>검토할 항목 {proposal.itemCount}개</span>
+    </div>
+  );
+}
+
+function ProposalActions({
+  approvingProposalIds,
+  busy,
+  payload,
+  roomId,
+  skippedProposalIds,
+  submittedProposalIds,
+  onApprove
+}: {
+  approvingProposalIds: Set<string>;
+  busy: boolean;
+  payload: unknown;
+  roomId: string | null;
+  skippedProposalIds: Set<string>;
+  submittedProposalIds: Set<string>;
+  onApprove: (proposalId: string) => void;
+}) {
+  const proposal = proposalCardPayload(payload);
+  if (!proposal) {
+    return <small className="room-chat-draft-hint">제안 상태를 확인할 수 없어요.</small>;
+  }
+  if (skippedProposalIds.has(proposal.id)) {
+    return <small className="room-chat-draft-hint">스킵됨</small>;
+  }
+  if (submittedProposalIds.has(proposal.id)) {
+    return <small className="room-chat-draft-hint">실행 요청을 보냈어요.</small>;
+  }
+  if (proposal.status !== "OPEN") {
+    return <small className="room-chat-draft-hint">제안 상태: {proposal.status}</small>;
+  }
+  const approving = approvingProposalIds.has(proposal.id);
+  return (
+    <button
+      type="button"
+      className="room-chat-draft-approve"
+      onClick={() => onApprove(proposal.id)}
+      disabled={busy || approving || roomId == null}
+    >
+      {approving ? "실행 중" : "승인하고 실행"}
+    </button>
+  );
+}
+
+type ExecutionResultCardPayload = {
+  status: string;
+  executedCount: number;
+  skippedCount: number;
+  rejectedCount: number;
+};
+
+function executionResultCardPayload(payload: unknown): ExecutionResultCardPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as Record<string, unknown>;
+  if (typeof record.status !== "string") return null;
+  const asCount = (value: unknown) => (typeof value === "number" ? value : 0);
+  return {
+    status: record.status,
+    executedCount: asCount(record.executedCount),
+    skippedCount: asCount(record.skippedCount),
+    rejectedCount: asCount(record.rejectedCount)
+  };
+}
+
+function ExecutionResultSummary({ payload }: { payload: unknown }) {
+  const result = executionResultCardPayload(payload);
+  if (!result) return null;
+  return (
+    <small className="room-chat-draft-hint">
+      {result.status} · 완료 {result.executedCount} · 건너뜀 {result.skippedCount} · 거부 {result.rejectedCount}
+    </small>
   );
 }
 
@@ -1524,6 +1632,24 @@ function RoomChatPanel({
                         onReject={onRejectRuleDraft}
                       />
                     </div>
+                  ) : null}
+                  {message.message_type === "PROPOSAL" ? (
+                    <div className="room-chat-draft-actions">
+                      <small className="room-chat-draft-hint">정리 제안이 도착했어요.</small>
+                      <ProposalSummary payload={message.structured_payload} />
+                      <ProposalActions
+                        payload={message.structured_payload}
+                        roomId={roomId}
+                        busy={busy}
+                        approvingProposalIds={approvingProposalIds}
+                        skippedProposalIds={skippedProposalIds}
+                        submittedProposalIds={submittedProposalIds}
+                        onApprove={onApproveOpenProposal}
+                      />
+                    </div>
+                  ) : null}
+                  {message.message_type === "EXECUTION_RESULT" ? (
+                    <ExecutionResultSummary payload={message.structured_payload} />
                   ) : null}
                 </div>
               </article>

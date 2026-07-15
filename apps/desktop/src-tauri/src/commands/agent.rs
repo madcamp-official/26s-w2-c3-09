@@ -1379,14 +1379,15 @@ mod tests {
     use file_engine_cli::journal::{JournalAction, JournalEntry, JournalStatus, JournalStore};
     use tempfile::tempdir;
 
-    use crate::agent::{AgentConnectionState, AgentRuntime};
+    use crate::agent::{AgentConnectionState, AgentRule, AgentRuntime};
     use crate::storage::managed_roots::{ManagedRoot, ManagedRootStore, RoomBindingStatus};
     use crate::storage::watchers::WatcherStore;
+    use file_engine_cli::rules::RULES_FILE;
 
     use super::{
-        apply_local_room_detached, disconnect_agent_room, get_agent_connection_status,
-        poll_agent_commands, preflight_agent_room_binding, prepare_agent_room_binding,
-        send_agent_heartbeat, submit_cleanliness_snapshot,
+        apply_local_room_detached, apply_server_rule_to_local_root, disconnect_agent_room,
+        get_agent_connection_status, poll_agent_commands, preflight_agent_room_binding,
+        prepare_agent_room_binding, send_agent_heartbeat, submit_cleanliness_snapshot,
     };
 
     #[test]
@@ -1475,6 +1476,55 @@ mod tests {
         assert_eq!(root.room_id, None);
         assert_eq!(root.detached_room_id.as_deref(), Some("room-1"));
         assert_eq!(root.room_binding_status, RoomBindingStatus::Detached);
+    }
+
+    #[test]
+    fn corrupt_local_rules_json_blocks_server_rule_merge_without_overwriting() {
+        let temp = tempdir().expect("tempdir");
+        let root_path = temp.path().join("root");
+        let state_dir = root_path.join(".mousekeeper");
+        fs::create_dir_all(&state_dir).expect("state dir");
+        let rules_path = state_dir.join(RULES_FILE);
+        fs::write(&rules_path, "{ not valid json").expect("corrupt rules file");
+
+        let roots = ManagedRootStore::default();
+        roots
+            .upsert(ManagedRoot::new(
+                "root-1".to_string(),
+                root_path.display().to_string(),
+                "Root".to_string(),
+            ))
+            .expect("root registration");
+        roots
+            .bind_room("root-1", "room-1".to_string())
+            .expect("bind");
+
+        let rule = AgentRule {
+            rule_id: "rule-1".to_string(),
+            room_id: "room-1".to_string(),
+            name: "PDF rule".to_string(),
+            definition: serde_json::json!({
+                "match": "ALL",
+                "conditions": [{"field": "extension", "operator": "IN", "value": [".pdf"]}],
+                "action": {"type": "MOVE", "destinationTemplate": "pdf"}
+            }),
+            priority: 100,
+            enabled: true,
+            version: 1,
+        };
+
+        let before = fs::read_to_string(&rules_path).expect("read before");
+        let result = apply_server_rule_to_local_root(&roots, &rule);
+
+        assert!(
+            result.is_err(),
+            "merging into a corrupt local rules.json must fail instead of silently succeeding"
+        );
+        let after = fs::read_to_string(&rules_path).expect("read after");
+        assert_eq!(
+            before, after,
+            "a failed merge must not touch the local rules.json at all"
+        );
     }
 
     #[test]

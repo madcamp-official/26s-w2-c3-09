@@ -80,7 +80,7 @@ export type AgentChatMessage = {
   room_id: string;
   session_id: string | null;
   sender_type: "USER" | "ASSISTANT";
-  message_type: "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "QUERY_RESULT" | "EXECUTION_RESULT";
+  message_type: "TEXT" | "COMMAND_DRAFT" | "RULE_DRAFT" | "PROPOSAL" | "QUERY_RESULT" | "EXECUTION_RESULT";
   content: string;
   structured_payload: unknown;
   command_id: string | null;
@@ -115,7 +115,7 @@ export type AgentChatQuickSuggestion = {
   message_id: string;
   session_id: string;
   session_title: string;
-  message_type: "COMMAND_DRAFT" | "RULE_DRAFT";
+  message_type: "COMMAND_DRAFT" | "RULE_DRAFT" | "PROPOSAL";
   content: string;
   draft_id: string;
   status: string;

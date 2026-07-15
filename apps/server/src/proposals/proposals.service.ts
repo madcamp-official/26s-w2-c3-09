@@ -19,12 +19,14 @@ import { and, count, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
+import { ChatService } from '../chat/chat.service';
 
 @Injectable()
 export class ProposalsService {
   constructor(
     @Inject(DATABASE) private readonly db: Database,
     private readonly sync: SyncService,
+    private readonly chat: ChatService,
   ) {}
   async create(
     userId: string,
@@ -152,7 +154,34 @@ export class ProposalsService {
         aggregateId: proposal.id,
         metadata: { itemCount: items.length },
       });
-      return { ...this.publicProposal(proposal), items };
+      const session = await this.chat.resolveSessionForCommandIn(
+        tx,
+        userId,
+        body.roomId,
+        command.command.metadata,
+      );
+      const chatMessage = await this.chat.postSystemMessageIn(tx, {
+        userId,
+        roomId: body.roomId,
+        sessionId: session.id,
+        messageType: 'PROPOSAL',
+        content: proposalChatContent(items.length),
+        structuredPayload: {
+          id: proposal.id,
+          status: proposal.status,
+          itemCount: items.length,
+          summary: proposal.summary,
+        },
+        commandId: proposal.commandId,
+      });
+      const linked = (
+        await tx
+          .update(proposals)
+          .set({ sessionId: session.id, chatMessageId: chatMessage.id })
+          .where(eq(proposals.id, proposal.id))
+          .returning()
+      )[0]!;
+      return { ...this.publicProposal(linked), items };
     });
   }
   async get(userId: string, proposalId: string) {
@@ -195,6 +224,10 @@ export class ProposalsService {
     const { idempotencyKey: _, ...safe } = proposal;
     return safe;
   }
+}
+
+export function proposalChatContent(itemCount: number) {
+  return `정리 제안이 도착했습니다. 검토할 항목 ${itemCount}개가 있습니다.`;
 }
 
 export function proposalCreatedPayload(input: {

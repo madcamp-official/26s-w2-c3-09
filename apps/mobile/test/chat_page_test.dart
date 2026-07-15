@@ -67,6 +67,77 @@ void main() {
     expect(replaceChatSession(sessions, sessions.single), same(sessions));
   });
 
+  test('PROPOSAL and EXECUTION_RESULT messages are classified distinctly', () {
+    final proposalOpen = _message(
+      'm-proposal',
+      's1',
+      'ASSISTANT',
+      'proposal',
+      messageType: 'PROPOSAL',
+      structuredPayload: {'id': 'proposal-1', 'status': 'OPEN', 'itemCount': 2},
+    );
+    final proposalApproved = _message(
+      'm-proposal-2',
+      's1',
+      'ASSISTANT',
+      'proposal',
+      messageType: 'PROPOSAL',
+      structuredPayload: {'id': 'proposal-2', 'status': 'APPROVED', 'itemCount': 2},
+    );
+    final commandDraft = _message(
+      'm-draft',
+      's1',
+      'ASSISTANT',
+      'draft',
+      messageType: 'COMMAND_DRAFT',
+      structuredPayload: {'id': 'draft-1', 'status': 'DRAFT'},
+    );
+    final executionResult = _message(
+      'm-exec',
+      's1',
+      'ASSISTANT',
+      'result',
+      messageType: 'EXECUTION_RESULT',
+      structuredPayload: {
+        'id': 'exec-1',
+        'status': 'SUCCEEDED',
+        'executedCount': 1,
+        'skippedCount': 0,
+        'rejectedCount': 0,
+      },
+    );
+    final plainText = _message('m-text', 's1', 'ASSISTANT', 'hi');
+
+    expect(isActionDraftMessage(proposalOpen), true);
+    expect(isActionDraftMessage(commandDraft), true);
+    expect(isActionDraftMessage(executionResult), false);
+    expect(isActionDraftMessage(plainText), false);
+
+    expect(isProposalMessage(proposalOpen), true);
+    expect(isProposalMessage(commandDraft), false);
+
+    expect(isExecutionResultMessage(executionResult), true);
+    expect(isExecutionResultMessage(proposalOpen), false);
+
+    // A PROPOSAL's actionable/pending status is 'OPEN', not 'DRAFT' — the
+    // status ladder that decides "show buttons vs. a chip" must be
+    // type-aware rather than hardcoding the COMMAND_DRAFT/RULE_DRAFT value.
+    expect(pendingActionDraftStatus(proposalOpen), 'OPEN');
+    expect(pendingActionDraftStatus(commandDraft), 'DRAFT');
+
+    expect(actionDraftIdFromMessage(proposalOpen), 'proposal-1');
+    expect(actionDraftStatusFromMessage(proposalOpen), 'OPEN');
+    expect(actionDraftStatusFromMessage(proposalApproved), 'APPROVED');
+    // A decided proposal no longer matches its own pending status, so a
+    // renderer built on pendingActionDraftStatus falls through to the
+    // decided/chip branch instead of re-showing action buttons.
+    expect(
+      actionDraftStatusFromMessage(proposalApproved) ==
+          pendingActionDraftStatus(proposalApproved),
+      false,
+    );
+  });
+
   test('chat conversation state keeps selection and pagination together', () {
     final state = ChatConversationState(
       sessions: [_session('s1', 'first session')],

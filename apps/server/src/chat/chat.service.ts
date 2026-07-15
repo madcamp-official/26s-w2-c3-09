@@ -24,11 +24,12 @@ import {
   devices,
   fileBrowseRequests,
   fileTransfers,
+  proposals,
   ruleDrafts,
   rooms,
   type Database,
 } from '@mousekeeper/database';
-import { and, asc, desc, eq, gt, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { mapAiResultToCommandDraft } from '../ai/ai-command-draft.mapper';
 import {
@@ -143,10 +144,11 @@ export class ChatService {
   async createQuickCleanupSuggestion(userId: string, roomId: string) {
     return this.db.transaction(async (tx) => {
       await this.requireOwnedRoomIn(tx, userId, roomId);
-      const session = await this.getOrCreateQuickCleanupSessionIn(
+      const session = await this.getOrCreateSystemSessionIn(
         tx,
         userId,
         roomId,
+        '빠른 정리 제안',
       );
       const message = (
         await tx
@@ -420,7 +422,7 @@ export class ChatService {
       )
       .orderBy(asc(chatMessages.createdAt), asc(chatMessages.id))
       .limit(limit);
-    return rows.map((message) => this.publicMessage(message));
+    return this.hydrateMessages(this.db, rows);
   }
 
   async createMessage(userId: string, sessionId: string, content: string) {
@@ -882,7 +884,10 @@ export class ChatService {
       )
       .orderBy(asc(chatMessages.createdAt), asc(chatMessages.id))
       .limit(200);
-    return rows.map(({ message }) => this.publicMessage(message));
+    return this.hydrateMessages(
+      this.db,
+      rows.map(({ message }) => message),
+    );
   }
 
   async createLegacyRoomMessage(
@@ -1630,10 +1635,11 @@ export class ChatService {
     return result;
   }
 
-  private async getOrCreateQuickCleanupSessionIn(
+  private async getOrCreateSystemSessionIn(
     tx: Transaction,
     userId: string,
     roomId: string,
+    title: string,
   ) {
     const latest = (
       await tx
@@ -1656,10 +1662,192 @@ export class ChatService {
         .values({
           userId,
           roomId,
-          title: '빠른 정리 제안',
+          title,
         })
         .returning()
     )[0]!;
+  }
+
+  /**
+   * Resolves the chat session a system-generated message (proposal, execution
+   * result) should be posted into. Reuses the session the originating command
+   * was drafted from (via `commands.metadata.sessionId`, set by
+   * `confirmCommandDraft`) when available, otherwise falls back to the room's
+   * latest active session so commands created outside of chat (e.g. mobile's
+   * direct `POST /v1/rooms/:roomId/commands`) still surface in chat.
+   */
+  async resolveSessionForCommandIn(
+    tx: Transaction,
+    userId: string,
+    roomId: string,
+    commandMetadata: unknown,
+  ) {
+    const metadataSessionId =
+      commandMetadata &&
+      typeof commandMetadata === 'object' &&
+      !Array.isArray(commandMetadata) &&
+      typeof (commandMetadata as Record<string, unknown>).sessionId ===
+        'string'
+        ? ((commandMetadata as Record<string, unknown>).sessionId as string)
+        : null;
+    if (metadataSessionId) {
+      const session = (
+        await tx
+          .select()
+          .from(chatSessions)
+          .where(
+            and(
+              eq(chatSessions.id, metadataSessionId),
+              eq(chatSessions.userId, userId),
+              eq(chatSessions.roomId, roomId),
+              eq(chatSessions.status, 'ACTIVE'),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (session) return session;
+    }
+    return this.getOrCreateSystemSessionIn(tx, userId, roomId, '자동 제안');
+  }
+
+  /** Inserts an assistant chat message and emits `chat.message.created`, for use by services outside the chat module (proposals, executions). */
+  async postSystemMessageIn(
+    tx: Transaction,
+    params: {
+      userId: string;
+      roomId: string;
+      sessionId: string;
+      messageType: string;
+      content: string;
+      structuredPayload: Record<string, unknown>;
+      commandId?: string | null;
+    },
+  ) {
+    const message = (
+      await tx
+        .insert(chatMessages)
+        .values({
+          roomId: params.roomId,
+          sessionId: params.sessionId,
+          senderType: 'ASSISTANT',
+          messageType: params.messageType,
+          content: params.content,
+          structuredPayload: params.structuredPayload,
+          commandId: params.commandId ?? null,
+        })
+        .returning()
+    )[0]!;
+    await tx
+      .update(chatSessions)
+      .set({ updatedAt: new Date() })
+      .where(eq(chatSessions.id, params.sessionId));
+    await this.sync.append(tx, {
+      userId: params.userId,
+      deviceId: null,
+      roomId: params.roomId,
+      eventType: 'chat.message.created',
+      aggregateType: 'chat_message',
+      aggregateId: message.id,
+      payload: {
+        messageId: message.id,
+        sessionId: params.sessionId,
+        senderType: message.senderType,
+        messageType: message.messageType,
+      },
+    });
+    return this.publicMessage(message);
+  }
+
+  /**
+   * Overlays live status from `commandDrafts`/`ruleDrafts`/`proposals` onto
+   * the frozen `structuredPayload` stored on each message row. The stored
+   * payload only ever reflects the state at message-creation time (confirm
+   * /reject/decide/execute never rewrite the chat_messages row), so without
+   * this step a re-fetched message list (or the pending-suggestions list)
+   * would show a draft as perpetually pending even after it was resolved.
+   */
+  private async hydrateMessages(
+    db: DbExecutor,
+    rows: (typeof chatMessages.$inferSelect)[],
+  ): Promise<PublicChatMessage[]> {
+    const commandDraftIds = new Set<string>();
+    const ruleDraftIds = new Set<string>();
+    const proposalIds = new Set<string>();
+    for (const row of rows) {
+      const summary = draftSummaryFromPayload(row.structuredPayload);
+      if (!summary) continue;
+      if (row.messageType === 'COMMAND_DRAFT') commandDraftIds.add(summary.id);
+      else if (row.messageType === 'RULE_DRAFT') ruleDraftIds.add(summary.id);
+      else if (row.messageType === 'PROPOSAL') proposalIds.add(summary.id);
+    }
+    const [liveCommandDrafts, liveRuleDrafts, liveProposals] =
+      await Promise.all([
+        commandDraftIds.size
+          ? db
+              .select()
+              .from(commandDrafts)
+              .where(inArray(commandDrafts.id, [...commandDraftIds]))
+          : Promise.resolve([]),
+        ruleDraftIds.size
+          ? db
+              .select()
+              .from(ruleDrafts)
+              .where(inArray(ruleDrafts.id, [...ruleDraftIds]))
+          : Promise.resolve([]),
+        proposalIds.size
+          ? db
+              .select()
+              .from(proposals)
+              .where(inArray(proposals.id, [...proposalIds]))
+          : Promise.resolve([]),
+      ]);
+    const commandDraftById = new Map(liveCommandDrafts.map((d) => [d.id, d]));
+    const ruleDraftById = new Map(liveRuleDrafts.map((d) => [d.id, d]));
+    const proposalById = new Map(liveProposals.map((p) => [p.id, p]));
+    return rows.map((row) => {
+      const message = this.publicMessage(row);
+      const summary = draftSummaryFromPayload(row.structuredPayload);
+      const payload = message.structuredPayload;
+      if (
+        !summary ||
+        payload === null ||
+        typeof payload !== 'object' ||
+        Array.isArray(payload)
+      ) {
+        return message;
+      }
+      const base = payload as Record<string, unknown>;
+      if (row.messageType === 'COMMAND_DRAFT') {
+        const live = commandDraftById.get(summary.id);
+        if (live) {
+          message.structuredPayload = {
+            ...base,
+            status: live.status,
+            commandId: live.commandId,
+            fileBrowseRequestId: live.fileBrowseRequestId,
+            fileTransferId: live.fileTransferId,
+          };
+        }
+      } else if (row.messageType === 'RULE_DRAFT') {
+        const live = ruleDraftById.get(summary.id);
+        if (live) {
+          message.structuredPayload = {
+            ...base,
+            status: live.status,
+            ruleId: live.ruleId,
+          };
+        }
+      } else if (row.messageType === 'PROPOSAL') {
+        const live = proposalById.get(summary.id);
+        if (live) {
+          message.structuredPayload = {
+            ...base,
+            status: live.status,
+          };
+        }
+      }
+      return message;
+    });
   }
 
   private async quickHistory(userId: string, roomId: string) {
@@ -1709,15 +1897,30 @@ export class ChatService {
           or(
             eq(chatMessages.messageType, 'COMMAND_DRAFT'),
             eq(chatMessages.messageType, 'RULE_DRAFT'),
+            eq(chatMessages.messageType, 'PROPOSAL'),
           ),
         ),
       )
       .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
       .limit(24);
+    const hydrated = await this.hydrateMessages(
+      this.db,
+      rows.map(({ message }) => message),
+    );
+    const sessionByMessageId = new Map(
+      rows.map(({ message, session }) => [message.id, session]),
+    );
+    const pendingStatusByType: Record<string, string> = {
+      COMMAND_DRAFT: 'DRAFT',
+      RULE_DRAFT: 'DRAFT',
+      PROPOSAL: 'OPEN',
+    };
     const suggestions = [];
-    for (const { message, session } of rows) {
+    for (const message of hydrated) {
       const draft = draftSummaryFromPayload(message.structuredPayload);
-      if (!draft || draft.status !== 'DRAFT') continue;
+      const pendingStatus = pendingStatusByType[message.messageType];
+      if (!draft || !pendingStatus || draft.status !== pendingStatus) continue;
+      const session = sessionByMessageId.get(message.id)!;
       suggestions.push({
         messageId: message.id,
         sessionId: session.id,

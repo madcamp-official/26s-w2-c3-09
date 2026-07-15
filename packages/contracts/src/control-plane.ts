@@ -769,6 +769,7 @@ export const chatMessageTypeSchema = z.enum([
   "TEXT",
   "COMMAND_DRAFT",
   "RULE_DRAFT",
+  "PROPOSAL",
   "QUERY_RESULT",
   "EXECUTION_RESULT",
 ]);
@@ -826,7 +827,7 @@ export const chatQuickSuggestionSchema = z
     messageId: uuidSchema,
     sessionId: uuidSchema,
     sessionTitle: z.string().min(1).max(120),
-    messageType: z.enum(["COMMAND_DRAFT", "RULE_DRAFT"]),
+    messageType: z.enum(["COMMAND_DRAFT", "RULE_DRAFT", "PROPOSAL"]),
     content: z.string().min(1).max(2000),
     draftId: uuidSchema,
     status: z.string().min(1).max(40),

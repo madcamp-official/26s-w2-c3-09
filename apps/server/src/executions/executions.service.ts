@@ -25,6 +25,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
 import { AffinityService } from '../affinity/affinity.service';
+import { ChatService } from '../chat/chat.service';
 
 @Injectable()
 export class ExecutionsService {
@@ -32,6 +33,7 @@ export class ExecutionsService {
     @Inject(DATABASE) private readonly db: Database,
     private readonly sync: SyncService,
     private readonly affinity: AffinityService,
+    private readonly chat: ChatService,
   ) {}
   async create(
     userId: string,
@@ -213,6 +215,16 @@ export class ExecutionsService {
           sourceExecutionId: executionId,
         });
       }
+      if (source.proposal.sessionId) {
+        await this.chat.postSystemMessageIn(tx, {
+          userId,
+          roomId: source.proposal.roomId,
+          sessionId: source.proposal.sessionId,
+          messageType: 'EXECUTION_RESULT',
+          content: executionResultChatContent(updated),
+          structuredPayload: executionResultChatPayload(updated),
+        });
+      }
       return this.publicExecution(updated);
     });
   }
@@ -279,4 +291,59 @@ export function executionUpdatedPayload(input: {
     roomId: input.roomId,
     status: input.status,
   };
+}
+
+function asNonNegativeInt(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+    ? value
+    : 0;
+}
+
+/**
+ * Desktop serializes `file_engine_cli::execute::ExecuteReport` as
+ * `{executed_count, skipped_count, rejected_count, results: [...]}` into the
+ * untyped `resultSummary` field. Best-effort: unknown shapes fall back to
+ * zero counts rather than throwing.
+ */
+function extractResultCounts(resultSummary: unknown) {
+  const summary =
+    resultSummary &&
+    typeof resultSummary === 'object' &&
+    !Array.isArray(resultSummary)
+      ? (resultSummary as Record<string, unknown>)
+      : {};
+  return {
+    executedCount: asNonNegativeInt(
+      summary.executed_count ?? summary.executedCount,
+    ),
+    skippedCount: asNonNegativeInt(
+      summary.skipped_count ?? summary.skippedCount,
+    ),
+    rejectedCount: asNonNegativeInt(
+      summary.rejected_count ?? summary.rejectedCount,
+    ),
+    items: Array.isArray(summary.results) ? summary.results : [],
+  };
+}
+
+export function executionResultChatPayload(
+  execution: Pick<
+    typeof executions.$inferSelect,
+    'id' | 'proposalId' | 'status' | 'resultSummary'
+  >,
+): Record<string, unknown> {
+  return {
+    id: execution.id,
+    executionId: execution.id,
+    proposalId: execution.proposalId,
+    status: execution.status,
+    ...extractResultCounts(execution.resultSummary),
+  };
+}
+
+export function executionResultChatContent(
+  execution: Pick<typeof executions.$inferSelect, 'status' | 'resultSummary'>,
+): string {
+  const counts = extractResultCounts(execution.resultSummary);
+  return `실행 결과: ${execution.status} (완료 ${counts.executedCount}건, 건너뜀 ${counts.skippedCount}건, 거부 ${counts.rejectedCount}건)`;
 }

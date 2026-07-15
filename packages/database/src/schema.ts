@@ -1,4 +1,5 @@
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   check,
@@ -255,6 +256,12 @@ export const proposals = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    sessionId: uuid("session_id").references(
+      (): AnyPgColumn => chatSessions.id,
+    ),
+    chatMessageId: uuid("chat_message_id").references(
+      (): AnyPgColumn => chatMessages.id,
+    ),
   },
   (t) => [
     uniqueIndex("proposals_idempotency_idx").on(t.idempotencyKey),
