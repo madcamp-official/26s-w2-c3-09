@@ -1326,10 +1326,24 @@ body.house-overlay-body .house-overlay-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  opacity: 1 !important;
-  transition: filter 180ms ease, opacity 180ms ease;
+  object-position: center bottom;
+  opacity: 1;
+  animation: house-image-enter 180ms ease-out both;
+  transition: filter 180ms ease, opacity 180ms ease, transform 180ms ease;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+@keyframes house-image-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 body.house-overlay-body .house-mess-layers {
