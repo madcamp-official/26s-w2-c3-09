@@ -70,7 +70,7 @@ type DragStart = {
   y: number;
 };
 
-type DragMode = "idle" | "native" | "manual";
+type DragMode = "idle" | "manual";
 
 type DragOrigin = {
   pointerX: number;
@@ -116,6 +116,13 @@ export function CharacterOverlay() {
     return () => {
       void unlisten.then((off) => off());
     };
+  }, []);
+
+  useEffect(() => {
+    for (const src of [danglingMotionUrl, wanderMotionUrls.walking, wanderMotionUrls.resting]) {
+      const image = new Image();
+      image.src = src;
+    }
   }, []);
 
   async function setHouseDropTarget(active: boolean) {
@@ -199,6 +206,7 @@ export function CharacterOverlay() {
     void getCurrentWindow()
       .outerPosition()
       .then((position) => {
+        if (dragOrigin.current) return;
         dragOrigin.current = {
           pointerX: pointer.screenX,
           pointerY: pointer.screenY,
@@ -224,18 +232,11 @@ export function CharacterOverlay() {
       // Moving the mascot should not drag the chat with it, so tuck the chat away.
       setChatOpen(false);
       void hideChatOverlay().catch(() => undefined);
-      dragMode.current = "native";
-      void getCurrentWindow()
-        .startDragging()
-        .catch((cause) => {
-          console.error("Native character drag failed; falling back to manual move", cause);
-          dragMode.current = "manual";
-          const latest = lastDragPoint.current;
-          if (latest) void moveOverlayFromPoint(latest.x, latest.y);
-        });
+      dragMode.current = "manual";
+      void moveOverlayFromPoint(pointer.screenX, pointer.screenY);
       return;
     }
-    if (dragMode.current !== "native") {
+    if (dragMode.current === "manual") {
       void moveOverlayFromPoint(pointer.screenX, pointer.screenY);
     }
   }

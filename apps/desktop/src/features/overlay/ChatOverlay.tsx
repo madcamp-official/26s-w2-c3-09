@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { PointerEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { listManagedRoots } from "../files/fileEngineApi";
@@ -16,7 +17,9 @@ import type { AgentChatMessage, AgentChatQuickView, AgentChatSession } from "../
 import {
   CharacterEvent,
   hideChatOverlay,
-  listenForCharacterEvents
+  listenForCharacterEvents,
+  listenForChatRoomSelection,
+  readChatRoomSelection
 } from "./overlayApi";
 
 const chatAvatarUrl = new URL(
@@ -39,8 +42,15 @@ export function ChatOverlay() {
   const [busy, setBusy] = useState(false);
   const [answerPending, setAnswerPending] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
+  const [selectedRootId, setSelectedRootId] = useState<string | null>(
+    () => readChatRoomSelection().rootId
+  );
 
-  const activeRoom = rooms.find((root) => root.room_binding_status === "active") ?? rooms[0] ?? null;
+  const selectedRoom = selectedRootId
+    ? rooms.find((root) => root.root_id === selectedRootId) ?? null
+    : null;
+  const activeRoom =
+    selectedRoom ?? rooms.find((root) => root.room_binding_status === "active") ?? rooms[0] ?? null;
   const activeRoomName = activeRoom?.display_name ?? "방 없음";
   const activeRoomId = activeRoom?.room_id ?? null;
 
@@ -68,17 +78,32 @@ export function ChatOverlay() {
 
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
-    const unlisten = getCurrentWindow().onFocusChanged((focusEvent) => {
-      if (focusEvent.payload) {
-        void loadRooms();
-        return;
-      }
-      void hideChatOverlay().catch(() => undefined);
+    const unlisten = listenForChatRoomSelection((selection) => {
+      setSelectedRootId(selection.rootId);
+      void loadRooms();
     });
     return () => {
       void unlisten.then((off) => off());
     };
   }, []);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return;
+    const unlisten = getCurrentWindow().onFocusChanged((focusEvent) => {
+      if (focusEvent.payload) {
+        void loadRooms();
+      }
+    });
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedRootId || rooms.length === 0) return;
+    if (rooms.some((root) => root.root_id === selectedRootId)) return;
+    setSelectedRootId(null);
+  }, [rooms, selectedRootId]);
 
   useEffect(() => {
     if (!activeRoomId) {
@@ -200,6 +225,15 @@ export function ChatOverlay() {
     }
   }
 
+  function beginChatWindowDrag(pointer: PointerEvent<HTMLElement>) {
+    if (pointer.button !== 0) return;
+    const target = pointer.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, a")) return;
+    void getCurrentWindow().startDragging().catch((cause) => {
+      console.error("Failed to drag chat overlay", cause);
+    });
+  }
+
   return (
     <div className="chat-overlay">
       <RoomChatPanel
@@ -215,6 +249,7 @@ export function ChatOverlay() {
         loading={chatLoading}
         sessionTitle={chatSession?.title ?? null}
         quickView={quickView}
+        onBeginWindowDrag={beginChatWindowDrag}
         onChangeDraft={setDraft}
         onClose={() => {
           void hideChatOverlay();
@@ -277,6 +312,7 @@ function RoomChatPanel({
   onChangeDraft,
   onClose,
   onQuickCleanup,
+  onBeginWindowDrag,
   onUsePrompt,
   onSubmit
 }: {
@@ -295,15 +331,24 @@ function RoomChatPanel({
   onChangeDraft: (value: string) => void;
   onClose: () => void;
   onQuickCleanup: () => void;
+  onBeginWindowDrag: (event: PointerEvent<HTMLElement>) => void;
   onUsePrompt: (value: string) => void;
   onSubmit: () => void;
 }) {
   const prompts = quickView?.prompts.slice(0, 4) ?? [];
   const pendingCount = quickView?.pending_action_count ?? 0;
   const unreadCount = quickView?.unread_count ?? 0;
+  const threadRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    thread.scrollTop = thread.scrollHeight;
+  }, [answerPending, loading, messages.length, notice]);
+
   return (
     <div className="room-chat-panel" data-room-id={roomId ?? "unbound"}>
-      <header className="room-chat-header">
+      <header className="room-chat-header" onPointerDown={onBeginWindowDrag}>
         <button type="button" onClick={onClose} aria-label="Close chat">
           &lt;
         </button>
@@ -332,7 +377,7 @@ function RoomChatPanel({
         </div>
       ) : null}
 
-      <div className="room-chat-thread" aria-live="polite">
+      <div ref={threadRef} className="room-chat-thread" aria-live="polite">
         {loading ? (
           <article className="room-chat-message is-mouse">
             <img src={avatarUrl} alt="" aria-hidden="true" draggable={false} />

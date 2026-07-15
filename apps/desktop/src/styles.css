@@ -888,6 +888,7 @@ body.overlay-body .room-chat-panel {
 }
 
 body.overlay-body .room-chat-quickbar {
+  grid-row: 2;
   display: flex;
   gap: 6px;
   overflow-x: auto;
@@ -913,6 +914,7 @@ body.overlay-body .room-chat-quickbar button:disabled {
 }
 
 body.overlay-body .room-chat-quickmeta {
+  grid-row: 3;
   display: flex;
   gap: 6px;
   background: #b7d7ea;
@@ -929,13 +931,16 @@ body.overlay-body .room-chat-quickmeta span {
 }
 
 body.overlay-body .room-chat-header {
+  grid-row: 1;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) 18px;
   align-items: center;
   gap: 7px;
   min-height: 42px;
   background: rgba(151, 188, 210, 0.72);
+  cursor: move;
   padding: 5px 8px;
+  user-select: none;
 }
 
 body.overlay-body .room-chat-header button {
@@ -945,6 +950,7 @@ body.overlay-body .room-chat-header button {
   border-radius: 50%;
   background: transparent;
   color: #26313b;
+  cursor: pointer;
   padding: 0;
   font-size: 17px;
   box-shadow: none;
@@ -982,14 +988,17 @@ body.overlay-body .room-chat-status {
 }
 
 body.overlay-body .room-chat-thread {
+  grid-row: 4;
   display: grid;
   align-content: start;
   gap: 9px;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background: #b7d7ea;
-  padding: 10px;
+  padding: 10px 10px 22px;
 }
 
 body.overlay-body .room-chat-message {
@@ -1052,6 +1061,7 @@ body.overlay-body .room-chat-message.is-user p {
 }
 
 body.overlay-body .character-thinking {
+  grid-row: 5;
   margin: 0;
   background: #b7d7ea;
   color: #294b60;
@@ -1102,6 +1112,14 @@ body.house-overlay-body .house-drag-surface {
   touch-action: none;
 }
 
+body.overlay-body .character-notice {
+  grid-row: 6;
+}
+
+body.overlay-body .character-chat {
+  grid-row: 7;
+}
+
 body.house-overlay-body .house-drag-surface:hover,
 body.house-overlay-body .house-drag-surface:focus-visible {
   background: transparent;
@@ -1119,6 +1137,7 @@ body.house-overlay-body .house-overlay-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  opacity: 1 !important;
   transition: filter 180ms ease, opacity 180ms ease;
   user-select: none;
   -webkit-user-drag: none;
@@ -1131,56 +1150,53 @@ body.house-overlay-body .house-mess-layers {
   width: 100%;
   height: 100%;
   background: transparent;
-  mix-blend-mode: normal;
+  mix-blend-mode: multiply;
   pointer-events: none;
 }
 
-/* Ambient dirt/stain layers stay clipped to the house silhouette. The focal
-   mess layer is intentionally excluded below so its boxes can spill outside. */
-body.house-overlay-body .house-mess-layers img:not(.mess-highlight) {
-  mask-image: url("./assets/mouse-house-transparent.png");
-  mask-position: center;
-  mask-repeat: no-repeat;
-  mask-size: contain;
-  -webkit-mask-image: url("./assets/mouse-house-transparent.png");
-  -webkit-mask-position: center;
-  -webkit-mask-repeat: no-repeat;
-  -webkit-mask-size: contain;
+body.house-overlay-body .house-mess-props {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  pointer-events: none;
 }
 
-body.house-overlay-body .house-mess-layers img {
+body.house-overlay-body .house-mess-layers img,
+body.house-overlay-body .house-mess-props img {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: transparent;
-  filter: brightness(1.08) contrast(1.14) saturate(1.04);
-  mix-blend-mode: normal;
+  filter: none;
+  mix-blend-mode: inherit;
   user-select: none;
   -webkit-user-drag: none;
 }
 
 body.house-overlay-body .house-mess-layers.mess-level-1 img {
-  opacity: 0.42;
+  opacity: 0.18;
 }
 
 body.house-overlay-body .house-mess-layers.mess-level-2 img {
-  opacity: 0.5;
+  opacity: 0.24;
 }
 
 body.house-overlay-body .house-mess-layers.mess-level-3 img,
 body.house-overlay-body .house-mess-layers.mess-level-4 img {
-  opacity: 0.58;
+  opacity: 0.3;
 }
 
-/* The mess layer (broom + boxes) is a focal prop, so keep it crisp and readable
-   instead of fading it like the ambient dirt/stain layers. */
-body.house-overlay-body .house-mess-layers.mess-level-2 img.mess-highlight,
-body.house-overlay-body .house-mess-layers.mess-level-3 img.mess-highlight,
-body.house-overlay-body .house-mess-layers.mess-level-4 img.mess-highlight {
-  opacity: 0.95;
-  mix-blend-mode: normal;
+/* The mess prop layer is a focal prop, so keep it crisp and readable
+   but do not let white antialiasing halos dominate the house art. */
+body.house-overlay-body .house-mess-props img {
+  opacity: 0.82;
+  filter: none;
+  mix-blend-mode: normal !important;
 }
 
 body.house-overlay-body .house-overlay:not(.is-locked) .house-overlay-image {
@@ -2949,7 +2965,8 @@ html.overlay-root body.house-overlay-body,
 html.overlay-root body.house-overlay-body #root,
 html.overlay-root body.house-overlay-body .house-overlay,
 html.overlay-root body.house-overlay-body .house-drag-surface,
-html.overlay-root body.house-overlay-body .house-mess-layers {
+html.overlay-root body.house-overlay-body .house-mess-layers,
+html.overlay-root body.house-overlay-body .house-mess-props {
   background: transparent !important;
   background-color: transparent !important;
 }

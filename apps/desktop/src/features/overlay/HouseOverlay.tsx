@@ -12,14 +12,29 @@ import {
   listenForManagedRootBindingChanges,
   listenForCleanlinessSnapshotUpdates
 } from "../files/fileEngineApi";
-import { HOUSE_DROP_TARGET_EVENT, hideChatOverlay, hideOverlay, setHouseOverlayLocked } from "./overlayApi";
+import {
+  HOUSE_DROP_TARGET_EVENT,
+  hideChatOverlay,
+  hideOverlay,
+  publishChatRoomSelection,
+  setHouseOverlayLocked
+} from "./overlayApi";
 
 const houseUrl = new URL("../../assets/mouse-house-transparent.png", import.meta.url).href;
 const messLayerUrls = {
-  floor: new URL("../../../../../packages/character-assets/mess/floor_dirty.png", import.meta.url).href,
-  wall: new URL("../../../../../packages/character-assets/mess/wall_dirty.png", import.meta.url).href,
-  mess: new URL("../../../../../packages/character-assets/mess/mess_dirty.png", import.meta.url).href,
-  web: new URL("../../../../../packages/character-assets/mess/web_dirty.png", import.meta.url).href
+  floor: new URL(
+    "../../../../../packages/character-assets/mess/mess_floor_dirt_transparent.png",
+    import.meta.url
+  ).href,
+  wall: new URL(
+    "../../../../../packages/character-assets/mess/mess_wall_stains_transparent.png",
+    import.meta.url
+  ).href,
+  mess: new URL("../../assets/mess-dirty-transparent.png", import.meta.url).href,
+  web: new URL(
+    "../../../../../packages/character-assets/mess/mess_cobwebs_transparent.png",
+    import.meta.url
+  ).href
 } as const;
 
 type DragStart = {
@@ -59,8 +74,10 @@ export function HouseOverlay() {
   const clickTimer = useRef<number | null>(null);
 
   function selectHouseRoot(rootId: string) {
-    activeRootIdRef.current = rootId || null;
+    const nextRootId = rootId || null;
+    activeRootIdRef.current = nextRootId;
     setSelectedRootId(rootId);
+    void publishChatRoomSelection(nextRootId);
   }
 
   async function refreshHouseRootsForMenu() {
@@ -236,6 +253,8 @@ export function HouseOverlay() {
     event.stopPropagation();
   }
 
+  const messLevel = messLevelForCleanliness(cleanlinessScore);
+
   return (
     <div className={`house-overlay ${locked ? "is-locked" : ""} ${dropTarget ? "is-drop-target" : ""}`}>
       <button
@@ -250,8 +269,9 @@ export function HouseOverlay() {
         aria-label={locked ? "MouseKeeper house locked" : "MouseKeeper house draggable"}
         title={locked ? "Click to open menu / double-click to unlock" : "Drag to move / double-click to lock"}
       >
+        <HouseAmbientMessLayers level={messLevel} />
         <img className="house-overlay-image" src={houseUrl} alt="" draggable={false} />
-        <HouseMessLayers level={messLevelForCleanliness(cleanlinessScore)} />
+        <HouseMessProps level={messLevel} />
       </button>
 
       {menuOpen ? (
@@ -313,16 +333,22 @@ function messLevelForCleanliness(score: number | null) {
   return 4;
 }
 
-function HouseMessLayers({ level }: { level: number }) {
+function HouseAmbientMessLayers({ level }: { level: number }) {
   if (level <= 0) return null;
   return (
-    <div className={`house-mess-layers mess-level-${level}`} aria-hidden="true">
+    <div className={`house-mess-layers house-ambient-mess-layers mess-level-${level}`} aria-hidden="true">
       {level >= 1 ? <img src={messLayerUrls.floor} alt="" draggable={false} /> : null}
       {level >= 2 ? <img src={messLayerUrls.wall} alt="" draggable={false} /> : null}
-      {level >= 2 ? (
-        <img className="mess-highlight" src={messLayerUrls.mess} alt="" draggable={false} />
-      ) : null}
       {level >= 4 ? <img src={messLayerUrls.web} alt="" draggable={false} /> : null}
+    </div>
+  );
+}
+
+function HouseMessProps({ level }: { level: number }) {
+  if (level < 2) return null;
+  return (
+    <div className={`house-mess-props mess-level-${level}`} aria-hidden="true">
+      <img src={messLayerUrls.mess} alt="" draggable={false} />
     </div>
   );
 }

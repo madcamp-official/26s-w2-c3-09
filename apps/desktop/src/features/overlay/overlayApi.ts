@@ -45,12 +45,18 @@ export const HOUSE_DROP_TARGET_EVENT = "house-drop-target";
 /** Emitted whenever the chat overlay is hidden so the mascot window can keep its toggle/wander
  * state in sync, regardless of which window initiated the close. */
 export const CHAT_OVERLAY_CLOSED_EVENT = "chat-overlay:closed";
+export const CHAT_ROOM_SELECTED_EVENT = "chat-overlay:room-selected";
+const CHAT_ROOM_SELECTION_STORAGE_KEY = "mousekeeper.chatOverlay.selectedRootId";
 /// Fired by the overlay chat input. This is the ONLY thing overlay chat can do: hand a bounded
 /// text draft to the app for the draft/proposal flow (plan item 12). It never runs a file op.
 export const OVERLAY_DRAFT_REQUEST_EVENT = "overlay:draft-request";
 
 export type OverlayDraftRequest = {
   text: string;
+};
+
+export type ChatRoomSelection = {
+  rootId: string | null;
 };
 
 export function getOverlayStatus() {
@@ -83,6 +89,26 @@ export async function hideChatOverlay() {
       await emit(CHAT_OVERLAY_CLOSED_EVENT).catch(() => undefined);
     }
   }
+}
+
+export async function publishChatRoomSelection(rootId: string | null) {
+  const selection = { rootId } satisfies ChatRoomSelection;
+  persistChatRoomSelection(selection);
+  if (window.__TAURI_INTERNALS__) {
+    await emit(CHAT_ROOM_SELECTED_EVENT, selection).catch(() => undefined);
+  }
+}
+
+export function readChatRoomSelection(): ChatRoomSelection {
+  try {
+    return { rootId: window.localStorage.getItem(CHAT_ROOM_SELECTION_STORAGE_KEY) || null };
+  } catch {
+    return { rootId: null };
+  }
+}
+
+export function listenForChatRoomSelection(handler: (selection: ChatRoomSelection) => void) {
+  return listen<ChatRoomSelection>(CHAT_ROOM_SELECTED_EVENT, (event) => handler(event.payload));
 }
 
 export function setHouseOverlayLocked(locked: boolean) {
@@ -138,6 +164,18 @@ export async function submitOverlayDraftRequest(text: string) {
     throw new Error("Draft request must be between 1 and 2000 characters.");
   }
   await emit(OVERLAY_DRAFT_REQUEST_EVENT, { text: trimmed } satisfies OverlayDraftRequest);
+}
+
+function persistChatRoomSelection(selection: ChatRoomSelection) {
+  try {
+    if (selection.rootId) {
+      window.localStorage.setItem(CHAT_ROOM_SELECTION_STORAGE_KEY, selection.rootId);
+    } else {
+      window.localStorage.removeItem(CHAT_ROOM_SELECTION_STORAGE_KEY);
+    }
+  } catch {
+    /* localStorage may be unavailable in tests or restricted browser previews */
+  }
 }
 
 function invokeOverlayCommand<T>(command: string, args?: Record<string, unknown>) {
