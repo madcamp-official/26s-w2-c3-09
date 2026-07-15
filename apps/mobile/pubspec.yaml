@@ -85,6 +85,7 @@ flutter:
     - assets/fonts/galmuri/LICENSE.txt
     - assets/images/pairing_mouse_icon.png
     - assets/images/home_navigation/
+    - assets/character/cheese_eating.gif
 
   fonts:
     - family: Galmuri11

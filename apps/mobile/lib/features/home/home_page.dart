@@ -704,15 +704,27 @@ class _MousePlayground extends StatelessWidget {
                 1.0,
                 1.0,
               ),
-              child: Image.asset(
-                mouseAsset,
-                key: ValueKey('$mouseAsset-$mouseMovingRight'),
-                package: mousekeeperMascotPackage,
-                width: _mouseDisplaySize,
-                height: _mouseDisplaySize,
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.none,
-              ),
+              // The supplied GIF is a local app asset so feeding remains
+              // available offline and does not depend on the character package.
+              child: isFeeding
+                  ? Image.asset(
+                      'assets/character/cheese_eating.gif',
+                      key: const ValueKey('cheese-eating'),
+                      width: _mouseDisplaySize,
+                      height: _mouseDisplaySize,
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.none,
+                      semanticLabel: 'MouseKeeper eating cheese',
+                    )
+                  : Image.asset(
+                      mouseAsset,
+                      key: ValueKey('$mouseAsset-$mouseMovingRight'),
+                      package: mousekeeperMascotPackage,
+                      width: _mouseDisplaySize,
+                      height: _mouseDisplaySize,
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.none,
+                    ),
             ),
           ),
         ),
