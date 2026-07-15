@@ -55,7 +55,11 @@ export function SpeechBubble() {
   }, []);
 
   return (
-    <div className={`speech-bubble-overlay${fading ? " is-fading" : ""}`}>
+    <div
+      className={`speech-bubble-overlay speech-bubble-overlay--tail-${tailSide}${
+        fading ? " is-fading" : ""
+      }`}
+    >
       <div className={`speech-bubble speech-bubble--tail-${tailSide}`}>
         <span className="speech-bubble-text">{text.slice(0, shownCount)}</span>
       </div>

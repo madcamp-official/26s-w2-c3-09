@@ -32,11 +32,16 @@ const SPEECH_BUBBLE_HEIGHT: i32 = 130;
 // 112x140 window has ~8px of transparent padding around its 96x118 drag-surface box, and inside
 // that box `object-fit: contain` plus the source sprite's own margin (mouse_idle_preview.gif is
 // 1400x1800 but the drawn mouse only spans roughly x:[229,1211]) adds ~17px more empty space
-// before the drawn pixels start — about 25px of total invisible padding on the left/right side.
-// Safe to sit this deep in it: the bubble window is click-through
-// (`set_ignore_cursor_events`), so it can never block dragging the mascot.
+// before the drawn pixels start — about 25px of total invisible padding on the mascot side.
+// This only works together with two things in styles.css: the *visible* bubble box is
+// edge-anchored to the side of its window facing the mascot (`.speech-bubble-overlay--tail-*`,
+// not centered — otherwise moving the window closer wouldn't move the visible bubble any closer,
+// it would just shrink dead space around it), and the bubble's tail (which points at the mascot)
+// pokes 16px past that box edge through the window's 20px padding, landing ~4px shy of the
+// window's own edge. Safe to sit this deep in the mascot's padding either way: the bubble window
+// is click-through (`set_ignore_cursor_events`), so it can never block dragging the mascot.
 #[cfg(feature = "tauri-commands")]
-const SPEECH_BUBBLE_GAP: i32 = -24;
+const SPEECH_BUBBLE_GAP: i32 = -30;
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
