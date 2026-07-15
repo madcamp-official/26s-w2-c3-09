@@ -25,11 +25,12 @@ const mousekeeperMascotAsset = mousekeeperStandAsset;
 const mousekeeperMascotPackage = 'mousekeeper_character_assets';
 
 const mousekeeperHomeBackgroundAssets = <String>[
+  // Managed-folder slots rotate the fifth room into the first position.
+  'backgrounds/background_5.png',
   'backgrounds/background_1.png',
   'backgrounds/background_2.png',
   'backgrounds/background_3.png',
   'backgrounds/background_4.png',
-  'backgrounds/background_5.png',
 ];
 
 const mousekeeperMouseDanglingGif = 'new_mouse/gif/mouse_dangling_preview.gif';
