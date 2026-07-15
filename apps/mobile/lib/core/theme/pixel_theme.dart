@@ -28,7 +28,7 @@ abstract final class PixelTheme {
       useMaterial3: true,
       colorScheme: scheme,
       scaffoldBackgroundColor: PixelColors.canvas,
-      fontFamily: 'monospace',
+      fontFamily: 'Galmuri11',
       textTheme: const TextTheme(
         displaySmall: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1),
         headlineMedium: TextStyle(
@@ -48,7 +48,7 @@ abstract final class PixelTheme {
         elevation: 0,
         titleTextStyle: TextStyle(
           color: PixelColors.ink,
-          fontFamily: 'monospace',
+          fontFamily: 'Galmuri11',
           fontWeight: FontWeight.w900,
           fontSize: 20,
           letterSpacing: 1,
@@ -85,7 +85,7 @@ abstract final class PixelTheme {
           minimumSize: const Size(48, 52),
           shape: square,
           textStyle: const TextStyle(
-            fontFamily: 'monospace',
+            fontFamily: 'Galmuri11',
             fontWeight: FontWeight.w900,
           ),
         ),
@@ -97,7 +97,7 @@ abstract final class PixelTheme {
           side: const BorderSide(color: PixelColors.ink, width: 2),
           shape: square,
           textStyle: const TextStyle(
-            fontFamily: 'monospace',
+            fontFamily: 'Galmuri11',
             fontWeight: FontWeight.w900,
           ),
         ),
@@ -110,7 +110,7 @@ abstract final class PixelTheme {
         backgroundColor: PixelColors.ink,
         contentTextStyle: TextStyle(
           color: PixelColors.paper,
-          fontFamily: 'monospace',
+          fontFamily: 'Galmuri11',
         ),
         shape: square,
         behavior: SnackBarBehavior.floating,
