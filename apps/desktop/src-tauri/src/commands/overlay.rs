@@ -41,7 +41,7 @@ const SPEECH_BUBBLE_HEIGHT: i32 = 130;
 // window's own edge. Safe to sit this deep in the mascot's padding either way: the bubble window
 // is click-through (`set_ignore_cursor_events`), so it can never block dragging the mascot.
 #[cfg(feature = "tauri-commands")]
-const SPEECH_BUBBLE_GAP: i32 = 80;
+const SPEECH_BUBBLE_GAP: i32 = 150;
 
 #[cfg(feature = "tauri-commands")]
 #[tauri::command]
