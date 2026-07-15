@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { ensureAgentRoom } from "../agent/agentApi";
 import {
   registerManagedRoot,
   selectManagedRootDirectory
@@ -27,7 +28,13 @@ export function OnboardingSlot({
     try {
       const path = await selectManagedRootDirectory();
       if (!path) return;
-      await registerManagedRoot(path);
+      const managed = await registerManagedRoot(path);
+      try {
+        await ensureAgentRoom(managed.root_id, managed.display_name);
+      } catch {
+        // Pairing/server availability must not roll back a valid local managed
+        // root. The dashboard exposes the failed sync and its retry action.
+      }
       onRegistered();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
