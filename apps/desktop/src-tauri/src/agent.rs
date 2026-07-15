@@ -564,7 +564,7 @@ impl AgentRuntime {
                         Some(url),
                         None,
                         AgentConnectionState::Unconfigured,
-                        Some(unconfigured_error("desktop device pairing is required")),
+                        Some(unconfigured_error("server pairing is optional; local desktop features remain available")),
                     ),
                     Err(error) => (
                         Some(url),
@@ -1986,7 +1986,7 @@ impl AgentRuntime {
         let mut state = self.state.lock().expect("agent state mutex poisoned");
         state.credential = None;
         state.state = AgentConnectionState::Unconfigured;
-        state.last_error = Some(unconfigured_error("desktop device pairing is required"));
+        state.last_error = Some(unconfigured_error("server pairing is optional; local desktop features remain available"));
         drop(state);
         Ok(self.connection_status())
     }

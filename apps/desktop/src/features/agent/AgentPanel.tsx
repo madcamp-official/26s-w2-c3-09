@@ -735,9 +735,12 @@ function shouldAutoStartPairing(
   connection: AgentConnectionStatus | null,
   pairing: PairingSession | null
 ) {
-  if (!connection?.server_base_url || connection.device_id || pairing) return false;
-  if (connection.last_error_code === "CREDENTIAL_STORE_UNAVAILABLE") return false;
-  return connection.state === "unconfigured" || connection.state === "revoked";
+  // Pairing is initiated by the user/mobile flow. Desktop local file features
+  // must remain usable without a phone, so never open a pairing session merely
+  // because the optional server credential is absent.
+  void connection;
+  void pairing;
+  return false;
 }
 
 function pairingQrPayload(pairing: PairingSession, serverBaseUrl: string) {

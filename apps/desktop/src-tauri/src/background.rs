@@ -468,6 +468,13 @@ async fn run_background_tick(
     // Collected across this pass and turned into a single CharacterEvent for the overlay at the end.
     let mut activity = crate::overlay::OverlayActivity::default();
 
+    // A desktop can manage its local roots without a phone. Server heartbeat,
+    // sync and agent-tool polling are optional until the user pairs it from
+    // mobile, so do not turn the optional server credential into a local error.
+    if agent.connection_status().device_id.is_none() {
+        return BackgroundTickOutcome::Continue;
+    }
+
     if mode.sends_heartbeat() {
         let device_id_before_heartbeat = agent.connection_status().device_id;
         match agent.heartbeat("ONLINE_IDLE".to_string()).await {
