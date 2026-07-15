@@ -522,23 +522,54 @@ export function ChatOverlay() {
   async function runQuickCleanup() {
     setNotice(null);
     setBusy(true);
+    setAnswerPending(true);
+    const optimisticId = `local-quick-cleanup-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
     try {
       if (!activeRoomId) {
         throw new Error("관리 폴더를 서버 room과 연결해야 빠른 정리 제안을 만들 수 있어요.");
       }
+      const optimisticMessage: AgentChatMessage = {
+        message_id: optimisticId,
+        room_id: activeRoomId,
+        session_id: chatSession?.session_id ?? null,
+        sender_type: "USER",
+        message_type: "TEXT",
+        content: "빠른 정리 제안 요청",
+        structured_payload: null,
+        command_id: null,
+        created_at: new Date().toISOString()
+      };
       suppressedOpenProposalRoomIdsRef.current.delete(activeRoomId);
+      setChatMessages((items) => appendUniqueMessages(items, [optimisticMessage]));
       const result = await createAgentChatQuickCleanup(activeRoomId);
       setChatSession(result.session);
       const sentMessages = [result.message, result.assistant].filter(isChatMessage);
-      setChatMessages((items) => appendUniqueMessages(items, sentMessages));
+      setChatMessages((items) =>
+        appendUniqueMessages(
+          items.filter((message) => message.message_id !== optimisticId),
+          sentMessages
+        )
+      );
       await markAgentChatSessionRead(result.session.session_id, lastAgentChatMessageId(sentMessages)).catch(() => undefined);
       const quick = await getAgentChatQuickView(activeRoomId).catch(() => null);
       setQuickView(quick);
       setNotice("빠른 정리 제안 카드가 추가됐어요. 승인하면 PC 분석이 시작됩니다.");
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : String(cause));
+      if (activeRoomId && isNoProposalItemsError(cause)) {
+        pushLocalStatusMessage(
+          cleanRoomStatusMessage({
+            roomId: activeRoomId,
+            sessionId: chatSession?.session_id ?? null
+          })
+        );
+        setNotice("정리할 항목이 없어요.");
+      } else {
+        setChatMessages((items) => items.filter((message) => message.message_id !== optimisticId));
+        setNotice(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
       setBusy(false);
+      setAnswerPending(false);
     }
   }
 
@@ -578,6 +609,17 @@ export function ChatOverlay() {
       await loadOpenProposals(activeRoomId);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
+      if (isNoProposalItemsError(cause)) {
+        setApprovedDraftIds((current) => new Set(current).add(draftId));
+        pushLocalStatusMessage(
+          cleanRoomStatusMessage({
+            roomId: activeRoomId,
+            sessionId: chatSession?.session_id ?? null
+          })
+        );
+        setNotice("정리할 항목이 없어요.");
+        return;
+      }
       setNotice(
         message.includes("IDEMPOTENCY_CONFLICT")
           ? "이 명령 초안은 이전 승인 시도와 충돌했어요. 같은 요청을 한 번 더 보내 새 초안을 만든 뒤 승인해 주세요."
@@ -852,12 +894,35 @@ function executionStatusMessage({
   };
 }
 
+function cleanRoomStatusMessage({
+  roomId,
+  sessionId
+}: {
+  roomId: string;
+  sessionId: string | null;
+}): AgentChatMessage {
+  return executionStatusMessage({
+    roomId,
+    sessionId,
+    content: "이미 깨끗해요. 지금 정리할 만한 항목을 찾지 못했어요."
+  });
+}
+
 function lastAgentChatMessageId(messages: AgentChatMessage[]) {
   return messages.length > 0 ? messages[messages.length - 1].message_id : null;
 }
 
 function isChatMessage(message: AgentChatMessage | null): message is AgentChatMessage {
   return message != null;
+}
+
+function isNoProposalItemsError(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return (
+    message.includes("NO_PROPOSAL_ITEMS") ||
+    message.includes("proposal command produced no proposal items") ||
+    message.includes("already clean; no proposal items were found")
+  );
 }
 
 function commandDraftApprovalKey(draftId: string) {

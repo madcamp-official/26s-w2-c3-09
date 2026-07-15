@@ -354,7 +354,11 @@ async fn approve_agent_command_draft_and_execute_impl(
         let _permit = limiter.try_scan()?;
         process_commands(runtime, roots, outbox, vec![command.clone()]).await?
     };
-    ensure_chat_command_submitted(&command_report, &command.command_id)?;
+    if !ensure_chat_command_submitted(&command_report, &command.command_id)? {
+        return Err(
+            "NO_PROPOSAL_ITEMS: already clean; no proposal items were found".to_string(),
+        );
+    }
     let proposal_outbox_report = crate::outbox_processor::flush_outbox(runtime, outbox).await?;
     let proposal = proposal_for_command(runtime, room_id, command.command_id.clone()).await?;
     let executed = approve_proposal_details_and_execute(
@@ -516,7 +520,7 @@ fn scoped_chat_approval_key(scope: &str, idempotency_key: &str) -> Result<String
 fn ensure_chat_command_submitted(
     report: &CommandProcessingReport,
     command_id: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let result = report
         .results
         .iter()
@@ -524,8 +528,12 @@ fn ensure_chat_command_submitted(
         .ok_or_else(|| {
             "COMMAND_PROCESSING_MISSING: confirmed command was not processed".to_string()
         })?;
-    if result.status == CommandProcessingStatus::SubmittedProposal {
-        return Ok(());
+    if result.status == CommandProcessingStatus::SubmittedProposal
+    {
+        return Ok(true);
+    }
+    if result.status == CommandProcessingStatus::NoProposal {
+        return Ok(false);
     }
     Err(format!(
         "COMMAND_PROCESSING_FAILED: {}",
