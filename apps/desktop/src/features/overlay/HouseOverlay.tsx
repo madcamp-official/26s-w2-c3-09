@@ -21,11 +21,11 @@ import {
 } from "./overlayApi";
 
 const houseUrls = [
-  new URL("../../../../../packages/character-assets/house/mouse_house1.png", import.meta.url).href,
-  new URL("../../../../../packages/character-assets/house/mouse_house2.png", import.meta.url).href,
-  new URL("../../../../../packages/character-assets/house/mouse_house3.png", import.meta.url).href,
-  new URL("../../../../../packages/character-assets/house/mouse_house4.png", import.meta.url).href,
-  new URL("../../../../../packages/character-assets/house/mouse_house5.png", import.meta.url).href
+  new URL("../../../../../packages/character-assets/house/house_1.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/house_2.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/house_3.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/house_4.png", import.meta.url).href,
+  new URL("../../../../../packages/character-assets/house/house_5.png", import.meta.url).href
 ] as const;
 const messLayerUrls = {
   floor: new URL(
