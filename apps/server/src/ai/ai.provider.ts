@@ -21,6 +21,49 @@ export type RoomContext = {
   existingRules: { name: string; destinationTemplate: string | null }[];
 };
 
+export type FileContext = {
+  source: 'SERVER_CACHE';
+  isLiveFilesystemSnapshot: false;
+  generatedAt: string;
+  topLevelFolders: string[];
+  knownFolders: string[];
+  extensionDistribution: { extension: string; count: number }[];
+  recentFiles: {
+    relativePath: string;
+    extension: string | null;
+    sizeBytes: number;
+    modifiedAt: string | null;
+    cachedAt: string;
+  }[];
+  latestBrowse:
+    | {
+        relativeDirectory: string;
+        status: string;
+        requestedAt: string;
+        directories: string[];
+        files: string[];
+      }
+    | null;
+  latestSnapshot:
+    | {
+        score: number;
+        metrics: unknown;
+        calculatedAt: string;
+      }
+    | null;
+  recentProposals: {
+    status: string;
+    summary: unknown;
+    createdAt: string;
+    itemCount: number;
+    sampleItems: {
+      actionType: string;
+      sourceRelativePath: string | null;
+      destinationRelativePath: string | null;
+    }[];
+  }[];
+};
+
 export type ChatContext = {
   userId: string;
   roomId: string;
@@ -30,6 +73,7 @@ export type ChatContext = {
     content: string;
   };
   room?: RoomContext | null;
+  fileContext?: FileContext | null;
 };
 
 export type RuleTranslationContext = {
@@ -37,6 +81,7 @@ export type RuleTranslationContext = {
   roomId: string;
   instruction: string;
   room?: RoomContext | null;
+  fileContext?: FileContext | null;
 };
 
 export type AiUnavailableResult = {

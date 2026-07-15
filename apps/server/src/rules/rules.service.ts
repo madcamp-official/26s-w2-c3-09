@@ -16,7 +16,7 @@ import {
   AI_PROVIDER,
   type AiProvider,
 } from '../ai/ai.provider';
-import { buildRoomContext } from '../ai/room-context';
+import { buildFileContext, buildRoomContext } from '../ai/room-context';
 import { DATABASE } from '../database/database.module';
 import { SyncService } from '../sync/sync.service';
 
@@ -101,11 +101,16 @@ export class RulesService {
     body: z.infer<typeof createRuleDraftRequestSchema>,
   ) {
     await this.ownedRoom(userId, roomId);
+    const [roomContext, fileContext] = await Promise.all([
+      buildRoomContext(this.db, roomId),
+      buildFileContext(this.db, roomId),
+    ]);
     const translated = await this.ai.translateRule({
       userId,
       roomId,
       instruction: body.instruction,
-      room: await buildRoomContext(this.db, roomId),
+      room: roomContext,
+      fileContext,
     });
     if (translated.status !== 'READY') return translated;
 

@@ -38,7 +38,7 @@ import {
   type AiQueryResult,
   type AiRuleDraftResult,
 } from '../ai/ai.provider';
-import { buildRoomContext } from '../ai/room-context';
+import { buildFileContext, buildRoomContext } from '../ai/room-context';
 import { canonicalJson } from '../common/canonical-json';
 import { DATABASE } from '../database/database.module';
 import { FileBrowseService } from '../file-access/file-browse.service';
@@ -992,6 +992,10 @@ export class ChatService {
     session: typeof chatSessions.$inferSelect,
     message: PublicChatMessage,
   ) {
+    const [roomContext, fileContext] = await Promise.all([
+      buildRoomContext(this.db, session.roomId),
+      buildFileContext(this.db, session.roomId),
+    ]);
     const ai = await this.ai.classifyAndRespond({
       userId,
       roomId: session.roomId,
@@ -1000,7 +1004,8 @@ export class ChatService {
         id: message.id,
         content: message.content,
       },
-      room: await buildRoomContext(this.db, session.roomId),
+      room: roomContext,
+      fileContext,
     });
     if (ai.status === 'READY' && ai.kind === 'NO_ACTION') {
       const assistant = await this.createAiTextAssistantMessage(
