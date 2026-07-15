@@ -16,6 +16,7 @@ import {
   createAgentChatSession,
   getBackgroundRuntimeStatus,
   getAgentChatQuickView,
+  listenForAgentChatMessages,
   listAgentOpenProposals,
   listAgentChatMessages,
   listAgentChatSessions,
@@ -426,6 +427,49 @@ export function ChatOverlay() {
       void loadOpenProposals();
     }
   }, [event.kind, activeRoomId]);
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__ || !activeRoomId) return;
+    let cancelled = false;
+    let refreshVersion = 0;
+    const unlisten = listenForAgentChatMessages((update) => {
+      if (update.room_id !== activeRoomId) return;
+      const version = ++refreshVersion;
+      void (async () => {
+        try {
+          // The mobile app may currently be writing to a different active session than the one
+          // this window loaded earlier. Follow the event's durable session so both devices show
+          // the same conversation instead of polling a stale session forever.
+          const sessions = await listAgentChatSessions(activeRoomId);
+          const session =
+            sessions.find((candidate) => candidate.session_id === update.session_id) ?? sessions[0];
+          if (!session) return;
+          const [messages, quick] = await Promise.all([
+            listAgentChatMessages(session.session_id),
+            getAgentChatQuickView(activeRoomId).catch(() => null)
+          ]);
+          await markAgentChatSessionRead(
+            session.session_id,
+            lastAgentChatMessageId(messages)
+          ).catch(() => undefined);
+          if (cancelled || version !== refreshVersion) return;
+          setChatSession(session);
+          setChatMessages(messages);
+          setLocalStatusMessages([]);
+          setQuickView(quick);
+          void loadOpenProposals(activeRoomId);
+        } catch (cause) {
+          if (!cancelled) {
+            console.error("Failed to refresh desktop chat from realtime message", cause);
+          }
+        }
+      })();
+    });
+    return () => {
+      cancelled = true;
+      void unlisten.then((off) => off());
+    };
+  }, [activeRoomId]);
 
   useEffect(() => {
     const unlistenBridge = listenForChatAutoProposals((proposal) => {

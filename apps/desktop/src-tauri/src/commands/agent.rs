@@ -34,6 +34,29 @@ pub struct SyncReplay {
     pub events: Vec<SyncEvent>,
 }
 
+#[cfg(feature = "tauri-commands")]
+pub(crate) const AGENT_CHAT_MESSAGE_CREATED_EVENT: &str = "agent-chat-message-created";
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct AgentChatMessageSyncUpdate {
+    pub room_id: String,
+    pub session_id: String,
+    pub message_id: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct AutomaticRoomSyncFailure {
+    pub root_id: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct AutomaticRoomSyncReport {
+    pub inspected_count: usize,
+    pub synced_rooms: Vec<AgentRoomSync>,
+    pub failures: Vec<AutomaticRoomSyncFailure>,
+}
+
 #[derive(Clone, Debug, serde::Serialize, PartialEq)]
 pub struct CleanlinessSnapshotSyncReport {
     pub root_id: String,
@@ -144,6 +167,34 @@ pub async fn poll_agent_pairing(
     // startup path in `run()` that shows the overlay whenever a device is already paired. Without
     // this, the overlay would only appear on the next app restart.
     if status.device_id.is_some() {
+        // A folder can be registered safely before a mobile device is paired. In that case its
+        // local boundary remains `unbound`; claiming the pairing must publish those roots without
+        // making the user revisit the folder screen or press a manual sync button.
+        use tauri::{Emitter, Manager};
+        let roots = app.state::<ManagedRootStore>();
+        let watchers = app.state::<WatcherStore>();
+        match sync_unbound_agent_rooms(&runtime, &roots).await {
+            Ok(report) => {
+                for room in report.synced_rooms {
+                    if let Err(error) = crate::watcher_lifecycle::start_root_watcher(
+                        room.root_id.clone(),
+                        app.clone(),
+                        &roots,
+                        &watchers,
+                    ) {
+                        eprintln!("failed to start watcher after automatic room sync: {error}");
+                    }
+                    let _ = app.emit("managed-root-binding-changed", room.root_id);
+                }
+                for failure in report.failures {
+                    eprintln!(
+                        "automatic managed-root sync failed for {}: {}",
+                        failure.root_id, failure.message
+                    );
+                }
+            }
+            Err(error) => eprintln!("failed to inspect managed roots after pairing: {error}"),
+        }
         crate::tray::hide_main_window(&app);
         if let Err(error) = crate::commands::overlay::show_overlay_window(&app, &overlay_runtime) {
             eprintln!("failed to show overlay after pairing: {error}");
@@ -151,6 +202,56 @@ pub async fn poll_agent_pairing(
     }
 
     Ok(status)
+}
+
+/// Publishes every enabled local root that was registered before pairing. Detached roots are
+/// intentionally excluded: a user-requested mobile disconnect must never be silently reversed.
+#[cfg(feature = "tauri-commands")]
+pub(crate) async fn sync_unbound_agent_rooms(
+    runtime: &AgentRuntime,
+    roots: &ManagedRootStore,
+) -> Result<AutomaticRoomSyncReport, String> {
+    let candidates = automatic_room_sync_candidates(roots.list()?);
+    let inspected_count = candidates.len();
+    let mut synced_rooms = Vec::with_capacity(inspected_count);
+    let mut failures = Vec::new();
+
+    for root in candidates {
+        let result = async {
+            preflight_agent_room_binding(roots, &root.root_id)?;
+            let room = runtime
+                .ensure_room_for_root(root.root_id.clone(), root.display_name.clone())
+                .await
+                .map_err(|error| error.to_string())?;
+            activate_agent_room_binding(roots, &room)?;
+            Ok::<_, String>(room)
+        }
+        .await;
+
+        match result {
+            Ok(room) => synced_rooms.push(room),
+            Err(message) => failures.push(AutomaticRoomSyncFailure {
+                root_id: root.root_id,
+                message,
+            }),
+        }
+    }
+
+    Ok(AutomaticRoomSyncReport {
+        inspected_count,
+        synced_rooms,
+        failures,
+    })
+}
+
+#[cfg(any(feature = "tauri-commands", test))]
+fn automatic_room_sync_candidates(
+    roots: Vec<crate::storage::managed_roots::ManagedRoot>,
+) -> Vec<crate::storage::managed_roots::ManagedRoot> {
+    roots
+        .into_iter()
+        .filter(|root| root.enabled && root.room_binding_status == RoomBindingStatus::Unbound)
+        .collect()
 }
 
 #[cfg(not(feature = "tauri-commands"))]
@@ -917,6 +1018,9 @@ pub async fn replay_agent_events(
         if event.event_type == "device.revoked" {
             let _ = app.emit("desktop-device-revoked", event.device_id.clone());
         }
+        if let Some(update) = chat_message_sync_update(event) {
+            let _ = app.emit(AGENT_CHAT_MESSAGE_CREATED_EVENT, update);
+        }
     }
     Ok(replay)
 }
@@ -979,6 +1083,29 @@ async fn replay_agent_events_impl(
         previous_cursor,
         next_cursor,
         events,
+    })
+}
+
+#[cfg(any(feature = "tauri-commands", test))]
+pub(crate) fn chat_message_sync_update(event: &SyncEvent) -> Option<AgentChatMessageSyncUpdate> {
+    if event.event_type != "chat.message.created" {
+        return None;
+    }
+    let room_id = event.room_id.as_deref()?.trim();
+    let session_id = event.payload.get("sessionId")?.as_str()?.trim();
+    let message_id = event
+        .payload
+        .get("messageId")
+        .and_then(|value| value.as_str())
+        .unwrap_or(event.aggregate_id.as_str())
+        .trim();
+    if room_id.is_empty() || session_id.is_empty() || message_id.is_empty() {
+        return None;
+    }
+    Some(AgentChatMessageSyncUpdate {
+        room_id: room_id.to_string(),
+        session_id: session_id.to_string(),
+        message_id: message_id.to_string(),
     })
 }
 
@@ -1377,15 +1504,16 @@ mod tests {
     use file_engine_cli::journal::{JournalAction, JournalEntry, JournalStatus, JournalStore};
     use tempfile::tempdir;
 
-    use crate::agent::{AgentConnectionState, AgentRule, AgentRuntime};
+    use crate::agent::{AgentConnectionState, AgentRule, AgentRuntime, SyncEvent};
     use crate::storage::managed_roots::{ManagedRoot, ManagedRootStore, RoomBindingStatus};
     use crate::storage::watchers::WatcherStore;
     use file_engine_cli::rules::RULES_FILE;
 
     use super::{
-        apply_local_room_detached, apply_server_rule_to_local_root, disconnect_agent_room,
-        get_agent_connection_status, poll_agent_commands, preflight_agent_room_binding,
-        prepare_agent_room_binding, send_agent_heartbeat, submit_cleanliness_snapshot,
+        apply_local_room_detached, apply_server_rule_to_local_root, automatic_room_sync_candidates,
+        chat_message_sync_update, disconnect_agent_room, get_agent_connection_status,
+        poll_agent_commands, preflight_agent_room_binding, prepare_agent_room_binding,
+        send_agent_heartbeat, submit_cleanliness_snapshot,
     };
 
     #[test]
@@ -1415,6 +1543,66 @@ mod tests {
             .expect_err("invalid presence");
 
         assert!(error.contains("VALIDATION_FAILED"));
+    }
+
+    #[test]
+    fn automatic_room_sync_only_selects_enabled_unbound_roots() {
+        let unbound = ManagedRoot::new(
+            "root-unbound".to_string(),
+            "C:\\roots\\unbound".to_string(),
+            "Unbound".to_string(),
+        );
+        let mut disabled = ManagedRoot::new(
+            "root-disabled".to_string(),
+            "C:\\roots\\disabled".to_string(),
+            "Disabled".to_string(),
+        );
+        disabled.enabled = false;
+        let mut active = ManagedRoot::new(
+            "root-active".to_string(),
+            "C:\\roots\\active".to_string(),
+            "Active".to_string(),
+        );
+        active.room_id = Some("room-active".to_string());
+        active.room_binding_status = RoomBindingStatus::Active;
+        let mut detached = ManagedRoot::new(
+            "root-detached".to_string(),
+            "C:\\roots\\detached".to_string(),
+            "Detached".to_string(),
+        );
+        detached.detached_room_id = Some("room-detached".to_string());
+        detached.room_binding_status = RoomBindingStatus::Detached;
+
+        let candidates = automatic_room_sync_candidates(vec![active, detached, disabled, unbound]);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].root_id, "root-unbound");
+    }
+
+    #[test]
+    fn chat_message_sync_event_projects_room_session_and_message() {
+        let event = SyncEvent {
+            event_id: "event-1".to_string(),
+            event_type: "chat.message.created".to_string(),
+            schema_version: 1,
+            correlation_id: "correlation-1".to_string(),
+            aggregate_type: "chat_message".to_string(),
+            aggregate_id: "message-fallback".to_string(),
+            device_id: None,
+            room_id: Some("room-1".to_string()),
+            sequence: 10,
+            occurred_at: "2026-07-15T00:00:00Z".to_string(),
+            payload: serde_json::json!({
+                "messageId": "message-1",
+                "sessionId": "session-1"
+            }),
+        };
+
+        let update = chat_message_sync_update(&event).expect("chat projection");
+
+        assert_eq!(update.room_id, "room-1");
+        assert_eq!(update.session_id, "session-1");
+        assert_eq!(update.message_id, "message-1");
     }
 
     #[test]

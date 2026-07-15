@@ -27,7 +27,7 @@ const DEVICE_REVOKED_REASON: &str = "desktop device pairing was revoked; pair th
 /// Each one only wakes the REST loop; the events themselves are never treated as the source of
 /// truth (that stays `/v1/sync/events` replay and command/decision polling).
 #[cfg(feature = "tauri-commands")]
-const REALTIME_WAKE_EVENTS: [&str; 11] = [
+const REALTIME_WAKE_EVENTS: [&str; 12] = [
     "command.available",
     "command.updated",
     "proposal.created",
@@ -39,6 +39,7 @@ const REALTIME_WAKE_EVENTS: [&str; 11] = [
     "room.removed",
     "rule.created",
     "rule.draft.updated",
+    "chat.message.created",
 ];
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -521,6 +522,50 @@ async fn run_background_tick(
         return BackgroundTickOutcome::Continue;
     }
 
+    // A local folder may have been registered while no mobile device was paired. The first
+    // authenticated tick (and later reconnect ticks) promotes every such `unbound` root to a
+    // server room automatically. Explicitly detached roots remain detached.
+    match work_limiter.try_scan() {
+        Ok(_permit) => match crate::commands::agent::sync_unbound_agent_rooms(&agent, &roots).await
+        {
+            Ok(report) => {
+                let mut sync_errors = report
+                    .failures
+                    .into_iter()
+                    .map(|failure| format!("{}: {}", failure.root_id, failure.message))
+                    .collect::<Vec<_>>();
+                for room in report.synced_rooms {
+                    if let Err(error) = crate::watcher_lifecycle::start_root_watcher(
+                        room.root_id.clone(),
+                        app.clone(),
+                        &roots,
+                        &watchers,
+                    ) {
+                        sync_errors.push(format!("{} watcher: {error}", room.root_id));
+                    }
+                    let _ = app.emit("managed-root-binding-changed", room.root_id);
+                }
+                if !sync_errors.is_empty() {
+                    activity.had_error = true;
+                    update_status(status, |status| {
+                        status.last_error_message = Some(format!(
+                            "automatic managed-root sync failed: {}",
+                            sync_errors.join("; ")
+                        ));
+                    });
+                }
+            }
+            Err(error) => {
+                activity.had_error = true;
+                update_status(status, |status| {
+                    status.last_error_message =
+                        Some(format!("cannot inspect roots for automatic sync: {error}"));
+                });
+            }
+        },
+        Err(error) => record_busy_skip(status, error),
+    }
+
     if let Some(device_id) = agent.connection_status().device_id {
         match replay_events(app, &agent, &sync_store, &roots, &watchers, &device_id).await {
             Ok(ReplayOutcome::Continue) => update_status(status, |status| {
@@ -976,6 +1021,12 @@ async fn replay_events(
         }
         if event.event_type == "rule.created" {
             let _ = crate::commands::agent::apply_rule_created_event(agent, roots, event).await?;
+        }
+        if let Some(update) = crate::commands::agent::chat_message_sync_update(event) {
+            let _ = app.emit(
+                crate::commands::agent::AGENT_CHAT_MESSAGE_CREATED_EVENT,
+                update,
+            );
         }
         if event.event_type == "device.revoked"
             && (event.device_id.as_deref() == Some(device_id)

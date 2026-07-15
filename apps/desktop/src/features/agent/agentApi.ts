@@ -414,6 +414,12 @@ export type SyncReplay = {
   events: SyncEvent[];
 };
 
+export type AgentChatMessageSyncUpdate = {
+  room_id: string;
+  session_id: string;
+  message_id: string;
+};
+
 export function getAgentConnectionStatus() {
   return invokeAgentCommand<AgentConnectionStatus>("get_agent_connection_status");
 }
@@ -594,6 +600,15 @@ export function disconnectAgentRoom(
 export function listenForDesktopDeviceRevoked(handler: () => void) {
   ensureTauriRuntime();
   return listen<string | null>("desktop-device-revoked", () => handler());
+}
+
+export function listenForAgentChatMessages(
+  handler: (update: AgentChatMessageSyncUpdate) => void
+) {
+  ensureTauriRuntime();
+  return listen<AgentChatMessageSyncUpdate>("agent-chat-message-created", (event) =>
+    handler(event.payload)
+  );
 }
 
 function invokeAgentCommand<T>(command: string, args?: Record<string, unknown>) {
