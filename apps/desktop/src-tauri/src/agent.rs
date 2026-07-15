@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const SERVER_BASE_URL_ENV: &str = "MOUSEKEEPER_SERVER_BASE_URL";
+const DEFAULT_SERVER_BASE_URL: &str = "https://mousekeeper.madcamp-kaist.org";
 const KEYRING_SERVICE: &str = "com.mousekeeper.desktop";
 const KEYRING_ACCOUNT: &str = "device-token";
 
@@ -521,7 +522,13 @@ pub struct AgentRuntime {
 
 impl Default for AgentRuntime {
     fn default() -> Self {
-        let configured_url = env::var(SERVER_BASE_URL_ENV).ok();
+        // Production bundles do not inherit the shell environment that built them.
+        // Keep the explicit override for local development, but make the signed desktop
+        // install usable out of the box against the deployed API.
+        let configured_url = env::var(SERVER_BASE_URL_ENV)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| Some(DEFAULT_SERVER_BASE_URL.to_string()));
         Self::new(configured_url.as_deref(), Arc::new(KeyringCredentialStore))
     }
 }
