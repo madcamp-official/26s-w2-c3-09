@@ -84,6 +84,7 @@ flutter:
   assets:
     - assets/fonts/galmuri/LICENSE.txt
     - assets/images/pairing_mouse_icon.png
+    - assets/images/home_navigation/
 
   fonts:
     - family: Galmuri11
