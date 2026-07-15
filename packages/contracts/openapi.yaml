@@ -1266,6 +1266,85 @@ paths:
                   type: array,
                   items: { $ref: "#/components/schemas/EventEnvelope" },
                 }
+  /v1/agent-runs/{runId}:
+    get:
+      responses:
+        "200":
+          description: Agent run state
+          content:
+            application/json:
+              schema: { type: object }
+        "404": { description: Agent run not found }
+  /v1/devices/{deviceId}/agent-tools/pending:
+    get:
+      responses:
+        "200":
+          description: Queued tool requests for the paired desktop
+          content:
+            application/json:
+              schema: { type: array, items: { type: object } }
+        "404": { description: Agent device not found }
+  /v1/rooms/{id}/ai-document-consent:
+    patch:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Updated room consent
+          content:
+            application/json:
+              schema: { type: object }
+        "404": { description: Room not found }
+  /v1/agent-runs/{runId}/clarifications:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [selectedCandidate]
+              properties:
+                selectedCandidate: { type: string, minLength: 1 }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Resumed agent run
+          content:
+            application/json:
+              schema: { type: object }
+        "400": { description: Invalid clarification }
+  /v1/agent/agent-tools/{stepId}/result:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [SUCCEEDED, FAILED] }
+                resultMetadata: { type: object, nullable: true }
+                failureCode: { type: string, nullable: true }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Tool step completion
+          content:
+            application/json:
+              schema: { type: object }
+        "400": { description: Invalid tool result }
+        "404": { description: Tool step not found }
+
 components:
   securitySchemes:
     firebaseBearer:
