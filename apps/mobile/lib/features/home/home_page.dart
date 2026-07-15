@@ -177,8 +177,7 @@ class _HomePageState extends ConsumerState<HomePage> {
               builder: (context, constraints) => Stack(
                 children: [
                   Positioned(
-                    top:
-                        MediaQuery.paddingOf(context).top + kToolbarHeight + 12,
+                    top: MediaQuery.paddingOf(context).top + 10,
                     left: constraints.maxWidth * 0.05,
                     right: constraints.maxWidth * 0.35,
                     child: Align(
@@ -557,6 +556,7 @@ class _ManagedFolderSelector extends StatelessWidget {
               child: DropdownButton<String>(
                 key: const ValueKey('managed-folder-selector'),
                 value: selectedRoomId,
+                isDense: true,
                 borderRadius: BorderRadius.circular(16),
                 items: [
                   for (var index = 0; index < rooms.length; index++)
