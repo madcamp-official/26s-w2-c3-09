@@ -146,6 +146,12 @@ describe('OpenAiResponsesProvider', () => {
     expect(JSON.parse(init.body as string).instructions).toContain(
       'destinationTemplate',
     );
+    expect(JSON.parse(init.body as string).instructions).toContain(
+      'KakaoTalk이 앞에 붙은 파일',
+    );
+    expect(JSON.parse(init.body as string).instructions).toContain(
+      'Treat "모아다가 카카오톡 이미지 파일을 만들어줘"',
+    );
   });
 
   it('carries a validated one-off selector rule in an ORGANIZE command', async () => {
