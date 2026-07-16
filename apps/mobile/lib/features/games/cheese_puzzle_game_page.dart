@@ -273,8 +273,9 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
           beyond.x >= _current.rows[beyond.y].length ||
           _current.rows[beyond.y][beyond.x] == '#' ||
           _current.walls.contains(beyond) ||
-          _boxes.contains(beyond))
+          _boxes.contains(beyond)) {
         return;
+      }
       setState(() {
         _boxes
           ..remove(next)
@@ -288,11 +289,14 @@ class _CheesePuzzleGamePageState extends State<CheesePuzzleGamePage> {
     setState(() {
       _player = next;
       _turns--;
-      if (_current.key == next) _hasKey = true;
-      if (_player == _current.cheese)
+      if (_current.key == next) {
+        _hasKey = true;
+      }
+      if (_player == _current.cheese) {
         _won = true;
-      else if (_turns <= 0)
+      } else if (_turns <= 0) {
         _failed = true;
+      }
     });
   }
 
@@ -454,7 +458,7 @@ class _BoardPainter extends CustomPainter {
     final ox = (size.width - cell * stage.rows[0].length) / 2;
     final oy = (size.height - cell * stage.rows.length) / 2;
     final p = Paint();
-    for (var y = 0; y < stage.rows.length; y++)
+    for (var y = 0; y < stage.rows.length; y++) {
       for (var x = 0; x < stage.rows[y].length; x++) {
         final r = Rect.fromLTWH(
           ox + x * cell,
@@ -485,6 +489,7 @@ class _BoardPainter extends CustomPainter {
           canvas.drawRect(r.deflate(cell * .18), p);
         }
       }
+    }
   }
 
   @override

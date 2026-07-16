@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mousekeeper/features/games/cage_escape_game_page.dart';
+import 'package:mousekeeper/features/games/cheese_puzzle_game_page.dart';
 import 'package:mousekeeper/features/games/maze_game_page.dart';
 import 'package:mousekeeper/features/games/mini_game_hub_page.dart';
 import 'package:mousekeeper/features/games/whack_game_page.dart';
@@ -51,13 +52,13 @@ void main() {
   testWidgets('game hub routes to all three playable games', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: MiniGameHubPage()));
 
-    expect(find.text('미로 찾기'), findsOneWidget);
+    expect(find.text('치즈 탈출 퍼즐'), findsOneWidget);
     expect(find.text('치즈 잡기'), findsOneWidget);
     expect(find.text('케이지 탈출'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('game-card-maze')));
     await tester.pumpAndSettle();
-    expect(find.byType(MazeGamePage), findsOneWidget);
+    expect(find.byType(CheesePuzzleGamePage), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
 
