@@ -1,4 +1,4 @@
-import { rateLimitKey, requestLimit } from './rate-limit';
+import { rateLimitKey, requestLimit, requestScope } from './rate-limit';
 
 describe('rate limit policy', () => {
   it('applies stricter limits to pairing and transfer endpoints', () => {
@@ -16,7 +16,21 @@ describe('rate limit policy', () => {
       ),
     ).toBe(10);
     expect(requestLimit('/v1/file-transfers/id/download')).toBe(30);
+    expect(requestLimit('/v1/devices/device-1/heartbeat', 'POST')).toBe(600);
+    expect(requestLimit('/v1/agent/cached-files/stale', 'POST')).toBe(600);
+    expect(requestLimit('/v1/rooms/room-1/snapshots', 'POST')).toBe(600);
+    expect(requestLimit('/v1/chat-sessions/session-1/messages')).toBe(300);
     expect(requestLimit('/v1/rooms')).toBe(120);
+  });
+
+  it('isolates agent retry traffic from realtime and user chat traffic', () => {
+    expect(requestScope('/v1/agent/cached-files/stale', 'POST')).toBe('agent');
+    expect(requestScope('/v1/rooms/room-1/snapshots', 'POST')).toBe('agent');
+    expect(requestScope('/v1/devices/device-1/heartbeat', 'POST')).toBe(
+      'realtime',
+    );
+    expect(requestScope('/v1/sync/events')).toBe('realtime');
+    expect(requestScope('/v1/chat-sessions/session-1/messages')).toBe('chat');
   });
 
   it('isolates pairing status polling from pairing mutations and general API traffic', () => {

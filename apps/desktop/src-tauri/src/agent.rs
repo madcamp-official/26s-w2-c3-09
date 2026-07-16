@@ -3694,6 +3694,13 @@ fn http_error(status: StatusCode, server_error: Option<ServerErrorResponse>) -> 
     let code = match status {
         StatusCode::UNAUTHORIZED => AgentErrorCode::Unauthenticated,
         StatusCode::FORBIDDEN => AgentErrorCode::Forbidden,
+        // A timeout or rate limit is safe to retry later. Other 4xx responses are a
+        // definitive rejection of this exact request and must not keep an outbox row
+        // retrying forever; 5xx responses remain transient server failures.
+        StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS => {
+            AgentErrorCode::TransportUnavailable
+        }
+        status if status.is_client_error() => AgentErrorCode::ValidationFailed,
         _ => AgentErrorCode::TransportUnavailable,
     };
     let server_code = server_error.as_ref().and_then(|body| body.code.clone());
@@ -3796,9 +3803,10 @@ mod tests {
     use std::thread;
 
     use super::{
-        normalize_server_base_url, AgentConnectionState, AgentError, AgentErrorCode,
+        http_error, normalize_server_base_url, AgentConnectionState, AgentError, AgentErrorCode,
         AgentFileSearchScope, AgentRuntime, CredentialStore, DeviceCredential, ServerCommand,
     };
+    use reqwest::StatusCode;
 
     #[derive(Default)]
     struct MemoryCredentialStore {
@@ -3927,6 +3935,32 @@ mod tests {
             .expect_err("OFFLINE must be rejected");
 
         assert_eq!(error.code, AgentErrorCode::ValidationFailed);
+    }
+
+    #[test]
+    fn definitive_http_rejections_are_not_retried_as_transport_failures() {
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::NOT_FOUND,
+            StatusCode::CONFLICT,
+        ] {
+            let error = http_error(status, None);
+            assert_eq!(error.code, AgentErrorCode::ValidationFailed);
+            assert!(!error.is_transient());
+        }
+    }
+
+    #[test]
+    fn rate_limits_and_server_failures_remain_retryable() {
+        for status in [
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let error = http_error(status, None);
+            assert_eq!(error.code, AgentErrorCode::TransportUnavailable);
+            assert!(error.is_transient());
+        }
     }
 
     #[tokio::test]
