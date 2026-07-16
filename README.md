@@ -16,6 +16,15 @@
 - 서버가 끊겨도 데스크톱의 로컬 파일 관리와 모바일의 캐시/outbox를 보존합니다.
 - 설정되지 않은 provider는 성공으로 가장하지 않고 `UNCONFIGURED`로 표시합니다.
 
+### 팀 역할
+
+| 담당 | GitHub | 역할 |
+|---|---|---|
+| A | `@nounmoumn` | Desktop Agent, Rust 파일 엔진, managed root 안전성, watcher/index, proposal·journal·undo |
+| B | `@westyoon` | Server, Worker, Mobile, 인증·room·realtime·배포·운영 인프라 |
+
+공유 계약(`packages/contracts`), 문서, CI는 두 담당자가 함께 검토합니다.
+
 ## 2. 주요 기능
 
 ### Desktop Agent
