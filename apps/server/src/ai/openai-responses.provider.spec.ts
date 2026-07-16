@@ -235,9 +235,13 @@ describe('OpenAiResponsesProvider', () => {
         },
       },
     });
-    const body = JSON.parse(
-      (fetcher.mock.calls[0][1] as RequestInit).body as string,
-    ) as { instructions: string };
+    const [, request] = fetcher.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const body = JSON.parse(request.body as string) as {
+      instructions: string;
+    };
     expect(body.instructions).toContain('ruleDraft is required');
     expect(body.instructions).toContain('roomContext.rootAlias');
     expect(body.instructions).toContain(
