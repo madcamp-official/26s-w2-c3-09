@@ -624,6 +624,9 @@ export const connectionSummaryRoomSchema = z
     desktopDeviceId: uuidSchema,
     name: z.string().min(1).max(120),
     rootAlias: z.string().min(1).max(120),
+    // Older durable room.created events predate document-analysis consent.
+    // Defaulting keeps replay backward-compatible while accepting current rows.
+    aiDocumentAnalysisConsent: z.boolean().default(false),
     status: z.literal("ACTIVE"),
     createdAt: z.iso.datetime(),
   })

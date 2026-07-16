@@ -28,6 +28,7 @@ describe('RoomsController', () => {
       desktopDeviceId: deviceId,
       name: 'Reports',
       rootAlias: 'reports',
+      aiDocumentAnalysisConsent: false,
       status: 'ACTIVE',
       createdAt,
     };
@@ -75,6 +76,7 @@ describe('RoomsController', () => {
     expect(response).toMatchObject({
       id: roomId,
       status: 'ACTIVE',
+      aiDocumentAnalysisConsent: false,
       createdAt: createdAt.toISOString(),
     });
     expect(sync.append).toHaveBeenCalledWith(
@@ -85,7 +87,11 @@ describe('RoomsController', () => {
         payload: {
           roomId,
           status: 'ACTIVE',
-          room: expect.objectContaining({ id: roomId, name: 'Reports' }),
+          room: expect.objectContaining({
+            id: roomId,
+            name: 'Reports',
+            aiDocumentAnalysisConsent: false,
+          }),
         },
       }),
     );

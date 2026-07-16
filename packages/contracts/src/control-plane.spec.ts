@@ -719,11 +719,29 @@ describe("v1.4 connection and browse contracts", () => {
           desktopDeviceId: deviceId,
           name: "Reports",
           rootAlias: "reports",
+          aiDocumentAnalysisConsent: true,
           status: "ACTIVE",
           createdAt: timestamp,
         },
-      }).room.name,
-    ).toBe("Reports");
+      }).room,
+    ).toMatchObject({
+      name: "Reports",
+      aiDocumentAnalysisConsent: true,
+    });
+    expect(
+      roomCreatedEventPayloadSchema.parse({
+        roomId,
+        status: "ACTIVE",
+        room: {
+          id: roomId,
+          desktopDeviceId: deviceId,
+          name: "Legacy reports",
+          rootAlias: "legacy-reports",
+          status: "ACTIVE",
+          createdAt: timestamp,
+        },
+      }).room.aiDocumentAnalysisConsent,
+    ).toBe(false);
     expect(
       roomCreatedEventPayloadSchema.safeParse({
         roomId,
@@ -1384,6 +1402,7 @@ describe("connection summary contract", () => {
           desktopDeviceId: deviceId,
           name: "Downloads",
           rootAlias: "Downloads",
+          aiDocumentAnalysisConsent: false,
           status: "ACTIVE",
           createdAt: timestamp,
         },

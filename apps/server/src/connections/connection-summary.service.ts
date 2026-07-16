@@ -39,6 +39,7 @@ export class ConnectionSummaryService {
           desktopDeviceId: room.desktopDeviceId,
           name: room.name,
           rootAlias: room.rootAlias,
+          aiDocumentAnalysisConsent: room.aiDocumentAnalysisConsent,
           status: room.status,
           createdAt: room.createdAt.toISOString(),
         })),
